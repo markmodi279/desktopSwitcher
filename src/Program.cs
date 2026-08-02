@@ -31,6 +31,7 @@ namespace DesktopSwitcher
                     case "--where":   return CmdWhere(api, args);
                     case "--soak":    return CmdSoak(api, args);
                     case "--watch":   return CmdWatch(api, args);
+                    case "--service": return CmdService(api, args);
                     case "--help":
                     case "-h":
                     case "/?":        Usage(); return 0;
@@ -62,6 +63,7 @@ namespace DesktopSwitcher
             Console.WriteLine("  --where <title>        report whether that window is on the current desktop");
             Console.WriteLine("  --soak N               poll for N seconds; survives an Explorer restart");
             Console.WriteLine("  --watch N              listen for change notifications for N seconds");
+            Console.WriteLine("  --service N            run DesktopService for N seconds and report its events");
             Console.WriteLine();
         }
 
@@ -299,6 +301,104 @@ namespace DesktopSwitcher
             Console.WriteLine(string.Format("  {0}  {1,-16} {2,-26} thread={3}{4}",
                 DateTime.Now.ToString("HH:mm:ss.fff"), name, detail, thread,
                 thread == uiThread ? "" : "  (NOT the UI thread)"));
+        }
+
+        /// <summary>
+        /// Runs the full service the way the real app will. The thread id printed with
+        /// each event is the point of the test: notifications arrive on RPC threads, so
+        /// seeing the UI thread here proves the marshalling works.
+        /// </summary>
+        static int CmdService(VirtualDesktopApi api, string[] args)
+        {
+            int seconds;
+            if (args.Length < 2 || !int.TryParse(args[1], out seconds)) seconds = 30;
+
+            int uiThread = System.Threading.Thread.CurrentThread.ManagedThreadId;
+            int setEvents = 0, currentEvents = 0, offThread = 0;
+
+            // Stand-in for the controller window that owns marshalling in M7.
+            using (var pump = new System.Windows.Forms.Form())
+            {
+                IntPtr forceHandle = pump.Handle;
+                GC.KeepAlive(forceHandle);
+
+                var service = new DesktopService(api, pump);
+
+                // "nonotify" proves the reconcile tick alone can drive the UI, which is
+                // what happens if the sink dies or Explorer restarts.
+                bool noNotify = args.Length > 2
+                    && string.Equals(args[2], "nonotify", StringComparison.OrdinalIgnoreCase);
+                service.DisableNotifications = noNotify;
+
+                service.DesktopsChanged += delegate
+                {
+                    setEvents++;
+                    int t = System.Threading.Thread.CurrentThread.ManagedThreadId;
+                    if (t != uiThread) offThread++;
+                    Console.WriteLine(string.Format("  {0}  DesktopsChanged  count={1}  thread={2}{3}",
+                        DateTime.Now.ToString("HH:mm:ss.fff"), service.Count, t,
+                        t == uiThread ? "  (UI)" : "  *** OFF UI THREAD ***"));
+                    Dump(service);
+                };
+
+                service.CurrentChanged += delegate
+                {
+                    currentEvents++;
+                    int t = System.Threading.Thread.CurrentThread.ManagedThreadId;
+                    if (t != uiThread) offThread++;
+                    Desktop cur = service.Current;
+                    Console.WriteLine(string.Format("  {0}  CurrentChanged   -> {1}  thread={2}{3}",
+                        DateTime.Now.ToString("HH:mm:ss.fff"),
+                        cur == null ? "(none)" : cur.Number + " " + cur.DisplayName,
+                        t, t == uiThread ? "  (UI)" : "  *** OFF UI THREAD ***"));
+                };
+
+                service.Start();
+
+                Console.WriteLine("Service started. UI thread = " + uiThread);
+                Console.WriteLine("Notifications active: " + service.NotificationsActive);
+                Console.WriteLine("Initial model:");
+                Dump(service);
+                Console.WriteLine();
+
+                var ticker = new System.Windows.Forms.Timer();
+                ticker.Interval = 2000;
+                ticker.Tick += delegate { service.Tick(); };
+                ticker.Start();
+
+                var stop = new System.Windows.Forms.Timer();
+                stop.Interval = seconds * 1000;
+                stop.Tick += delegate { System.Windows.Forms.Application.ExitThread(); };
+                stop.Start();
+
+                System.Windows.Forms.Application.Run();
+
+                ticker.Stop();
+                stop.Stop();
+                service.Dispose();
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("DesktopsChanged events : " + setEvents);
+            Console.WriteLine("CurrentChanged events  : " + currentEvents);
+            Console.WriteLine("Events off UI thread   : " + offThread + "  (must be 0)");
+            return offThread == 0 ? 0 : 1;
+        }
+
+        static void Dump(DesktopService service)
+        {
+            IList<Desktop> list = service.Desktops;
+            var sb = new StringBuilder("        ");
+            foreach (Desktop d in list)
+            {
+                sb.Append("[");
+                sb.Append(d.Number);
+                if (d.IsCurrent) sb.Append("*");
+                sb.Append(" ");
+                sb.Append(d.DisplayName);
+                sb.Append("] ");
+            }
+            Console.WriteLine(sb.ToString());
         }
 
         // --- helpers ----------------------------------------------------------
