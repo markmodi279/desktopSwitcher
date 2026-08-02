@@ -184,6 +184,17 @@ namespace DesktopSwitcher
             }
         }
 
+        /// <summary>
+        /// Fetches a fresh IApplicationViewCollection. This interface is thread-affine
+        /// and short-lived, so it is never cached across calls.
+        /// </summary>
+        IApplicationViewCollection QueryViewCollection()
+        {
+            Guid svcViews = SVC_ApplicationViewCollection;
+            return (IApplicationViewCollection)
+                _shell.QueryService(ref svcViews, ref _iidViewCollection);
+        }
+
         /// <summary>Forget the cached shell objects; the next call re-acquires.</summary>
         public void Drop()
         {
@@ -362,8 +373,13 @@ namespace DesktopSwitcher
                     return string.Format("move: public API refused (hr=0x{0:X8}), using view collection", hr);
                 });
 
+                // Queried fresh rather than reused. A cached IApplicationViewCollection
+                // goes stale and GetViewForHwnd then fails with TYPE_E_ELEMENTNOTFOUND
+                // (0x8002802B) even for perfectly ordinary top-level windows.
+                IApplicationViewCollection views = QueryViewCollection();
+
                 IApplicationView view;
-                int hr2 = _views.GetViewForHwnd(hwnd, out view);
+                int hr2 = views.GetViewForHwnd(hwnd, out view);
                 if (hr2 < 0 || view == null)
                 {
                     Log.Write(delegate { return string.Format("move: GetViewForHwnd failed hr=0x{0:X8}", hr2); });

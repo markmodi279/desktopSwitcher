@@ -38,6 +38,7 @@ namespace DesktopSwitcher
                     case "--service": return CmdService(api, args);
                     case "--taskbar": return CmdTaskbar();
                     case "--testwindow": return CmdTestWindow(args);
+                    case "--strip":   return CmdStrip(api, args);
                     case "--help":
                     case "-h":
                     case "/?":        Usage(); return 0;
@@ -72,6 +73,7 @@ namespace DesktopSwitcher
             Console.WriteLine("  --service N            run DesktopService for N seconds and report its events");
             Console.WriteLine("  --taskbar              print taskbar geometry and computed strip bounds");
             Console.WriteLine("  --testwindow N         dock a plain marker window in the taskbar for N seconds");
+            Console.WriteLine("  --strip N              run the real switcher strip for N seconds");
             Console.WriteLine();
         }
 
@@ -553,6 +555,126 @@ namespace DesktopSwitcher
 
                 base.WndProc(ref m);
             }
+        }
+
+        /// <summary>
+        /// Runs the real strip wired to the real service. Everything M7 needs except
+        /// the tray icon, the watchdog and the config persistence.
+        /// </summary>
+        static int CmdStrip(VirtualDesktopApi api, string[] args)
+        {
+            int seconds;
+            if (args.Length < 2 || !int.TryParse(args[1], out seconds)) seconds = 30;
+
+            var host = new TaskbarHost();
+            if (!host.Locate())
+            {
+                Console.WriteLine("Shell_TrayWnd not found.");
+                return 1;
+            }
+
+            Config cfg = Config.Load();
+            int buttonWidth = host.Scale(cfg.ButtonWidth);
+            int plusWidth = host.Scale(cfg.PlusWidth);
+            int margin = host.Scale(cfg.Margin);
+            int barHeight = host.Scale(3);
+
+            System.Drawing.Color background = cfg.BackgroundColor;
+            if (background.IsEmpty)
+            {
+                System.Drawing.Color sampled;
+                int probe = SwitcherStrip.MeasureWidth(2, buttonWidth, plusWidth);
+                if (!host.TrySampleBackground(probe, margin, out sampled))
+                    sampled = System.Drawing.Color.FromArgb(0x1F, 0x1F, 0x1F);
+                background = sampled;
+            }
+
+            Console.WriteLine("DPI scale   " + host.DpiScale);
+            Console.WriteLine("background  " + background);
+            Console.WriteLine("button/plus " + buttonWidth + "/" + plusWidth);
+
+            // Hidden, never shown - exists only to marshal onto the UI thread.
+            using (var pump = new System.Windows.Forms.Form())
+            {
+                pump.ShowInTaskbar = false;
+                IntPtr pumpHandle = pump.Handle;
+                GC.KeepAlive(pumpHandle);
+
+                var service = new DesktopService(api, pump);
+                var foreground = new ForegroundTracker();
+
+                int initialWidth = SwitcherStrip.MeasureWidth(2, buttonWidth, plusWidth);
+                System.Drawing.Rectangle bounds;
+                host.TryComputeBounds(initialWidth, margin, out bounds);
+
+                var strip = new SwitcherStrip(host.TrayWindow, bounds,
+                                              buttonWidth, plusWidth, barHeight,
+                                              background, cfg.HighlightColor);
+
+                EventHandler relayout = delegate
+                {
+                    strip.SetDesktops(service.Desktops);
+                    host.Reassert(strip.Handle, strip.Width, margin);
+                    Console.WriteLine("  relayout -> " + service.Count + " buttons, width " + strip.Width);
+                };
+
+                service.DesktopsChanged += relayout;
+                service.CurrentChanged += delegate
+                {
+                    strip.SetDesktops(service.Desktops);
+                    Desktop cur = service.Current;
+                    Console.WriteLine("  current  -> " + (cur == null ? "(none)" : cur.Number.ToString()));
+                };
+
+                strip.SwitchRequested += delegate(Guid id) { service.SwitchTo(id); };
+                strip.CreateRequested += delegate { service.Create(); };
+                strip.RemoveRequested += delegate(Guid id) { service.Remove(id); };
+                strip.MoveWindowRequested += delegate(Guid id)
+                {
+                    IntPtr target = foreground.Resolve();
+                    if (target == IntPtr.Zero)
+                    {
+                        Console.WriteLine("  move    -> no candidate window");
+                        return;
+                    }
+                    Console.WriteLine("  move    -> \"" + Native.GetText(target) + "\"");
+                    service.MoveWindow(target, id);
+                };
+
+                foreground.Ignore(strip.Handle);
+
+                service.Start();
+                relayout(null, EventArgs.Empty);
+
+                var ticker = new System.Windows.Forms.Timer();
+                ticker.Interval = cfg.ReconcileMs;
+                ticker.Tick += delegate { service.Tick(); };
+                ticker.Start();
+
+                // Faster than the reconcile tick: focus changes need catching promptly
+                // so a right-click targets the window the user just left.
+                var focusSampler = new System.Windows.Forms.Timer();
+                focusSampler.Interval = 300;
+                focusSampler.Tick += delegate { foreground.Sample(); };
+                focusSampler.Start();
+
+                var stop = new System.Windows.Forms.Timer();
+                stop.Interval = seconds * 1000;
+                stop.Tick += delegate { System.Windows.Forms.Application.ExitThread(); };
+                stop.Start();
+
+                Console.WriteLine("Strip live for " + seconds + "s - click the buttons.");
+                System.Windows.Forms.Application.Run();
+
+                ticker.Stop();
+                focusSampler.Stop();
+                stop.Stop();
+                strip.Dispose();
+                service.Dispose();
+            }
+
+            Console.WriteLine("Done.");
+            return 0;
         }
 
         // --- helpers ----------------------------------------------------------
