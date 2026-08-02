@@ -102,6 +102,15 @@ namespace DesktopSwitcher
             _saveTimer.Interval = 2000;
             _saveTimer.Tick += SavePending;
 
+            // First run: write a complete file so every setting is visible and editable
+            // rather than having to be guessed at.
+            if (!File.Exists(Config.FilePath))
+            {
+                _config.LastCount = _service.Count;
+                _config.Save();
+                Log.Write("controller: wrote initial config");
+            }
+
             _started = true;
             Log.Write("controller: started");
         }
