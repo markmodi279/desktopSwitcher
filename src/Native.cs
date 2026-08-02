@@ -221,6 +221,7 @@ namespace DesktopSwitcher
 
         public const int WM_PAINT = 0x000F;
         public const int WM_ERASEBKGND = 0x0014;
+        public const int WM_SETCURSOR = 0x0020;
         public const int WM_MOUSEMOVE = 0x0200;
         public const int WM_LBUTTONUP = 0x0202;
         public const int WM_RBUTTONUP = 0x0205;

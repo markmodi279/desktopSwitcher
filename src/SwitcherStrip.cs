@@ -358,6 +358,15 @@ namespace DesktopSwitcher
                     m.Result = new IntPtr(1);
                     return;
 
+                case Native.WM_SETCURSOR:
+                    // A plain NativeWindow gets no default cursor handling (that's a
+                    // Control-only behaviour), so without this the strip just keeps
+                    // showing whatever cursor was active before the pointer arrived -
+                    // a taskbar resize cursor, a stray wait cursor, etc.
+                    Cursor.Current = Cursors.Default;
+                    m.Result = new IntPtr(1);
+                    return;
+
                 case Native.WM_MOUSEMOVE:
                     OnMouseMove(Native.LoWord(m.LParam), Native.HiWord(m.LParam));
                     return;
