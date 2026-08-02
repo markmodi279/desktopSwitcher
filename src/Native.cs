@@ -179,6 +179,9 @@ namespace DesktopSwitcher
         [DllImport("user32.dll", SetLastError = true)]
         public static extern uint RegisterWindowMessage(string message);
 
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool DestroyIcon(IntPtr icon);
+
         // --- painting ---------------------------------------------------------
 
         [StructLayout(LayoutKind.Sequential)]

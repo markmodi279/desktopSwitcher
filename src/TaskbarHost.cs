@@ -62,6 +62,36 @@ namespace DesktopSwitcher
                 && _tray == Native.FindWindow("Shell_TrayWnd", null);
         }
 
+        /// <summary>True once the notification area exists and the strip can be anchored.</summary>
+        public bool HasAnchor
+        {
+            get
+            {
+                EnsureChildren();
+                return _notifyArea != IntPtr.Zero;
+            }
+        }
+
+        /// <summary>
+        /// Re-resolves the taskbar's child windows if they have gone away.
+        ///
+        /// A restarted Explorer creates Shell_TrayWnd before TrayNotifyWnd, so a Locate
+        /// during that window leaves the anchor null. Without this, every later
+        /// computation falls back to the taskbar's right edge and the strip is stranded
+        /// to the right of the clock, with the once-per-second Reassert faithfully
+        /// keeping it there.
+        /// </summary>
+        void EnsureChildren()
+        {
+            if (_tray == IntPtr.Zero) return;
+
+            if (_notifyArea == IntPtr.Zero || !Native.IsWindow(_notifyArea))
+                _notifyArea = Native.FindWindowEx(_tray, IntPtr.Zero, "TrayNotifyWnd", null);
+
+            if (_rebar == IntPtr.Zero || !Native.IsWindow(_rebar))
+                _rebar = Native.FindWindowEx(_tray, IntPtr.Zero, "ReBarWindow32", null);
+        }
+
         /// <summary>True when the taskbar is docked left or right rather than top or bottom.</summary>
         public bool IsVertical
         {
@@ -83,6 +113,7 @@ namespace DesktopSwitcher
         public bool TryComputeBounds(int width, int margin, out Rectangle bounds)
         {
             bounds = Rectangle.Empty;
+            EnsureChildren();
 
             Native.RECT tray;
             if (_tray == IntPtr.Zero || !Native.GetWindowRect(_tray, out tray)) return false;
@@ -179,6 +210,7 @@ namespace DesktopSwitcher
         public bool TrySampleBackground(int stripWidth, int margin, out Color color)
         {
             color = Color.Empty;
+            EnsureChildren();
 
             Native.RECT tray;
             if (_tray == IntPtr.Zero || !Native.GetWindowRect(_tray, out tray)) return false;
@@ -222,6 +254,7 @@ namespace DesktopSwitcher
         public string Describe()
         {
             if (_tray == IntPtr.Zero) return "taskbar not found";
+            EnsureChildren();
 
             Native.RECT tray, rebar, notify;
             Native.GetWindowRect(_tray, out tray);

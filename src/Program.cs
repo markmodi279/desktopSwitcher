@@ -20,7 +20,10 @@ namespace DesktopSwitcher
             Config cfg = Config.Load();
             Log.Init(Config.LogPath, cfg.Diagnostics);
 
-            string command = args.Length > 0 ? args[0].ToLowerInvariant() : "--list";
+            // No arguments means "run the app". Everything else is selftest.
+            if (args.Length == 0) return RunApp(cfg);
+
+            string command = args[0].ToLowerInvariant();
             var api = new VirtualDesktopApi();
 
             try
@@ -58,11 +61,40 @@ namespace DesktopSwitcher
             }
         }
 
+        /// <summary>
+        /// Normal operation. A single instance only: two controllers would dock two
+        /// strips into the taskbar and fight over position.
+        /// </summary>
+        static int RunApp(Config cfg)
+        {
+            bool isFirst;
+            using (var single = new System.Threading.Mutex(true, "Local\\DesktopSwitcherInstance", out isFirst))
+            {
+                if (!isFirst)
+                {
+                    Log.Write("startup: another instance is already running");
+                    return 0;
+                }
+
+                System.Windows.Forms.Application.EnableVisualStyles();
+                System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
+
+                using (var controller = new Controller(cfg))
+                {
+                    System.Windows.Forms.Application.Run(controller);
+                }
+
+                GC.KeepAlive(single);
+                return 0;
+            }
+        }
+
         static void Usage()
         {
-            Console.WriteLine("DesktopSwitcher - M2 selftest");
+            Console.WriteLine("DesktopSwitcher - run with no arguments to start the app.");
             Console.WriteLine();
-            Console.WriteLine("  --list                 show all desktops (default)");
+            Console.WriteLine("Selftest commands:");
+            Console.WriteLine("  --list                 show all desktops");
             Console.WriteLine("  --switch N             switch to desktop N (1-based)");
             Console.WriteLine("  --create               create a new desktop");
             Console.WriteLine("  --remove N             remove desktop N");
