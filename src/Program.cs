@@ -13,6 +13,10 @@ namespace DesktopSwitcher
         [STAThread]
         static int Main(string[] args)
         {
+            // Before any window exists, or the taskbar strip lands at the wrong
+            // coordinates on a scaled display.
+            Native.EnableDpiAwareness();
+
             Config cfg = Config.Load();
             Log.Init(Config.LogPath, cfg.Diagnostics);
 
@@ -32,6 +36,8 @@ namespace DesktopSwitcher
                     case "--soak":    return CmdSoak(api, args);
                     case "--watch":   return CmdWatch(api, args);
                     case "--service": return CmdService(api, args);
+                    case "--taskbar": return CmdTaskbar();
+                    case "--testwindow": return CmdTestWindow(args);
                     case "--help":
                     case "-h":
                     case "/?":        Usage(); return 0;
@@ -64,6 +70,8 @@ namespace DesktopSwitcher
             Console.WriteLine("  --soak N               poll for N seconds; survives an Explorer restart");
             Console.WriteLine("  --watch N              listen for change notifications for N seconds");
             Console.WriteLine("  --service N            run DesktopService for N seconds and report its events");
+            Console.WriteLine("  --taskbar              print taskbar geometry and computed strip bounds");
+            Console.WriteLine("  --testwindow N         dock a plain marker window in the taskbar for N seconds");
             Console.WriteLine();
         }
 
@@ -399,6 +407,152 @@ namespace DesktopSwitcher
                 sb.Append("] ");
             }
             Console.WriteLine(sb.ToString());
+        }
+
+        static int CmdTaskbar()
+        {
+            var host = new TaskbarHost();
+            if (!host.Locate())
+            {
+                Console.WriteLine("Shell_TrayWnd not found.");
+                return 1;
+            }
+
+            Console.WriteLine(host.Describe());
+            Console.WriteLine("  DPI scale      " + host.DpiScale);
+            Console.WriteLine();
+
+            // Widths for 2..5 buttons plus the '+' button, at DPI-scaled sizes.
+            var cfg = Config.Load();
+            for (int n = 2; n <= 5; n++)
+            {
+                int width = n * host.Scale(cfg.ButtonWidth) + host.Scale(cfg.PlusWidth);
+                System.Drawing.Rectangle bounds;
+                if (host.TryComputeBounds(width, host.Scale(cfg.Margin), out bounds))
+                    Console.WriteLine(string.Format(
+                        "  {0} desktops -> width {1,3}  client bounds {2}", n, width, bounds));
+                else
+                    Console.WriteLine("  " + n + " desktops -> bounds computation FAILED");
+            }
+
+            Console.WriteLine();
+            System.Drawing.Color sampled;
+            int probeWidth = 2 * host.Scale(cfg.ButtonWidth) + host.Scale(cfg.PlusWidth);
+            if (host.TrySampleBackground(probeWidth, host.Scale(cfg.Margin), out sampled))
+                Console.WriteLine("  sampled taskbar colour: " + sampled
+                    + string.Format("  #{0:X2}{1:X2}{2:X2}", sampled.R, sampled.G, sampled.B));
+            else
+                Console.WriteLine("  taskbar colour sampling FAILED");
+
+            return 0;
+        }
+
+        /// <summary>
+        /// Docks a plain marker window in the taskbar. Proves reparenting, geometry and
+        /// z-order in isolation, before any rendering or input logic exists to confuse
+        /// the picture.
+        /// </summary>
+        static int CmdTestWindow(string[] args)
+        {
+            int seconds;
+            if (args.Length < 2 || !int.TryParse(args[1], out seconds)) seconds = 15;
+
+            var host = new TaskbarHost();
+            if (!host.Locate())
+            {
+                Console.WriteLine("Shell_TrayWnd not found.");
+                return 1;
+            }
+
+            var cfg = Config.Load();
+            int width = 4 * host.Scale(cfg.ButtonWidth) + host.Scale(cfg.PlusWidth);
+
+            System.Drawing.Rectangle bounds;
+            if (!host.TryComputeBounds(width, host.Scale(cfg.Margin), out bounds))
+            {
+                Console.WriteLine("Bounds computation FAILED");
+                return 1;
+            }
+
+            var marker = new MarkerWindow(host.TrayWindow, bounds);
+            try
+            {
+                IntPtr handle = marker.Handle;
+                Native.RECT screen;
+                Native.GetWindowRect(handle, out screen);
+
+                Console.WriteLine("Marker handle        : " + handle);
+                Console.WriteLine("Parent is tray       : " + (Native.GetParent(handle) == host.TrayWindow));
+                Console.WriteLine("Visible              : " + Native.IsWindowVisible(handle));
+                Console.WriteLine("Client bounds        : " + bounds);
+                Console.WriteLine(string.Format("Screen rect          : ({0},{1})-({2},{3})",
+                    screen.Left, screen.Top, screen.Right, screen.Bottom));
+                Console.WriteLine("Holding " + seconds + "s - look left of the tray icons.");
+
+                var stop = new System.Windows.Forms.Timer();
+                stop.Interval = seconds * 1000;
+                stop.Tick += delegate { System.Windows.Forms.Application.ExitThread(); };
+                stop.Start();
+                System.Windows.Forms.Application.Run();
+                stop.Stop();
+            }
+            finally
+            {
+                marker.Destroy();
+            }
+
+            Console.WriteLine("Done.");
+            return 0;
+        }
+
+        /// <summary>
+        /// Solid magenta block - deliberately impossible to miss.
+        ///
+        /// A NativeWindow, not a Form: WinForms forces a Form to be top-level no matter
+        /// what CreateParams.Parent says, so it never becomes a taskbar child.
+        /// </summary>
+        sealed class MarkerWindow : System.Windows.Forms.NativeWindow
+        {
+            public MarkerWindow(IntPtr parent, System.Drawing.Rectangle bounds)
+            {
+                var cp = new System.Windows.Forms.CreateParams();
+                cp.Caption = "DesktopSwitcherMarker";
+                cp.X = bounds.X;
+                cp.Y = bounds.Y;
+                cp.Width = bounds.Width;
+                cp.Height = bounds.Height;
+                cp.Parent = parent;
+                cp.Style = Native.WS_CHILD | Native.WS_VISIBLE;
+                cp.ExStyle = Native.WS_EX_NOACTIVATE;
+                CreateHandle(cp);
+            }
+
+            public void Destroy()
+            {
+                if (Handle != IntPtr.Zero) DestroyHandle();
+            }
+
+            protected override void WndProc(ref System.Windows.Forms.Message m)
+            {
+                if (m.Msg == Native.WM_PAINT)
+                {
+                    Native.PAINTSTRUCT ps;
+                    IntPtr hdc = Native.BeginPaint(Handle, out ps);
+                    try
+                    {
+                        using (var g = System.Drawing.Graphics.FromHdc(hdc))
+                            g.Clear(System.Drawing.Color.Magenta);
+                    }
+                    finally
+                    {
+                        Native.EndPaint(Handle, ref ps);
+                    }
+                    m.Result = IntPtr.Zero;
+                    return;
+                }
+
+                base.WndProc(ref m);
+            }
         }
 
         // --- helpers ----------------------------------------------------------
