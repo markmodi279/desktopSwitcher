@@ -1,0 +1,6 @@
+# Build output goes to %LOCALAPPDATA%\DesktopSwitcher, not the repo,
+# but ignore these in case anyone redirects it here.
+*.exe
+*.pdb
+bin/
+obj/
