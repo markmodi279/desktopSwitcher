@@ -34,6 +34,12 @@ namespace DesktopSwitcher
         public int TooltipDelayMs = 400;
         /// <summary>Window titles shown before collapsing the rest into "+N more".</summary>
         public int TooltipMaxWindows = 8;
+        /// <summary>
+        /// Panel width at 96 DPI. Every panel is this wide whatever it holds, so the width
+        /// does not jump as the pointer moves along the strip; longer rows are trimmed to
+        /// fit. Widen it if your titles deserve more room.
+        /// </summary>
+        public int TooltipWidth = 440;
 
         // --- appearance -------------------------------------------------------
         public Color HighlightColor = Color.FromArgb(0x00, 0x78, 0xD7);
@@ -41,6 +47,9 @@ namespace DesktopSwitcher
         public Color BackgroundColor = Color.Empty;
 
         readonly Dictionary<string, string> _unknown = new Dictionary<string, string>();
+
+        /// <summary>Every key the file mentioned, recognised or not, lowercased.</summary>
+        readonly HashSet<string> _present = new HashSet<string>();
 
         public static string Directory
         {
@@ -85,6 +94,8 @@ namespace DesktopSwitcher
 
         void Apply(string key, string val)
         {
+            _present.Add(key.ToLowerInvariant());
+
             // Recognised keys match case-insensitively; unknown keys keep the caller's
             // original spelling so hand-edited files round-trip unchanged.
             switch (key.ToLowerInvariant())
@@ -98,9 +109,42 @@ namespace DesktopSwitcher
                 case "tooltips":         Tooltips        = ParseBool(val, Tooltips);             break;
                 case "tooltipdelayms":   TooltipDelayMs  = ParseInt(val, TooltipDelayMs, 0, 5000); break;
                 case "tooltipmaxwindows": TooltipMaxWindows = ParseInt(val, TooltipMaxWindows, 1, 40); break;
+                case "tooltipwidth":     TooltipWidth    = ParseInt(val, TooltipWidth, 160, 1200); break;
                 case "highlightcolor":   HighlightColor  = ParseColor(val, HighlightColor);      break;
                 case "backgroundcolor":  BackgroundColor = ParseColor(val, Color.Empty);         break;
                 default:                 _unknown[key]   = val;                                  break;
+            }
+        }
+
+        /// <summary>
+        /// True when the file on disk says nothing about some setting this build has -
+        /// normally an upgrade, where the file was written before the key existed. Such a
+        /// setting is silently on its default with no line to edit, which is exactly the
+        /// state the first-run write exists to avoid, so the caller rewrites the file.
+        ///
+        /// The expected keys are read back out of what Save writes, so there is no second
+        /// list to fall out of step with the one above.
+        /// </summary>
+        public bool Incomplete
+        {
+            get
+            {
+                foreach (string key in KeysOf(Render()))
+                    if (!_present.Contains(key)) return true;
+
+                return false;
+            }
+        }
+
+        static IEnumerable<string> KeysOf(string text)
+        {
+            foreach (string raw in text.Split('\n'))
+            {
+                string line = raw.Trim();
+                if (line.Length == 0 || line[0] == '#' || line[0] == ';') continue;
+
+                int eq = line.IndexOf('=');
+                if (eq > 0) yield return line.Substring(0, eq).Trim().ToLowerInvariant();
             }
         }
 
@@ -111,36 +155,46 @@ namespace DesktopSwitcher
                 if (!System.IO.Directory.Exists(Directory))
                     System.IO.Directory.CreateDirectory(Directory);
 
-                var sb = new StringBuilder();
-                sb.AppendLine("# DesktopSwitcher configuration");
-                sb.AppendLine("# Colours are #RRGGBB. Leave backgroundColor blank to sample the taskbar.");
-                sb.AppendLine();
-                sb.AppendLine("lastCount = "       + LastCount);
-                sb.AppendLine("buttonWidth = "     + ButtonWidth);
-                sb.AppendLine("plusWidth = "       + PlusWidth);
-                sb.AppendLine("margin = "          + Margin);
-                sb.AppendLine("reconcileMs = "     + ReconcileMs);
-                sb.AppendLine("diagnostics = "     + (Diagnostics ? "true" : "false"));
-                sb.AppendLine("tooltips = "        + (Tooltips ? "true" : "false"));
-                sb.AppendLine("tooltipDelayMs = "  + TooltipDelayMs);
-                sb.AppendLine("tooltipMaxWindows = " + TooltipMaxWindows);
-                sb.AppendLine("highlightColor = "  + ToHex(HighlightColor));
-                sb.AppendLine("backgroundColor = " + (BackgroundColor.IsEmpty ? "" : ToHex(BackgroundColor)));
-
-                if (_unknown.Count > 0)
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# preserved from an earlier or hand-edited file");
-                    foreach (var kv in _unknown)
-                        sb.AppendLine(kv.Key + " = " + kv.Value);
-                }
-
-                File.WriteAllText(FilePath, sb.ToString());
+                File.WriteAllText(FilePath, Render());
             }
             catch (Exception ex)
             {
                 Log.Write("config: save failed - " + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// The complete file: every setting this build has, whether or not the file on
+        /// disk mentioned it, followed by anything it did that this build does not know.
+        /// </summary>
+        string Render()
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("# DesktopSwitcher configuration");
+            sb.AppendLine("# Colours are #RRGGBB. Leave backgroundColor blank to sample the taskbar.");
+            sb.AppendLine();
+            sb.AppendLine("lastCount = "       + LastCount);
+            sb.AppendLine("buttonWidth = "     + ButtonWidth);
+            sb.AppendLine("plusWidth = "       + PlusWidth);
+            sb.AppendLine("margin = "          + Margin);
+            sb.AppendLine("reconcileMs = "     + ReconcileMs);
+            sb.AppendLine("diagnostics = "     + (Diagnostics ? "true" : "false"));
+            sb.AppendLine("tooltips = "        + (Tooltips ? "true" : "false"));
+            sb.AppendLine("tooltipDelayMs = "  + TooltipDelayMs);
+            sb.AppendLine("tooltipMaxWindows = " + TooltipMaxWindows);
+            sb.AppendLine("tooltipWidth = "    + TooltipWidth);
+            sb.AppendLine("highlightColor = "  + ToHex(HighlightColor));
+            sb.AppendLine("backgroundColor = " + (BackgroundColor.IsEmpty ? "" : ToHex(BackgroundColor)));
+
+            if (_unknown.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("# preserved from an earlier or hand-edited file");
+                foreach (var kv in _unknown)
+                    sb.AppendLine(kv.Key + " = " + kv.Value);
+            }
+
+            return sb.ToString();
         }
 
         // --- parsing helpers ---------------------------------------------------

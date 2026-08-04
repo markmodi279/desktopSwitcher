@@ -78,6 +78,7 @@ your display automatically.
 | `tooltips` | `true` | hover panel showing each desktop's windows |
 | `tooltipDelayMs` | `400` | hover delay before the panel appears |
 | `tooltipMaxWindows` | `8` | titles listed before the rest collapse into `+N more` |
+| `tooltipWidth` | `440` | panel width at 96 DPI; every panel is this wide, longer rows are trimmed |
 | `highlightColor` | `#0078D7` | underline bar under the current desktop |
 | `backgroundColor` | *(blank)* | blank samples the live taskbar colour |
 | `diagnostics` | `false` | enable the rolling log |

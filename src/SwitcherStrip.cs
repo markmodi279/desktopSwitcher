@@ -32,6 +32,7 @@ namespace DesktopSwitcher
         readonly int _plusWidth;
         readonly int _barHeight;
         readonly uint _hoverDelay;
+        readonly int _tooltipWidth;
         readonly double _dpiScale;
 
         List<Desktop> _desktops = new List<Desktop>();
@@ -51,12 +52,13 @@ namespace DesktopSwitcher
         public SwitcherStrip(IntPtr parent, Rectangle bounds,
                              int buttonWidth, int plusWidth, int barHeight,
                              Color background, Color highlight,
-                             uint hoverDelay, double dpiScale)
+                             uint hoverDelay, int tooltipWidth, double dpiScale)
         {
             _buttonWidth = buttonWidth;
             _plusWidth = plusWidth;
             _barHeight = barHeight;
             _hoverDelay = hoverDelay;
+            _tooltipWidth = tooltipWidth;
             _dpiScale = dpiScale;
             _background = background;
             _highlight = highlight;
@@ -391,7 +393,7 @@ namespace DesktopSwitcher
             if (content == null) { HideTooltip(); return; }
 
             if (_tooltip == null)
-                _tooltip = new TooltipWindow(_background, _highlight, _dpiScale);
+                _tooltip = new TooltipWindow(_background, _highlight, _tooltipWidth, _dpiScale);
 
             // The button in screen coordinates: the panel anchors to it, and the accent
             // bar lines up under it.

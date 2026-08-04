@@ -113,6 +113,15 @@ namespace DesktopSwitcher
                 _config.Save();
                 Log.Write("controller: wrote initial config");
             }
+            else if (_config.Incomplete)
+            {
+                // Same reasoning one upgrade later: a file written before a setting existed
+                // leaves it on its default with no line to edit, which is the very state
+                // the first-run write exists to prevent. Every value already in the file
+                // survives, having just been loaded from it.
+                _config.Save();
+                Log.Write("controller: config rewritten with settings added since it was written");
+            }
 
             _started = true;
             Log.Write("controller: started");
@@ -164,7 +173,8 @@ namespace DesktopSwitcher
             _strip = new SwitcherStrip(_host.TrayWindow, bounds,
                                        _buttonWidth, _plusWidth, _barHeight,
                                        _background, _config.HighlightColor,
-                                       (uint)_config.TooltipDelayMs, _host.DpiScale);
+                                       (uint)_config.TooltipDelayMs, _config.TooltipWidth,
+                                       _host.DpiScale);
 
             _strip.SwitchRequested += delegate(Guid id) { _service.SwitchTo(id); };
             _strip.CreateRequested += delegate { _service.Create(); };

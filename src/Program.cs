@@ -692,7 +692,8 @@ namespace DesktopSwitcher
                 var strip = new SwitcherStrip(host.TrayWindow, bounds,
                                               buttonWidth, plusWidth, barHeight,
                                               background, cfg.HighlightColor,
-                                              (uint)cfg.TooltipDelayMs, host.DpiScale);
+                                              (uint)cfg.TooltipDelayMs, cfg.TooltipWidth,
+                                              host.DpiScale);
 
                 // Hover panels, so --strip exercises them too. A compact echo of
                 // Controller.BuildTooltip - enough to check placement, delay and content.

@@ -59,7 +59,7 @@ namespace DesktopSwitcher
         readonly Font _titleFont;
         readonly Font _bodyFont;
 
-        readonly int _padX, _padY, _accent, _maxWidth;
+        readonly int _padX, _padY, _accent, _width;
 
         Bitmap _buffer;
         List<Row> _rows = new List<Row>();
@@ -68,7 +68,7 @@ namespace DesktopSwitcher
         bool _visible;
         bool _disposed;
 
-        public TooltipWindow(Color background, Color highlight, double dpiScale)
+        public TooltipWindow(Color background, Color highlight, int width, double dpiScale)
         {
             _background = background;
             _highlight = highlight;
@@ -77,9 +77,11 @@ namespace DesktopSwitcher
             _padX = Scale(12);
             _padY = Scale(9);
             _accent = Scale(3);
-            // Wide enough that the app name leading each row is not paid for out of the
-            // title's characters.
-            _maxWidth = Scale(440);
+            // Every panel is this wide, whatever it holds. Sizing to content made the
+            // width jump from button to button as the pointer moved along the strip, which
+            // reads as the panel being redrawn rather than moved. Authored at 96 DPI, like
+            // every other size in the config.
+            _width = Scale(width);
 
             float body = (float)(12 * dpiScale);
             _titleFont = new Font("Segoe UI", body, FontStyle.Bold, GraphicsUnit.Pixel);
@@ -110,9 +112,10 @@ namespace DesktopSwitcher
         // --- show / hide ------------------------------------------------------
 
         /// <summary>
-        /// Sizes the panel to its content, places it clear of the anchor, and shows it
-        /// without activating. Safe to call while already visible - that is how the
-        /// panel follows the pointer between buttons without re-arming the delay.
+        /// Heights the panel to its content - the width is fixed - places it clear of the
+        /// anchor, and shows it without activating. Safe to call while already visible -
+        /// that is how the panel follows the pointer between buttons without re-arming
+        /// the delay.
         /// </summary>
         public void Show(TooltipContent content, Rectangle anchorScreenRect)
         {
@@ -200,7 +203,7 @@ namespace DesktopSwitcher
                 foreach (string line in content.Lines)
                     Add(rows, g, line, _bodyFont, 205);
 
-                size = Measure(g, rows);
+                size = Measure(rows);
             }
 
             return rows;
@@ -209,26 +212,25 @@ namespace DesktopSwitcher
         void Add(List<Row> rows, Graphics g, string text, Font font, int tone)
         {
             var row = new Row();
-            row.Text = Fit(g, text, font, _maxWidth - _padX * 2);
+            row.Text = Fit(g, text, font, _width - _padX * 2);
             row.Font = font;
             row.Tone = tone;
             rows.Add(row);
         }
 
-        Size Measure(Graphics g, List<Row> rows)
+        /// <summary>
+        /// Width is fixed; only the height follows the content, growing a row at a time as
+        /// a desktop holds more windows. Rows are already trimmed to fit by Fit, so nothing
+        /// here needs to measure them across.
+        /// </summary>
+        Size Measure(List<Row> rows)
         {
-            int width = 0;
             int height = _padY * 2 + _accent;
 
             for (int i = 0; i < rows.Count; i++)
-            {
-                SizeF s = g.MeasureString(rows[i].Text, rows[i].Font);
-                int w = (int)Math.Ceiling(s.Width);
-                if (w > width) width = w;
                 height += LineHeight(rows[i].Font);
-            }
 
-            return new Size(width + _padX * 2, height);
+            return new Size(_width, height);
         }
 
         int LineHeight(Font font)
