@@ -747,6 +747,16 @@ namespace DesktopSwitcher
                     service.MoveWindow(target, id);
                 };
 
+                // The menu itself is the controller's - its items need the model, the
+                // inventory and the tracker at once, and a second copy here would drift from
+                // the real one. What this covers is the gesture reaching the strip at all,
+                // and the button lighting up and going out again either side of it.
+                strip.ContextMenuRequested += delegate(int index, System.Drawing.Rectangle anchor)
+                {
+                    Console.WriteLine("  menu    -> button " + index + " at " + anchor);
+                    strip.MenuClosed();
+                };
+
                 foreground.Ignore(strip.Handle);
 
                 service.Start();

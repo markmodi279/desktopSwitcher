@@ -254,6 +254,13 @@ namespace DesktopSwitcher
         public const int WM_MOUSELEAVE = 0x02A3;
         public const int WM_NCDESTROY = 0x0082;
 
+        /// <summary>
+        /// Shift, as a mouse message reports it in wParam. Read from the message rather
+        /// than asked of the keyboard, so it is the state at the click and not whenever
+        /// the handler happens to run.
+        /// </summary>
+        public const int MK_SHIFT = 0x0004;
+
         public static int LoWord(IntPtr value)
         {
             return unchecked((short)(long)value);

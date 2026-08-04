@@ -39,6 +39,7 @@ namespace DesktopSwitcher
         ButtonVisual[] _visuals = new ButtonVisual[0];
 
         int _hoverIndex = -1;          // == _desktops.Count means the '+' button
+        int _menuIndex = -1;           // button whose context menu is open, by the same index
         bool _trackingMouse;
         bool _disposed;
 
@@ -81,11 +82,21 @@ namespace DesktopSwitcher
         /// <summary>Middle click on a desktop button.</summary>
         public event Action<Guid> RemoveRequested;
 
-        /// <summary>Right click on a desktop button - send the active window there.</summary>
+        /// <summary>Shift + right click on a desktop button - send the active window there.</summary>
         public event Action<Guid> MoveWindowRequested;
 
         /// <summary>Left click on the '+' button.</summary>
         public event EventHandler CreateRequested;
+
+        /// <summary>
+        /// Right click on any button: the index HitTest returned, and that button in screen
+        /// coordinates for the menu to anchor to.
+        ///
+        /// The handler owes this class a MenuClosed() call on every path, including
+        /// declining to show a menu at all - the button stays lit while its menu is up, and
+        /// that is the only thing that puts it out.
+        /// </summary>
+        public event Action<int, Rectangle> ContextMenuRequested;
 
         /// <summary>
         /// Supplies the text for a button's tooltip, by the same index HitTest returns -
@@ -122,6 +133,22 @@ namespace DesktopSwitcher
             return -1;
         }
 
+        /// <summary>
+        /// A button in screen coordinates, spanning the full height of the strip. What the
+        /// hover panel anchors to and what the context menu opens against, so the two come
+        /// out of the same edge of the same rectangle.
+        ///
+        /// Empty when the strip has no window rect, which means it is being torn down.
+        /// </summary>
+        Rectangle AnchorFor(int index)
+        {
+            Native.RECT strip;
+            if (!Native.GetWindowRect(Handle, out strip)) return Rectangle.Empty;
+
+            Rectangle button = ButtonBounds(index, strip.Height);
+            return new Rectangle(strip.Left + button.X, strip.Top, button.Width, strip.Height);
+        }
+
         // --- model ------------------------------------------------------------
 
         /// <summary>
@@ -136,6 +163,7 @@ namespace DesktopSwitcher
                 _visuals = new ButtonVisual[_desktops.Count + 1];
 
             if (_hoverIndex > _desktops.Count) _hoverIndex = -1;
+            if (_menuIndex > _desktops.Count) _menuIndex = -1;
 
             // Anything the panel was saying about desktop N may now describe a different
             // desktop, since a removal renumbers everything after it.
@@ -156,7 +184,10 @@ namespace DesktopSwitcher
             {
                 bool isCurrent = i < _desktops.Count && _desktops[i].IsCurrent;
                 _visuals[i].Highlight = isCurrent ? 1f : 0f;
-                _visuals[i].Hover = i == _hoverIndex ? 1f : 0f;
+
+                // A button whose menu is open reads as hovered whatever the pointer is
+                // doing, so it stays visibly the one the menu belongs to.
+                _visuals[i].Hover = (i == _hoverIndex || i == _menuIndex) ? 1f : 0f;
             }
         }
 
@@ -345,11 +376,14 @@ namespace DesktopSwitcher
             if (_hoverIndex == -1) return;
 
             _hoverIndex = -1;
+
+            // SyncVisuals keeps a pinned button lit, so opening a menu - which takes the
+            // pointer off the strip and fires this - does not darken the button under it.
             SyncVisuals();
             Invalidate();
         }
 
-        void OnClick(int x, int y, MouseButtons button)
+        void OnClick(int x, int y, MouseButtons button, bool shift)
         {
             // Whatever the click does, the panel describing it is now stale.
             HideTooltip();
@@ -357,6 +391,12 @@ namespace DesktopSwitcher
 
             int index = HitTest(x, y);
             if (index < 0) return;
+
+            // The menu is the touchpad's only way to the actions the other buttons carry,
+            // so it answers on every button, '+' included. With nothing listening - the
+            // menu turned off in config - the click falls through to what right click did
+            // before the menu existed.
+            if (button == MouseButtons.Right && !shift && OpenMenu(index)) return;
 
             if (index >= _desktops.Count)
             {
@@ -368,9 +408,74 @@ namespace DesktopSwitcher
             switch (button)
             {
                 case MouseButtons.Left:   Raise(SwitchRequested, id); break;
-                case MouseButtons.Right:  Raise(MoveWindowRequested, id); break;
+                case MouseButtons.Right:  Raise(MoveWindowRequested, id); break;   // shift held
                 case MouseButtons.Middle: Raise(RemoveRequested, id); break;
             }
+        }
+
+        // --- context menu -----------------------------------------------------
+
+        /// <summary>False when there is no menu to open, leaving the click to its old meaning.</summary>
+        bool OpenMenu(int index)
+        {
+            if (ContextMenuRequested == null) return false;
+
+            Rectangle anchor = AnchorFor(index);
+            if (anchor.Width == 0) return false;
+
+            // Pinned before the handler runs, because the handler shows the menu and the
+            // button must already be lit underneath it.
+            _menuIndex = index;
+            SyncVisuals();
+            Invalidate();
+
+            try
+            {
+                ContextMenuRequested(index, anchor);
+            }
+            catch (Exception ex)
+            {
+                // Nothing is going to close a menu that was never shown, so let the button go.
+                Log.Write("strip: menu handler threw - " + ex.Message);
+                MenuClosed();
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// The menu raised by ContextMenuRequested has gone. Idempotent, and required on
+        /// every path out of the handler - including one that showed nothing.
+        /// </summary>
+        public void MenuClosed()
+        {
+            if (_menuIndex == -1) return;
+
+            _menuIndex = -1;
+
+            // Tracking lapsed while the menu held the pointer, and no mouse message is owed
+            // to us just because the menu closed. Re-read where the pointer actually is, or
+            // the strip sits dead - unlit, no panel - until it leaves and comes back.
+            _hoverIndex = HitTestScreen(Cursor.Position);
+            _trackingMouse = false;
+            if (_hoverIndex >= 0) ArmTracking();
+
+            SyncVisuals();
+            Invalidate();
+        }
+
+        int HitTestScreen(Point screen)
+        {
+            var point = new Native.POINT();
+            point.X = screen.X;
+            point.Y = screen.Y;
+            if (!Native.ScreenToClient(Handle, ref point)) return -1;
+
+            Native.RECT client;
+            if (!Native.GetWindowRect(Handle, out client)) return -1;
+            if (point.Y < 0 || point.Y >= client.Height) return -1;
+
+            return HitTest(point.X, point.Y);
         }
 
         // --- tooltip ----------------------------------------------------------
@@ -378,6 +483,10 @@ namespace DesktopSwitcher
         void ShowTooltip()
         {
             if (_disposed || _hoverIndex < 0 || TooltipProvider == null) return;
+
+            // The menu already says what this button can do, and the panel would only be in
+            // front of it or behind it.
+            if (_menuIndex >= 0) return;
 
             TooltipContent content;
             try
@@ -397,12 +506,8 @@ namespace DesktopSwitcher
 
             // The button in screen coordinates: the panel anchors to it, and the accent
             // bar lines up under it.
-            Native.RECT strip;
-            if (!Native.GetWindowRect(Handle, out strip)) return;
-
-            Rectangle button = ButtonBounds(_hoverIndex, strip.Height);
-            var anchor = new Rectangle(strip.Left + button.X, strip.Top,
-                                       button.Width, strip.Height);
+            Rectangle anchor = AnchorFor(_hoverIndex);
+            if (anchor.Width == 0) return;
 
             _tooltip.Show(content, anchor);
         }
@@ -427,6 +532,12 @@ namespace DesktopSwitcher
         }
 
         // --- window procedure --------------------------------------------------
+
+        /// <summary>Modifier state as the mouse message itself reported it.</summary>
+        static bool Shift(IntPtr wParam)
+        {
+            return ((int)(long)wParam & Native.MK_SHIFT) != 0;
+        }
 
         protected override void WndProc(ref Message m)
         {
@@ -465,15 +576,18 @@ namespace DesktopSwitcher
                     return;
 
                 case Native.WM_LBUTTONUP:
-                    OnClick(Native.LoWord(m.LParam), Native.HiWord(m.LParam), MouseButtons.Left);
+                    OnClick(Native.LoWord(m.LParam), Native.HiWord(m.LParam),
+                            MouseButtons.Left, Shift(m.WParam));
                     return;
 
                 case Native.WM_RBUTTONUP:
-                    OnClick(Native.LoWord(m.LParam), Native.HiWord(m.LParam), MouseButtons.Right);
+                    OnClick(Native.LoWord(m.LParam), Native.HiWord(m.LParam),
+                            MouseButtons.Right, Shift(m.WParam));
                     return;
 
                 case Native.WM_MBUTTONUP:
-                    OnClick(Native.LoWord(m.LParam), Native.HiWord(m.LParam), MouseButtons.Middle);
+                    OnClick(Native.LoWord(m.LParam), Native.HiWord(m.LParam),
+                            MouseButtons.Middle, Shift(m.WParam));
                     return;
             }
 

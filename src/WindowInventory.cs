@@ -74,6 +74,22 @@ namespace DesktopSwitcher
             return new List<WindowEntry>();
         }
 
+        /// <summary>
+        /// One window read the way a sweep reads it, for a caller that already holds the
+        /// handle and is asking about that window rather than about a desktop. No cache and
+        /// no desktop lookup, so it costs one process query.
+        ///
+        /// A packaged app is named from its hosted CoreWindow by GetOwningProcessId, so it
+        /// comes out right without the frame pairing a sweep needs - that exists to stop one
+        /// app being listed twice, which cannot arise with a single handle.
+        /// </summary>
+        public static WindowEntry Describe(IntPtr hwnd)
+        {
+            string title = Native.GetText(hwnd);
+            string app = Native.GetAppName(Native.GetOwningProcessId(hwnd));
+            return new WindowEntry(app, TrimRepeat(title, app));
+        }
+
         void EnsureFresh()
         {
             if (_age.IsRunning && _age.ElapsedMilliseconds < CacheMs) return;

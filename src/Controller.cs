@@ -28,6 +28,9 @@ namespace DesktopSwitcher
         NotifyIcon _tray;
         Icon _trayIcon;
 
+        ContextMenuStrip _buttonMenu;   // the open one, rebuilt per click - contents follow the model
+        MenuTheme _menuTheme;
+
         Timer _startupTimer;     // waits for the taskbar to exist at login
         Timer _reconcileTimer;   // model safety net
         Timer _watchdogTimer;    // strip / taskbar health
@@ -182,6 +185,14 @@ namespace DesktopSwitcher
             _strip.MoveWindowRequested += OnMoveWindowRequested;
             _strip.TooltipProvider = BuildTooltip;
 
+            // Left unsubscribed when the menu is off, which is what puts right click back to
+            // sending the active window: the strip falls through when nothing is listening.
+            if (_config.ContextMenu)
+            {
+                _menuTheme = new MenuTheme(_background, _host.DpiScale);
+                _strip.ContextMenuRequested += ShowButtonMenu;
+            }
+
             _foreground.Ignore(_strip.Handle);
 
             _strip.SetDesktops(_service.Desktops);
@@ -193,8 +204,15 @@ namespace DesktopSwitcher
         void DisposeStrip()
         {
             if (_strip == null) return;
+
+            // Before the strip goes, so an Explorer restart cannot leave a menu on screen
+            // anchored to a button that no longer exists.
+            CloseButtonMenu();
+
             _strip.Dispose();
             _strip = null;
+
+            if (_menuTheme != null) { _menuTheme.Dispose(); _menuTheme = null; }
         }
 
         void OnMoveWindowRequested(Guid id)
@@ -208,6 +226,204 @@ namespace DesktopSwitcher
 
             Log.Write(delegate { return "controller: moving \"" + Native.GetText(target) + "\""; });
             _service.MoveWindow(target, id);
+        }
+
+        // --- button menu ------------------------------------------------------
+
+        /// <summary>
+        /// The menu behind a right click on a button.
+        ///
+        /// Built here rather than in the strip for the same reason tooltip text is: the
+        /// items name windows and count them, which needs the model, the inventory and the
+        /// foreground tracker together. Built fresh every time, because every caption
+        /// describes the state at the moment of the click.
+        ///
+        /// The strip lights the button on the way in and only MenuClosed puts it out, so
+        /// every path out of here has to reach one.
+        /// </summary>
+        void ShowButtonMenu(int index, Rectangle anchor)
+        {
+            if (_service == null || _strip == null) return;
+
+            // Whatever was here is already closed - the strip cannot raise this while a menu
+            // is up, since that click would have gone to the menu - so this is only freeing
+            // the last one. Forgotten before it is disposed, so that if disposing does emit a
+            // Closed the handler sees a menu that is no longer current and stays quiet: it
+            // would otherwise put out the button that was just lit for the menu being built.
+            if (_buttonMenu != null)
+            {
+                ContextMenuStrip stale = _buttonMenu;
+                _buttonMenu = null;
+                stale.Dispose();
+            }
+
+            ContextMenuStrip menu;
+            try
+            {
+                menu = BuildButtonMenu(index);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("controller: menu build failed - " + ex.Message);
+                _strip.MenuClosed();
+                return;
+            }
+
+            if (menu == null) { _strip.MenuClosed(); return; }
+
+            _menuTheme.Apply(menu);
+            menu.Closed += delegate
+            {
+                // Only the menu still current reports back; one closed to make way for
+                // another has nothing to say about the button.
+                if (menu == _buttonMenu && _strip != null) _strip.MenuClosed();
+            };
+
+            _buttonMenu = menu;
+
+            // A drop-down whose owner is not the foreground window does not dismiss
+            // reliably, and can be left on screen with nothing to close it. Safe for
+            // send-window-here: ForegroundTracker only ever keeps alt-tab windows, and this
+            // form is never visible and has no caption, so what it holds survives untouched.
+            Native.ForceForeground(Handle);
+
+            ToolStripDropDownDirection direction = DirectionFor(anchor);
+            int y = direction == ToolStripDropDownDirection.BelowRight ? anchor.Bottom : anchor.Top;
+            menu.Show(new Point(anchor.Left, y), direction);
+        }
+
+        /// <summary>
+        /// Which way the menu grows out of the button: above it, or below when the taskbar
+        /// is at the top of the screen. The same single rule the hover panel places itself
+        /// by, and WinForms clamps the result onto the screen itself.
+        /// </summary>
+        static ToolStripDropDownDirection DirectionFor(Rectangle anchor)
+        {
+            Rectangle work = Screen.FromRectangle(anchor).WorkingArea;
+            return anchor.Top <= work.Top
+                ? ToolStripDropDownDirection.BelowRight
+                : ToolStripDropDownDirection.AboveRight;
+        }
+
+        ContextMenuStrip BuildButtonMenu(int index)
+        {
+            IList<Desktop> desktops = _service.Desktops;
+            var menu = new ContextMenuStrip();
+
+            if (index >= desktops.Count)
+            {
+                AddItem(menu, "New desktop", true, delegate { _service.Create(); });
+                return menu;
+            }
+
+            Desktop desktop = desktops[index];
+            Guid id = desktop.Id;
+
+            AddItem(menu, "Switch here", !desktop.IsCurrent, delegate { _service.SwitchTo(id); });
+
+            // Resolved now, not when the item is clicked, so the window that moves is the
+            // one the item named.
+            IntPtr target = _foreground.Resolve();
+            AddItem(menu, SendCaption(target), target != IntPtr.Zero && !IsOn(target, id),
+                    delegate
+                    {
+                        Log.Write(delegate
+                        {
+                            return "controller: menu moving \"" + Native.GetText(target) + "\"";
+                        });
+                        _service.MoveWindow(target, id);
+                    });
+
+            menu.Items.Add(new ToolStripSeparator());
+
+            // Removing is the one item worth hesitating over, so it says what is at stake.
+            // Windows moves the windows to another desktop rather than closing them, but
+            // finding them again is still a nuisance.
+            AddItem(menu, RemoveCaption(desktop), desktops.Count > 1,
+                    delegate { _service.Remove(id); });
+
+            return menu;
+        }
+
+        /// <summary>Longest window description a row will carry before it is cut short.</summary>
+        const int MenuTextMax = 40;
+
+        string SendCaption(IntPtr target)
+        {
+            if (target == IntPtr.Zero) return "Send window here";
+
+            string what = Describe(WindowInventory.Describe(target));
+            return "Send \"" + Ellipsize(what, MenuTextMax) + "\" here";
+        }
+
+        string RemoveCaption(Desktop desktop)
+        {
+            int count = _inventory.WindowsOn(desktop.Id).Count;
+
+            string what;
+            if (count == 0) what = "empty";
+            else if (count == 1) what = "1 window";
+            else what = count + " windows";
+
+            return "Remove " + Ellipsize(desktop.DisplayName, MenuTextMax) + " (" + what + ")";
+        }
+
+        /// <summary>
+        /// True when the window is already where the menu would send it. An unanswerable
+        /// question - the shell mid-restart - leaves the item live: offering a move that
+        /// turns out to be a no-op is a smaller failure than greying out one that would work.
+        /// </summary>
+        bool IsOn(IntPtr hwnd, Guid desktop)
+        {
+            try
+            {
+                Guid actual;
+                if (!_api.TryGetWindowDesktop(hwnd, out actual)) return false;
+                return actual == desktop;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("controller: desktop of window unknown - " + ex.Message);
+                return false;
+            }
+        }
+
+        static string Ellipsize(string text, int max)
+        {
+            if (string.IsNullOrEmpty(text) || text.Length <= max) return text;
+            return text.Substring(0, max - 3).TrimEnd() + "...";
+        }
+
+        static void AddItem(ContextMenuStrip menu, string text, bool enabled, EventHandler click)
+        {
+            // Ampersands in the caption come out of window titles, where they are literal;
+            // doubled, or the menu reads one as a mnemonic and swallows it.
+            var item = new ToolStripMenuItem(text.Replace("&", "&&"));
+            item.Enabled = enabled;
+
+            // A disabled item cannot be clicked, and leaving the handler off means an action
+            // that became impossible between building and clicking cannot fire either.
+            if (enabled) item.Click += click;
+
+            menu.Items.Add(item);
+        }
+
+        /// <summary>
+        /// Closes and forgets the open menu, telling the strip either way - a menu that
+        /// vanishes without a word leaves its button lit for good.
+        /// </summary>
+        void CloseButtonMenu()
+        {
+            ContextMenuStrip menu = _buttonMenu;
+            _buttonMenu = null;
+
+            if (menu != null)
+            {
+                menu.Close();
+                menu.Dispose();
+            }
+
+            if (_strip != null) _strip.MenuClosed();
         }
 
         // --- tooltips ---------------------------------------------------------
@@ -301,6 +517,11 @@ namespace DesktopSwitcher
         {
             // Desktops came or went, so the cached sweep is describing a stale set.
             _inventory.Invalidate();
+
+            // And so is anything the menu is offering: a removal renumbers every desktop
+            // after it, so "Remove Desktop 3" is now pointing at what used to be 4. The
+            // items hold Guids and would fail harmlessly, but only after saying otherwise.
+            CloseButtonMenu();
 
             if (_strip == null)
             {
@@ -581,6 +802,8 @@ namespace DesktopSwitcher
             }
 
             DisposeStrip();
+
+            if (_buttonMenu != null) { _buttonMenu.Dispose(); _buttonMenu = null; }
 
             if (_service != null) { _service.Dispose(); _service = null; }
 

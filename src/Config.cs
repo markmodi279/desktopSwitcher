@@ -28,6 +28,14 @@ namespace DesktopSwitcher
         public int ReconcileMs = 2000;
         public bool Diagnostics = false;
 
+        // --- menu -------------------------------------------------------------
+        /// <summary>
+        /// Right click a button for a menu of what it can do. Off means right click sends
+        /// the active window there, as it did before the menu existed; Shift + right click
+        /// does that either way.
+        /// </summary>
+        public bool ContextMenu = true;
+
         // --- tooltips ---------------------------------------------------------
         public bool Tooltips = true;
         /// <summary>Hover delay before the panel appears. 400ms is the Windows default.</summary>
@@ -106,6 +114,7 @@ namespace DesktopSwitcher
                 case "margin":           Margin          = ParseInt(val, Margin, 0, 200);        break;
                 case "reconcilems":      ReconcileMs     = ParseInt(val, ReconcileMs, 250, 60000); break;
                 case "diagnostics":      Diagnostics     = ParseBool(val, Diagnostics);          break;
+                case "contextmenu":      ContextMenu     = ParseBool(val, ContextMenu);          break;
                 case "tooltips":         Tooltips        = ParseBool(val, Tooltips);             break;
                 case "tooltipdelayms":   TooltipDelayMs  = ParseInt(val, TooltipDelayMs, 0, 5000); break;
                 case "tooltipmaxwindows": TooltipMaxWindows = ParseInt(val, TooltipMaxWindows, 1, 40); break;
@@ -179,6 +188,7 @@ namespace DesktopSwitcher
             sb.AppendLine("margin = "          + Margin);
             sb.AppendLine("reconcileMs = "     + ReconcileMs);
             sb.AppendLine("diagnostics = "     + (Diagnostics ? "true" : "false"));
+            sb.AppendLine("contextMenu = "     + (ContextMenu ? "true" : "false"));
             sb.AppendLine("tooltips = "        + (Tooltips ? "true" : "false"));
             sb.AppendLine("tooltipDelayMs = "  + TooltipDelayMs);
             sb.AppendLine("tooltipMaxWindows = " + TooltipMaxWindows);

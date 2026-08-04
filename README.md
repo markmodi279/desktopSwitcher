@@ -41,9 +41,18 @@ Run the exe with no arguments. Then, on the strip:
 | Action | Effect |
 |---|---|
 | Left click a number | switch to that desktop |
-| Right click a number | send the window you were last using to that desktop |
+| Right click a number | menu of everything that button can do |
+| Shift + right click a number | send the window you were last using to that desktop |
 | Middle click a number | remove that desktop |
 | Left click `+` | create a desktop |
+| Right click `+` | menu — **New desktop** |
+
+The menu exists because a touchpad cannot middle-click, which otherwise leaves removing a
+desktop with no gesture at all. It also says what it is about to do, which the bare
+gestures cannot: **Send "Chrome — Inbox" here** names the window that is going to move, and
+**Remove Desktop 3 (2 windows)** tells you what is over there before you take it away.
+Anything impossible right now is greyed rather than hidden — switching to the desktop you
+are already on, sending a window that is already there.
 
 The button count follows your actual desktops: create one in Task View and a button
 appears; remove one and it disappears. The strip is right-anchored, so the gap to the
@@ -75,6 +84,7 @@ your display automatically.
 | `plusWidth` | `26` | width of the `+` button at 96 DPI |
 | `margin` | `6` | gap between the strip and the tray icons |
 | `reconcileMs` | `2000` | safety-net poll interval |
+| `contextMenu` | `true` | right-click menu; `false` puts right click back to sending the window |
 | `tooltips` | `true` | hover panel showing each desktop's windows |
 | `tooltipDelayMs` | `400` | hover delay before the panel appears |
 | `tooltipMaxWindows` | `8` | titles listed before the rest collapse into `+N more` |
