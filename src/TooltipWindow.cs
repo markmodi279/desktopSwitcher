@@ -77,7 +77,9 @@ namespace DesktopSwitcher
             _padX = Scale(12);
             _padY = Scale(9);
             _accent = Scale(3);
-            _maxWidth = Scale(380);
+            // Wide enough that the app name leading each row is not paid for out of the
+            // title's characters.
+            _maxWidth = Scale(440);
 
             float body = (float)(12 * dpiScale);
             _titleFont = new Font("Segoe UI", body, FontStyle.Bold, GraphicsUnit.Pixel);

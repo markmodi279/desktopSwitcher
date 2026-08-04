@@ -234,10 +234,16 @@ namespace DesktopSwitcher
         /// </summary>
         const string Bullet = "\u2022  ";
 
+        /// <summary>
+        /// Between the app and what it is showing. An em dash rather than a hyphen because
+        /// window titles are full of hyphens already; escaped for the same reason as Bullet.
+        /// </summary>
+        const string Sep = "  \u2014  ";
+
         IList<string> WindowLines(Desktop desktop)
         {
             var lines = new List<string>();
-            IList<string> windows = _inventory.WindowsOn(desktop.Id);
+            IList<WindowEntry> windows = _inventory.WindowsOn(desktop.Id);
 
             // An empty desktop is worth saying out loud: it is the one you can remove
             // without losing anything, and otherwise you would have to visit it to find out.
@@ -250,12 +256,33 @@ namespace DesktopSwitcher
             // Only real windows get a bullet. The overflow line is a count, not an entry.
             int max = _config.TooltipMaxWindows;
             for (int i = 0; i < windows.Count && i < max; i++)
-                lines.Add(Bullet + windows[i]);
+                lines.Add(WindowLine(windows[i]));
 
             if (windows.Count > max)
                 lines.Add("+" + (windows.Count - max) + " more");
 
             return lines;
+        }
+
+        /// <summary>
+        /// One window's row, bullet and all. Public so the --strip harness renders exactly
+        /// what the real tooltip renders instead of drifting from it.
+        /// </summary>
+        public static string WindowLine(WindowEntry window)
+        {
+            return Bullet + Describe(window);
+        }
+
+        /// <summary>
+        /// App first, then the title. That order is the whole point: scanning a desktop is
+        /// asking which apps are over there, and it is also the end the ellipsis never eats.
+        /// </summary>
+        static string Describe(WindowEntry window)
+        {
+            if (window.App.Length == 0) return window.Title;
+            if (window.Title.Length == 0 || window.Title == window.App) return window.App;
+
+            return window.App + Sep + window.Title;
         }
 
         // --- service events ---------------------------------------------------

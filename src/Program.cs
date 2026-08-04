@@ -150,7 +150,7 @@ namespace DesktopSwitcher
             int total = 0;
             foreach (Desktop d in desktops)
             {
-                IList<string> windows = inventory.WindowsOn(d.Id);
+                IList<WindowEntry> windows = inventory.WindowsOn(d.Id);
                 total += windows.Count;
 
                 Console.WriteLine(string.Format("  [{0}] {1}  ({2} window{3}){4}",
@@ -166,8 +166,10 @@ namespace DesktopSwitcher
                 }
                 else
                 {
-                    foreach (string title in windows)
-                        Console.WriteLine("         " + title);
+                    // App first, as the tooltip shows it - so this selftest is also how you
+                    // check app resolution across every open window at once.
+                    foreach (WindowEntry w in windows)
+                        Console.WriteLine("         " + (w.App.Length == 0 ? "?" : w.App) + "  -  " + w.Title);
                 }
                 Console.WriteLine();
             }
@@ -703,12 +705,12 @@ namespace DesktopSwitcher
                     if (index < 0) return null;
 
                     Desktop d = list[index];
-                    IList<string> windows = inventory.WindowsOn(d.Id);
+                    IList<WindowEntry> windows = inventory.WindowsOn(d.Id);
 
                     var lines = new List<string>();
                     if (windows.Count == 0) lines.Add("- empty -");
                     else for (int i = 0; i < windows.Count && i < cfg.TooltipMaxWindows; i++)
-                        lines.Add(windows[i]);
+                        lines.Add(Controller.WindowLine(windows[i]));
 
                     Console.WriteLine("  tooltip -> [" + d.Number + "] " + windows.Count + " window(s)");
                     return new TooltipContent(d.DisplayName + (d.IsCurrent ? "   (current)" : ""), lines);

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -38,7 +39,29 @@ namespace DesktopSwitcher
         [DllImport("user32.dll")]
         public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr param);
 
+        [DllImport("user32.dll")]
+        public static extern bool EnumChildWindows(IntPtr parent, EnumWindowsProc callback, IntPtr param);
+
         public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr param);
+
+        // --- owning process ----------------------------------------------------
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool CloseHandle(IntPtr handle);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder path, ref int size);
+
+        /// <summary>
+        /// The weakest right that still answers "which exe is this". Unlike
+        /// PROCESS_QUERY_INFORMATION - and unlike Process.MainModule, which needs a module
+        /// snapshot - it is granted against elevated processes from a normal-rights caller,
+        /// so an admin console does not come back blank.
+        /// </summary>
+        const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
         // --- DPI ---------------------------------------------------------------
 
@@ -303,6 +326,144 @@ namespace DesktopSwitcher
             var sb = new StringBuilder(256);
             GetClassName(hWnd, sb, sb.Capacity);
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// The process actually behind a window, which is not always the one that owns the
+        /// hwnd: a packaged app's frame belongs to ApplicationFrameHost, and every packaged
+        /// app shares that one process. Resolving through to the app's own pid keeps
+        /// Settings, Calculator and the Store distinguishable - and keeps a per-pid cache
+        /// honest, since otherwise they would all collide on one key.
+        ///
+        /// Returns 0 if the window has no process, which is not something a live window
+        /// should manage.
+        /// </summary>
+        public static uint GetOwningProcessId(IntPtr hWnd)
+        {
+            uint pid;
+            GetWindowThreadProcessId(hWnd, out pid);
+            if (pid == 0) return 0;
+
+            // Class check rather than an image-name check: it is free, where working out
+            // that the frame is ApplicationFrameHost costs a process query of its own.
+            if (GetClass(hWnd) != "ApplicationFrameWindow") return pid;
+
+            uint hosted = HostedProcessId(hWnd, pid);
+            return hosted != 0 ? hosted : pid;
+        }
+
+        /// <summary>
+        /// The application a process is, ready to show - "Chrome", "Explorer" - or "" if it
+        /// cannot be worked out.
+        ///
+        /// Taken from the process rather than parsed out of a window title, so it is still
+        /// right for the many windows whose caption never names their app.
+        ///
+        /// Never throws: this runs on a hover, and a tooltip must not be able to take the
+        /// strip down.
+        /// </summary>
+        public static string GetAppName(uint pid)
+        {
+            if (pid == 0) return string.Empty;
+
+            try
+            {
+                return Pretty(ImageBaseName(pid));
+            }
+            catch (Exception ex)
+            {
+                Log.Write("native: app name failed - " + ex.Message);
+                return string.Empty;
+            }
+        }
+
+        static string ImageBaseName(uint pid)
+        {
+            IntPtr process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (process == IntPtr.Zero) return string.Empty;
+
+            try
+            {
+                var sb = new StringBuilder(512);
+                int size = sb.Capacity;
+                if (!QueryFullProcessImageName(process, 0, sb, ref size)) return string.Empty;
+
+                string path = sb.ToString();
+                int slash = path.LastIndexOf('\\');
+                if (slash >= 0) path = path.Substring(slash + 1);
+
+                if (path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                    path = path.Substring(0, path.Length - 4);
+
+                return path;
+            }
+            finally
+            {
+                CloseHandle(process);
+            }
+        }
+
+        /// <summary>The pid behind a packaged app's frame window, or 0.</summary>
+        static uint HostedProcessId(IntPtr frame, uint framePid)
+        {
+            uint found = 0;
+
+            EnumChildWindows(frame, delegate(IntPtr child, IntPtr param)
+            {
+                if (GetClass(child) != "Windows.UI.Core.CoreWindow") return true;
+
+                uint pid;
+                GetWindowThreadProcessId(child, out pid);
+                if (pid == 0 || pid == framePid) return true;
+
+                found = pid;
+                return false;
+            }, IntPtr.Zero);
+
+            return found;
+        }
+
+        /// <summary>
+        /// Exe names that do not read as the app they are. Deliberately short - the point
+        /// is the handful a user meets daily, not a catalogue.
+        /// </summary>
+        static readonly Dictionary<string, string> AppAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "msedge", "Edge" },
+            { "iexplore", "Internet Explorer" },
+            { "WINWORD", "Word" },
+            { "EXCEL", "Excel" },
+            { "POWERPNT", "PowerPoint" },
+            { "OUTLOOK", "Outlook" },
+            { "devenv", "Visual Studio" },
+            { "Code", "VS Code" },
+            { "WindowsTerminal", "Terminal" },
+            { "Taskmgr", "Task Manager" },
+
+            // Packaged apps, whose exe names are internal identifiers.
+            { "CalculatorApp", "Calculator" },
+            { "SystemSettings", "Settings" },
+            { "Microsoft.Photos", "Photos" },
+            { "WinStore.App", "Store" },
+
+            // Only reached when the hosted CoreWindow could not be found; still better
+            // than showing the shell's own process name.
+            { "ApplicationFrameHost", "Windows app" },
+        };
+
+        static string Pretty(string exe)
+        {
+            if (string.IsNullOrEmpty(exe)) return string.Empty;
+
+            string alias;
+            if (AppAliases.TryGetValue(exe, out alias)) return alias;
+
+            // A vendor shipping a mixed-case exe name has already chosen its casing;
+            // only the all-lowercase ones ("chrome", "notepad") want a capital.
+            if (exe.ToLowerInvariant() == exe)
+                return char.ToUpperInvariant(exe[0]) + exe.Substring(1);
+
+            return exe;
         }
 
         /// <summary>
