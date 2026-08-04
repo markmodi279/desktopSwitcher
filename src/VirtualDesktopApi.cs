@@ -292,6 +292,31 @@ namespace DesktopSwitcher
             }, "GetDesktops");
         }
 
+        /// <summary>
+        /// The desktop a window lives on, or false if it has none.
+        ///
+        /// Windows on other desktops stay enumerable, so this is what turns a flat
+        /// EnumWindows sweep into a per-desktop inventory. A false result is the normal
+        /// answer for shell ghosts - suspended UWP frames and the like - which report
+        /// GUID_NULL or fail outright, and is how they are told apart from real windows
+        /// that merely happen to be on another desktop.
+        /// </summary>
+        public bool TryGetWindowDesktop(IntPtr hwnd, out Guid id)
+        {
+            Guid found = Guid.Empty;
+            bool ok = Do(delegate
+            {
+                Guid result;
+                int hr = _public.GetWindowDesktopId(hwnd, out result);
+                if (hr < 0 || result == Guid.Empty) return false;
+                found = result;
+                return true;
+            }, "GetWindowDesktopId");
+
+            id = found;
+            return ok;
+        }
+
         // --- mutations --------------------------------------------------------
 
         public void SwitchTo(Guid id)

@@ -31,6 +31,7 @@ namespace DesktopSwitcher
                 switch (command)
                 {
                     case "--list":    return CmdList(api);
+                    case "--desktops": return CmdDesktops(api);
                     case "--switch":  return CmdSwitch(api, args);
                     case "--create":  return CmdCreate(api);
                     case "--remove":  return CmdRemove(api, args);
@@ -95,6 +96,7 @@ namespace DesktopSwitcher
             Console.WriteLine();
             Console.WriteLine("Selftest commands:");
             Console.WriteLine("  --list                 show all desktops");
+            Console.WriteLine("  --desktops             show all desktops with the windows on each");
             Console.WriteLine("  --switch N             switch to desktop N (1-based)");
             Console.WriteLine("  --create               create a new desktop");
             Console.WriteLine("  --remove N             remove desktop N");
@@ -125,6 +127,52 @@ namespace DesktopSwitcher
                     d.Id,
                     d.IsCurrent ? "   <== CURRENT" : ""));
             }
+            Console.WriteLine();
+            return 0;
+        }
+
+        /// <summary>
+        /// Every desktop with the windows on it - the exact content the hover tooltip
+        /// shows, printed before any UI exists to draw it.
+        ///
+        /// The point is to check the filter against Task View by eye: no suspended UWP
+        /// ghosts, nothing real missing, and windows pinned to all desktops landing
+        /// somewhere sensible. Cloaking cannot make that distinction; see WindowInventory.
+        /// </summary>
+        static int CmdDesktops(VirtualDesktopApi api)
+        {
+            IList<Desktop> desktops = Snapshot(api);
+            var inventory = new WindowInventory(api);
+
+            Console.WriteLine("Desktops (" + desktops.Count + "):");
+            Console.WriteLine();
+
+            int total = 0;
+            foreach (Desktop d in desktops)
+            {
+                IList<string> windows = inventory.WindowsOn(d.Id);
+                total += windows.Count;
+
+                Console.WriteLine(string.Format("  [{0}] {1}  ({2} window{3}){4}",
+                    d.Number,
+                    d.DisplayName,
+                    windows.Count,
+                    windows.Count == 1 ? "" : "s",
+                    d.IsCurrent ? "   <== CURRENT" : ""));
+
+                if (windows.Count == 0)
+                {
+                    Console.WriteLine("         - empty -");
+                }
+                else
+                {
+                    foreach (string title in windows)
+                        Console.WriteLine("         " + title);
+                }
+                Console.WriteLine();
+            }
+
+            Console.WriteLine("  " + total + " windows total. Compare against Win+Tab.");
             Console.WriteLine();
             return 0;
         }
@@ -641,7 +689,30 @@ namespace DesktopSwitcher
 
                 var strip = new SwitcherStrip(host.TrayWindow, bounds,
                                               buttonWidth, plusWidth, barHeight,
-                                              background, cfg.HighlightColor);
+                                              background, cfg.HighlightColor,
+                                              (uint)cfg.TooltipDelayMs, host.DpiScale);
+
+                // Hover panels, so --strip exercises them too. A compact echo of
+                // Controller.BuildTooltip - enough to check placement, delay and content.
+                var inventory = new WindowInventory(api);
+                strip.TooltipProvider = delegate(int index)
+                {
+                    IList<Desktop> list = service.Desktops;
+                    if (index >= list.Count)
+                        return new TooltipContent("New desktop", new List<string> { "Win+Ctrl+D" });
+                    if (index < 0) return null;
+
+                    Desktop d = list[index];
+                    IList<string> windows = inventory.WindowsOn(d.Id);
+
+                    var lines = new List<string>();
+                    if (windows.Count == 0) lines.Add("- empty -");
+                    else for (int i = 0; i < windows.Count && i < cfg.TooltipMaxWindows; i++)
+                        lines.Add(windows[i]);
+
+                    Console.WriteLine("  tooltip -> [" + d.Number + "] " + windows.Count + " window(s)");
+                    return new TooltipContent(d.DisplayName + (d.IsCurrent ? "   (current)" : ""), lines);
+                };
 
                 EventHandler relayout = delegate
                 {

@@ -28,6 +28,13 @@ namespace DesktopSwitcher
         public int ReconcileMs = 2000;
         public bool Diagnostics = false;
 
+        // --- tooltips ---------------------------------------------------------
+        public bool Tooltips = true;
+        /// <summary>Hover delay before the panel appears. 400ms is the Windows default.</summary>
+        public int TooltipDelayMs = 400;
+        /// <summary>Window titles shown before collapsing the rest into "+N more".</summary>
+        public int TooltipMaxWindows = 8;
+
         // --- appearance -------------------------------------------------------
         public Color HighlightColor = Color.FromArgb(0x00, 0x78, 0xD7);
         /// <summary>Color.Empty means "sample the live taskbar colour at runtime".</summary>
@@ -88,6 +95,9 @@ namespace DesktopSwitcher
                 case "margin":           Margin          = ParseInt(val, Margin, 0, 200);        break;
                 case "reconcilems":      ReconcileMs     = ParseInt(val, ReconcileMs, 250, 60000); break;
                 case "diagnostics":      Diagnostics     = ParseBool(val, Diagnostics);          break;
+                case "tooltips":         Tooltips        = ParseBool(val, Tooltips);             break;
+                case "tooltipdelayms":   TooltipDelayMs  = ParseInt(val, TooltipDelayMs, 0, 5000); break;
+                case "tooltipmaxwindows": TooltipMaxWindows = ParseInt(val, TooltipMaxWindows, 1, 40); break;
                 case "highlightcolor":   HighlightColor  = ParseColor(val, HighlightColor);      break;
                 case "backgroundcolor":  BackgroundColor = ParseColor(val, Color.Empty);         break;
                 default:                 _unknown[key]   = val;                                  break;
@@ -111,6 +121,9 @@ namespace DesktopSwitcher
                 sb.AppendLine("margin = "          + Margin);
                 sb.AppendLine("reconcileMs = "     + ReconcileMs);
                 sb.AppendLine("diagnostics = "     + (Diagnostics ? "true" : "false"));
+                sb.AppendLine("tooltips = "        + (Tooltips ? "true" : "false"));
+                sb.AppendLine("tooltipDelayMs = "  + TooltipDelayMs);
+                sb.AppendLine("tooltipMaxWindows = " + TooltipMaxWindows);
                 sb.AppendLine("highlightColor = "  + ToHex(HighlightColor));
                 sb.AppendLine("backgroundColor = " + (BackgroundColor.IsEmpty ? "" : ToHex(BackgroundColor)));
 

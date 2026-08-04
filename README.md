@@ -49,6 +49,13 @@ The button count follows your actual desktops: create one in Task View and a but
 appears; remove one and it disappears. The strip is right-anchored, so the gap to the
 clock never changes as it grows.
 
+Hover a number and a panel appears above it listing the windows open on that desktop —
+Windows 10 otherwise gives you no way to see that without `Win+Tab`. Desktops with nothing
+on them say so, which is how you find the one that is safe to remove.
+
+Desktops renamed in Task View (`Win+Tab`, right-click a desktop, **Rename**) show that
+name on the panel.
+
 Right-click the tray icon for **Start with Windows**, config and log files, a manual
 **Reload strip**, and **Exit**. There is no other way to quit — the strip has no chrome.
 
@@ -68,6 +75,9 @@ your display automatically.
 | `plusWidth` | `26` | width of the `+` button at 96 DPI |
 | `margin` | `6` | gap between the strip and the tray icons |
 | `reconcileMs` | `2000` | safety-net poll interval |
+| `tooltips` | `true` | hover panel showing each desktop's windows |
+| `tooltipDelayMs` | `400` | hover delay before the panel appears |
+| `tooltipMaxWindows` | `8` | titles listed before the rest collapse into `+N more` |
 | `highlightColor` | `#0078D7` | underline bar under the current desktop |
 | `backgroundColor` | *(blank)* | blank samples the live taskbar colour |
 | `diagnostics` | `false` | enable the rolling log |
@@ -88,6 +98,18 @@ different desktop by the time it is used.
 UI, so the highlight changes instantly. A slow reconcile tick covers a dead notification
 sink, missed events and Explorer restarts. Notification callbacks arrive on arbitrary RPC
 threads and are marshalled onto the UI thread before touching any state.
+
+**The hover panel is a top-level window, unlike the strip.** A child window is clipped to
+its parent, and the taskbar is exactly as tall as the strip, so a panel parented there
+would be invisible. It is `WS_EX_NOACTIVATE` and click-through: taking focus would break
+click handling and overwrite the window the foreground tracker is holding, which is what
+right-click-to-send depends on.
+
+**Window lists are built on hover, never on a timer.** Windows on other desktops stay
+enumerable, so one sweep plus one `GetWindowDesktopId` per window buckets the whole
+machine at once; the result is cached for a second. Cloaking cannot be used as the filter,
+because the shell cloaks suspended UWP frames with the same flag it uses for windows on an
+inactive desktop — what separates them is that the ghosts have no desktop at all.
 
 **The process is DPI-aware.** Explorer is, and a DPI-unaware child of the taskbar has its
 coordinates silently scaled — on a 125% display a strip positioned at x=1110 lands at

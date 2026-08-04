@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
@@ -22,6 +23,7 @@ namespace DesktopSwitcher
         readonly ForegroundTracker _foreground = new ForegroundTracker();
 
         DesktopService _service;
+        WindowInventory _inventory;
         SwitcherStrip _strip;
         NotifyIcon _tray;
         Icon _trayIcon;
@@ -80,6 +82,7 @@ namespace DesktopSwitcher
             ComputeMetrics();
 
             _service = new DesktopService(_api, this);
+            _inventory = new WindowInventory(_api);
             _service.Start();
 
             // Windows forgets the desktop count across a reboot; put it back.
@@ -160,12 +163,14 @@ namespace DesktopSwitcher
 
             _strip = new SwitcherStrip(_host.TrayWindow, bounds,
                                        _buttonWidth, _plusWidth, _barHeight,
-                                       _background, _config.HighlightColor);
+                                       _background, _config.HighlightColor,
+                                       (uint)_config.TooltipDelayMs, _host.DpiScale);
 
             _strip.SwitchRequested += delegate(Guid id) { _service.SwitchTo(id); };
             _strip.CreateRequested += delegate { _service.Create(); };
             _strip.RemoveRequested += delegate(Guid id) { _service.Remove(id); };
             _strip.MoveWindowRequested += OnMoveWindowRequested;
+            _strip.TooltipProvider = BuildTooltip;
 
             _foreground.Ignore(_strip.Handle);
 
@@ -195,10 +200,71 @@ namespace DesktopSwitcher
             _service.MoveWindow(target, id);
         }
 
+        // --- tooltips ---------------------------------------------------------
+
+        /// <summary>
+        /// Builds what a button's tooltip should say. Assembled here because this is the
+        /// only type holding the desktop model and the window inventory at once; the
+        /// strip contributes geometry and nothing else.
+        /// </summary>
+        TooltipContent BuildTooltip(int index)
+        {
+            if (!_config.Tooltips || _service == null) return null;
+
+            IList<Desktop> desktops = _service.Desktops;
+
+            if (index >= desktops.Count)
+                return new TooltipContent("New desktop", new List<string> { "Win+Ctrl+D" });
+
+            if (index < 0) return null;
+            Desktop desktop = desktops[index];
+
+            string title = desktop.DisplayName;
+            if (desktop.IsCurrent) title += "   (current)";
+
+            return new TooltipContent(title, WindowLines(desktop));
+        }
+
+        /// <summary>
+        /// Bullet prefix for window rows, indenting them under the desktop name.
+        ///
+        /// Written as an escape so the source stays ASCII: the in-box compiler reads
+        /// BOM-less files in the system codepage, and a literal bullet byte would come
+        /// through as mojibake.
+        /// </summary>
+        const string Bullet = "\u2022  ";
+
+        IList<string> WindowLines(Desktop desktop)
+        {
+            var lines = new List<string>();
+            IList<string> windows = _inventory.WindowsOn(desktop.Id);
+
+            // An empty desktop is worth saying out loud: it is the one you can remove
+            // without losing anything, and otherwise you would have to visit it to find out.
+            if (windows.Count == 0)
+            {
+                lines.Add("- empty -");
+                return lines;
+            }
+
+            // Only real windows get a bullet. The overflow line is a count, not an entry.
+            int max = _config.TooltipMaxWindows;
+            for (int i = 0; i < windows.Count && i < max; i++)
+                lines.Add(Bullet + windows[i]);
+
+            if (windows.Count > max)
+                lines.Add("+" + (windows.Count - max) + " more");
+
+            return lines;
+        }
+
         // --- service events ---------------------------------------------------
 
         void OnDesktopsChanged(object sender, EventArgs e)
         {
+            // Desktops came or went, so the cached sweep is describing a stale set.
+            _inventory.Invalidate();
+
             if (_strip == null)
             {
                 RebuildStrip();

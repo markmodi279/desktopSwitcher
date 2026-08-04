@@ -217,6 +217,7 @@ namespace DesktopSwitcher
             public uint dwHoverTime;
         }
 
+        public const uint TME_HOVER = 0x00000001;
         public const uint TME_LEAVE = 0x00000002;
 
         public const int WM_PAINT = 0x000F;
@@ -226,6 +227,7 @@ namespace DesktopSwitcher
         public const int WM_LBUTTONUP = 0x0202;
         public const int WM_RBUTTONUP = 0x0205;
         public const int WM_MBUTTONUP = 0x0208;
+        public const int WM_MOUSEHOVER = 0x02A1;
         public const int WM_MOUSELEAVE = 0x02A3;
         public const int WM_NCDESTROY = 0x0082;
 
@@ -240,16 +242,20 @@ namespace DesktopSwitcher
         }
 
         public static readonly IntPtr HWND_TOP = IntPtr.Zero;
+        public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
 
         public const uint SWP_NOSIZE = 0x0001;
         public const uint SWP_NOMOVE = 0x0002;
         public const uint SWP_NOZORDER = 0x0004;
         public const uint SWP_NOACTIVATE = 0x0010;
         public const uint SWP_SHOWWINDOW = 0x0040;
+        public const uint SWP_HIDEWINDOW = 0x0080;
 
         public const int WS_CHILD = unchecked((int)0x40000000);
         public const int WS_POPUP = unchecked((int)0x80000000);
         public const int WS_EX_NOACTIVATE = 0x08000000;
+        public const int WS_EX_TOPMOST = 0x00000008;
+        public const int WS_EX_TRANSPARENT = 0x00000020;
 
         // --- focus ------------------------------------------------------------
 

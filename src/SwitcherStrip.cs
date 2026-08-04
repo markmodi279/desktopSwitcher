@@ -31,6 +31,8 @@ namespace DesktopSwitcher
         readonly int _buttonWidth;
         readonly int _plusWidth;
         readonly int _barHeight;
+        readonly uint _hoverDelay;
+        readonly double _dpiScale;
 
         List<Desktop> _desktops = new List<Desktop>();
         ButtonVisual[] _visuals = new ButtonVisual[0];
@@ -44,13 +46,18 @@ namespace DesktopSwitcher
         Bitmap _buffer;
         Font _font;
 
+        TooltipWindow _tooltip;
+
         public SwitcherStrip(IntPtr parent, Rectangle bounds,
                              int buttonWidth, int plusWidth, int barHeight,
-                             Color background, Color highlight)
+                             Color background, Color highlight,
+                             uint hoverDelay, double dpiScale)
         {
             _buttonWidth = buttonWidth;
             _plusWidth = plusWidth;
             _barHeight = barHeight;
+            _hoverDelay = hoverDelay;
+            _dpiScale = dpiScale;
             _background = background;
             _highlight = highlight;
 
@@ -77,6 +84,15 @@ namespace DesktopSwitcher
 
         /// <summary>Left click on the '+' button.</summary>
         public event EventHandler CreateRequested;
+
+        /// <summary>
+        /// Supplies the text for a button's tooltip, by the same index HitTest returns -
+        /// so _desktops.Count means the '+' button. Returning null suppresses the tooltip.
+        ///
+        /// The strip contributes geometry only. Content needs the desktop model, the
+        /// window inventory and the foreground tracker, none of which belong here.
+        /// </summary>
+        public Func<int, TooltipContent> TooltipProvider { get; set; }
 
         // --- layout -----------------------------------------------------------
 
@@ -118,6 +134,10 @@ namespace DesktopSwitcher
                 _visuals = new ButtonVisual[_desktops.Count + 1];
 
             if (_hoverIndex > _desktops.Count) _hoverIndex = -1;
+
+            // Anything the panel was saying about desktop N may now describe a different
+            // desktop, since a removal renumbers everything after it.
+            HideTooltip();
 
             SyncVisuals();
             Invalidate();
@@ -276,18 +296,28 @@ namespace DesktopSwitcher
 
         // --- input ------------------------------------------------------------
 
+        /// <summary>
+        /// Asks for WM_MOUSELEAVE and one WM_MOUSEHOVER after the delay.
+        ///
+        /// Both are one-shot, and TME_HOVER only fires while the pointer stays inside a
+        /// small system-defined rect. Moving from one button to the next can easily stay
+        /// inside that rect, so this must be re-armed whenever the hovered button
+        /// changes or the hover simply never fires again.
+        /// </summary>
+        void ArmTracking()
+        {
+            var tme = new Native.TRACKMOUSEEVENT();
+            tme.cbSize = System.Runtime.InteropServices.Marshal.SizeOf(typeof(Native.TRACKMOUSEEVENT));
+            tme.dwFlags = Native.TME_LEAVE | Native.TME_HOVER;
+            tme.hwndTrack = Handle;
+            tme.dwHoverTime = _hoverDelay;
+            Native.TrackMouseEvent(ref tme);
+            _trackingMouse = true;
+        }
+
         void OnMouseMove(int x, int y)
         {
-            if (!_trackingMouse)
-            {
-                var tme = new Native.TRACKMOUSEEVENT();
-                tme.cbSize = System.Runtime.InteropServices.Marshal.SizeOf(typeof(Native.TRACKMOUSEEVENT));
-                tme.dwFlags = Native.TME_LEAVE;
-                tme.hwndTrack = Handle;
-                tme.dwHoverTime = 0;
-                Native.TrackMouseEvent(ref tme);
-                _trackingMouse = true;
-            }
+            if (!_trackingMouse) ArmTracking();
 
             int index = HitTest(x, y);
             if (index == _hoverIndex) return;
@@ -295,11 +325,21 @@ namespace DesktopSwitcher
             _hoverIndex = index;
             SyncVisuals();
             Invalidate();
+
+            // Restart the delay against the button now under the pointer.
+            ArmTracking();
+
+            if (index < 0)
+                HideTooltip();
+            else if (_tooltip != null && _tooltip.IsVisible)
+                ShowTooltip();   // already open: follow the pointer without re-waiting
         }
 
         void OnMouseLeave()
         {
             _trackingMouse = false;
+            HideTooltip();
+
             if (_hoverIndex == -1) return;
 
             _hoverIndex = -1;
@@ -309,6 +349,10 @@ namespace DesktopSwitcher
 
         void OnClick(int x, int y, MouseButtons button)
         {
+            // Whatever the click does, the panel describing it is now stale.
+            HideTooltip();
+            ArmTracking();
+
             int index = HitTest(x, y);
             if (index < 0) return;
 
@@ -325,6 +369,45 @@ namespace DesktopSwitcher
                 case MouseButtons.Right:  Raise(MoveWindowRequested, id); break;
                 case MouseButtons.Middle: Raise(RemoveRequested, id); break;
             }
+        }
+
+        // --- tooltip ----------------------------------------------------------
+
+        void ShowTooltip()
+        {
+            if (_disposed || _hoverIndex < 0 || TooltipProvider == null) return;
+
+            TooltipContent content;
+            try
+            {
+                content = TooltipProvider(_hoverIndex);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("strip: tooltip provider threw - " + ex.Message);
+                return;
+            }
+
+            if (content == null) { HideTooltip(); return; }
+
+            if (_tooltip == null)
+                _tooltip = new TooltipWindow(_background, _highlight, _dpiScale);
+
+            // The button in screen coordinates: the panel anchors to it, and the accent
+            // bar lines up under it.
+            Native.RECT strip;
+            if (!Native.GetWindowRect(Handle, out strip)) return;
+
+            Rectangle button = ButtonBounds(_hoverIndex, strip.Height);
+            var anchor = new Rectangle(strip.Left + button.X, strip.Top,
+                                       button.Width, strip.Height);
+
+            _tooltip.Show(content, anchor);
+        }
+
+        void HideTooltip()
+        {
+            if (_tooltip != null) _tooltip.Hide();
         }
 
         void Raise(Action<Guid> handler, Guid id)
@@ -371,6 +454,10 @@ namespace DesktopSwitcher
                     OnMouseMove(Native.LoWord(m.LParam), Native.HiWord(m.LParam));
                     return;
 
+                case Native.WM_MOUSEHOVER:
+                    ShowTooltip();
+                    return;
+
                 case Native.WM_MOUSELEAVE:
                     OnMouseLeave();
                     return;
@@ -402,6 +489,10 @@ namespace DesktopSwitcher
         {
             if (_disposed) return;
             _disposed = true;
+
+            // Before the strip goes, so an Explorer restart cannot strand the panel on
+            // screen: the tooltip is top-level and would otherwise outlive its parent.
+            if (_tooltip != null) { _tooltip.Dispose(); _tooltip = null; }
 
             Destroy();
 
