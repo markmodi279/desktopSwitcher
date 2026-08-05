@@ -18,9 +18,15 @@ namespace DesktopSwitcher
     /// </summary>
     sealed class MenuTheme : IDisposable
     {
-        /// <summary>Row text, and what a row that cannot be clicked fades to.</summary>
-        static readonly Color EnabledText = Grey(225);
-        static readonly Color DisabledText = Grey(130);
+        /// <summary>
+        /// Row text, and what a row that cannot be clicked fades to.
+        ///
+        /// Instance state rather than the two constants these used to be: the tones depend
+        /// on the taskbar colour, which is not known until a theme is constructed. A menu
+        /// over a light taskbar needs dark rows, and the constants only ever went lighter.
+        /// </summary>
+        readonly Color _text;
+        readonly Color _disabledText;
 
         readonly Font _font;
         readonly Color _surface;
@@ -32,15 +38,19 @@ namespace DesktopSwitcher
         {
             _scale = dpiScale;
 
+            _text = Palette.BodyText(background);
+            _disabledText = Palette.MutedText(background);
+
             // The panel's own lift, so a menu and a hover panel over the same taskbar are
             // the same colour rather than two guesses at it.
-            _surface = Lighten(background, 0.06f);
+            _surface = Palette.Lift(background, 0.06f);
 
-            // Enough above the surface to read as a well you can type into, and below the
-            // selection colour, so a highlighted row still wins over the box inside it.
-            _field = Lighten(background, 0.14f);
+            // Enough clear of the surface to read as a well you can type into, and less
+            // than the selection colour, so a highlighted row still wins over the box
+            // inside it.
+            _field = Palette.Lift(background, 0.14f);
 
-            _renderer = new Renderer(new Colors(background, _surface));
+            _renderer = new Renderer(new Colors(background, _surface), _text, _disabledText);
 
             // Sized in pixels off the DPI scale, exactly as the hover panel does it:
             // the process is per-monitor DPI aware, so WinForms will not scale a menu font
@@ -54,7 +64,7 @@ namespace DesktopSwitcher
             menu.RenderMode = ToolStripRenderMode.Professional;
             menu.Renderer = _renderer;
             menu.BackColor = _surface;
-            menu.ForeColor = EnabledText;
+            menu.ForeColor = _text;
             menu.Font = _font;
 
             // Nothing here has an icon, and the margin would just be a lighter gutter down
@@ -81,7 +91,7 @@ namespace DesktopSwitcher
         /// </summary>
         public void ApplyIdle(ToolStripTextBox box)
         {
-            box.ForeColor = EnabledText;
+            box.ForeColor = _text;
             box.Font = _font;
 
             // Never toggled once the box is live. Changing BorderStyle recreates the
@@ -128,12 +138,12 @@ namespace DesktopSwitcher
             {
                 _surface = surface;
 
-                // Far enough above the surface to be unmistakable while the pointer moves
+                // Far enough clear of the surface to be unmistakable while the pointer moves
                 // down the list - a menu selection has to be readable at a glance, unlike
                 // the strip's hover, which only ever confirms where the pointer already is.
-                _selected = Lighten(background, 0.20f);
-                _border = Lighten(background, 0.24f);
-                _separator = Lighten(background, 0.14f);
+                _selected = Palette.Lift(background, 0.20f);
+                _border = Palette.Lift(background, 0.24f);
+                _separator = Palette.Lift(background, 0.14f);
             }
 
             public override Color ToolStripDropDownBackground { get { return _surface; } }
@@ -164,38 +174,26 @@ namespace DesktopSwitcher
         /// </summary>
         sealed class Renderer : ToolStripProfessionalRenderer
         {
-            public Renderer(ProfessionalColorTable colors)
+            // Handed in rather than read off the enclosing instance: this is a nested type,
+            // not an inner one, so it has no enclosing instance to read.
+            readonly Color _enabled;
+            readonly Color _disabled;
+
+            public Renderer(ProfessionalColorTable colors, Color enabled, Color disabled)
                 : base(colors)
             {
+                _enabled = enabled;
+                _disabled = disabled;
+
                 // Square, like the strip and the panel.
                 RoundedEdges = false;
             }
 
             protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
             {
-                e.TextColor = e.Item.Enabled ? EnabledText : DisabledText;
+                e.TextColor = e.Item.Enabled ? _enabled : _disabled;
                 base.OnRenderItemText(e);
             }
-        }
-
-        // --- colour arithmetic -------------------------------------------------
-
-        static Color Grey(int tone)
-        {
-            return Color.FromArgb(tone, tone, tone);
-        }
-
-        static Color Lighten(Color color, float amount)
-        {
-            int r = color.R + (int)((255 - color.R) * amount);
-            int g = color.G + (int)((255 - color.G) * amount);
-            int b = color.B + (int)((255 - color.B) * amount);
-            return Color.FromArgb(Clamp(r), Clamp(g), Clamp(b));
-        }
-
-        static int Clamp(int v)
-        {
-            return v < 0 ? 0 : (v > 255 ? 255 : v);
         }
     }
 }

@@ -206,6 +206,14 @@ namespace DesktopSwitcher
         /// A child window gets no DWM blur from its parent, so a hardcoded colour would
         /// read as a visible patch against a translucent taskbar. Sampling the live
         /// pixel keeps the strip blending in whatever the theme and wallpaper are.
+        ///
+        /// stripWidth must be the width of the strip that is actually on screen, and the
+        /// caller must have destroyed it first. Both were got wrong for a long time: the
+        /// probe was computed for two desktops however many there were, so with four at
+        /// 125% the point landed inside the strip, and the strip was still up when it was
+        /// read. What came back was the colour the strip was already painted, which it then
+        /// dutifully repainted itself - a sample that could confirm anything except that
+        /// the taskbar had changed.
         /// </summary>
         public bool TrySampleBackground(int stripWidth, int margin, out Color color)
         {
@@ -223,10 +231,13 @@ namespace DesktopSwitcher
                 anchorScreenX = tray.Right;
 
             // Just left of where the strip will sit, vertically centred - empty taskbar
-            // unless a great many windows are open.
-            int x = anchorScreenX - margin - stripWidth - 8;
+            // unless a great many windows are open. The step off the strip's edge is
+            // scaled like every other size here: unscaled, it was 8 physical pixels at
+            // any DPI, which on a 150% display is barely five of the ones the layout is
+            // authored in and leaves the probe hugging the strip's edge.
+            int x = anchorScreenX - margin - stripWidth - Scale(8);
             int y = tray.Top + tray.Height / 2;
-            if (x < tray.Left) x = tray.Left + 4;
+            if (x < tray.Left) x = tray.Left + Scale(4);
 
             // The screen DC, not the taskbar's own. Under DWM a foreign window's DC does
             // not contain its composited pixels, so GetPixel there returns CLR_INVALID;

@@ -11,6 +11,12 @@ rem  NOTE: that compiler is C# 5 only - no string interpolation, nameof, ?. etc.
 rem
 rem  -recurse: rather than a plain wildcard, so src\ can be foldered by layer.
 rem  A plain "src\*.cs" does not descend, and would silently compile nothing.
+rem
+rem  -win32icon: the file icon Explorer and Task Manager show. It is the same four-square
+rem  mark Controller.CreateIcon draws for the tray, generated once and committed under
+rem  assets\ - there is no build step that could redraw it, and no reason for one.
+rem  Version metadata is not here: csc stamps that from the attributes in
+rem  src\app\AssemblyInfo.cs.
 
 set "CSC=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 set "OUTDIR=%LOCALAPPDATA%\DesktopSwitcher"
@@ -31,6 +37,7 @@ echo Building [%TARGET%] -^> %OUTEXE%
 
 "%CSC%" -nologo -target:%TARGET% -platform:x64 -optimize+ ^
   -out:"%OUTEXE%" ^
+  -win32icon:"%~dp0assets\DesktopSwitcher.ico" ^
   -r:System.dll ^
   -r:System.Core.dll ^
   -r:System.Drawing.dll ^

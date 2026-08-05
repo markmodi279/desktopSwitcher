@@ -48,7 +48,7 @@ namespace DesktopSwitcher
                     case "--soak":    return CmdSoak(api, args);
                     case "--watch":   return CmdWatch(api, args);
                     case "--service": return CmdService(api, args);
-                    case "--taskbar": return CmdTaskbar();
+                    case "--taskbar": return CmdTaskbar(api);
                     case "--testwindow": return CmdTestWindow(args);
                     case "--strip":   return CmdStrip(api, args);
                     case "--help":
@@ -511,7 +511,7 @@ namespace DesktopSwitcher
             Console.WriteLine(sb.ToString());
         }
 
-        static int CmdTaskbar()
+        static int CmdTaskbar(VirtualDesktopApi api)
         {
             var host = new TaskbarHost();
             if (!host.Locate())
@@ -538,8 +538,19 @@ namespace DesktopSwitcher
             }
 
             Console.WriteLine();
+
+            // The live desktop count, not a guess at it. This command is normally run with
+            // the app already going, so a probe sized for two desktops when there are four
+            // lands inside the running strip and reports the strip's own colour back as the
+            // taskbar's - which is the failure this command exists to catch, so it must not
+            // be the failure the command has.
+            int count = Snapshot(api).Count;
+            if (count < 1) count = 1;
+
             System.Drawing.Color sampled;
-            int probeWidth = 2 * host.Scale(cfg.ButtonWidth) + host.Scale(cfg.PlusWidth);
+            int probeWidth = count * host.Scale(cfg.ButtonWidth) + host.Scale(cfg.PlusWidth);
+            Console.WriteLine("  probing left of a " + count + "-desktop strip (" + probeWidth + "px)");
+
             if (host.TrySampleBackground(probeWidth, host.Scale(cfg.Margin), out sampled))
                 Console.WriteLine("  sampled taskbar colour: " + sampled
                     + string.Format("  #{0:X2}{1:X2}{2:X2}", sampled.R, sampled.G, sampled.B));

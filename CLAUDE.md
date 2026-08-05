@@ -51,14 +51,19 @@ Passing WSL-relative paths fails — `csc` resolves them against the wrong UNC b
 
 ```bash
 OUT=$(wslpath -w /mnt/c/Users/Public/dswtest.exe)
+ICO=$(wslpath -w "$PWD/assets/DesktopSwitcher.ico")
 /mnt/c/Windows/Microsoft.NET/Framework64/v4.0.30319/csc.exe \
-  -nologo -target:exe -platform:x64 -optimize+ -out:"$OUT" \
+  -nologo -target:exe -platform:x64 -optimize+ -out:"$OUT" -win32icon:"$ICO" \
   -r:System.dll -r:System.Core.dll -r:System.Drawing.dll -r:System.Windows.Forms.dll \
   -recurse:$(wslpath -w "$PWD/src")\\*.cs
 ```
 
 `-target:exe` gives the console build, which is the one that can print selftest output.
-`-target:winexe` is the shipped, windowed build.
+`-target:winexe` is the shipped, windowed build. `-win32icon:` is what puts the icon on the
+file; the version fields beside it in Explorer come from the attributes in
+[src/app/AssemblyInfo.cs](src/app/AssemblyInfo.cs), which `csc` reads straight out of
+source. `assets/DesktopSwitcher.ico` is generated once and committed - there is no build
+step that redraws it.
 
 `build.cmd` itself cannot be invoked directly from WSL: `cmd.exe` refuses a UNC working
 directory, and the repo is one. `pushd` maps it to a drive letter first, which works —

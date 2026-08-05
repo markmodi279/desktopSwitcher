@@ -85,6 +85,7 @@ commented `do not reorder`. They are not stable across Windows versions; see
 | [SwitcherStrip.cs](../src/ui/SwitcherStrip.cs) | The strip itself: owner-drawn buttons, animation, mouse input. Raises intent as events; decides nothing. |
 | [TooltipWindow.cs](../src/ui/TooltipWindow.cs) | The hover panel. A top-level, click-through window that draws whatever text it is handed. |
 | [MenuTheme.cs](../src/ui/MenuTheme.cs) | Dresses a `ContextMenuStrip` in colours derived from the sampled taskbar colour. |
+| [Palette.cs](../src/ui/Palette.cs) | The one place that knows which way "away from the background" is. Lifts a surface off the taskbar colour and picks text tones for it, in whichever direction that colour demands. |
 
 Note what is *not* here: neither the strip nor the tooltip knows what a desktop is called or
 what is open on one. `SwitcherStrip` raises `ContextMenuRequested` and asks a
@@ -100,6 +101,7 @@ only `Controller` holds all three.
 | [Program.cs](../src/app/Program.cs) | Entry point. DPI awareness, config load, single-instance mutex, then `Controller` or `SelfTest`. |
 | [Config.cs](../src/app/Config.cs) | The `config.ini` round trip. Unknown keys preserved, malformed values fall back, missing keys trigger a rewrite. |
 | [Log.cs](../src/app/Log.cs) | Rolling diagnostic log, off by default, thread-safe because notifications are not. |
+| [AssemblyInfo.cs](../src/app/AssemblyInfo.cs) | Name, description and version. Attributes only; `csc` stamps the Win32 version resource from them, which is how an exe with no project file gets a Details tab. |
 
 ### `src/selftest/` — proving it against the real shell
 
@@ -145,7 +147,7 @@ the rest of the codebase ignore threading entirely.
 
 `Log` serialises its writes, because it is the one thing an RPC thread may touch directly.
 
-`Controller` runs five timers, all on the UI thread:
+`Controller` runs six timers, all on the UI thread:
 
 | Timer | Interval | Job |
 |---|---|---|
@@ -154,6 +156,7 @@ the rest of the codebase ignore threading entirely.
 | watchdog | 1000 ms | is the taskbar still there, is the strip still in it |
 | focus | 300 ms | sample the foreground window |
 | save | 2000 ms | debounced config write |
+| theme | 600 ms | debounced rebuild after `WM_SETTINGCHANGE`/`ImmersiveColorSet` |
 
 ## Lifetimes, and what survives what
 
@@ -218,4 +221,6 @@ The grain of the codebase, if you are extending it:
   `Incomplete` reads the expected keys back out of what `Render` writes, so existing config
   files get rewritten with the new key on next launch; there is no second list to update.
 - **Anything drawn** — sizes are authored at 96 DPI and passed through `Scale`, and colours
-  derive from the sampled taskbar colour rather than being hardcoded.
+  come from `Palette` rather than being hardcoded or lightened by hand. Nothing outside
+  that file may assume the taskbar is dark; three files each assumed it independently, and
+  each of them was invisible on a light one.

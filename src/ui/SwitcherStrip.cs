@@ -270,11 +270,13 @@ namespace DesktopSwitcher
 
         void DrawButton(Graphics g, Rectangle bounds, string caption, ButtonVisual visual)
         {
-            // Hover and current both lighten the cell; current adds the underline bar.
+            // Hover and current both separate the cell from the bar; current adds the
+            // underline. Which way that separation goes is Palette's problem - on a light
+            // taskbar the cell darkens instead of lightening.
             float lift = Math.Max(visual.Hover * 0.55f, visual.Highlight * 0.85f);
             if (lift > 0.001f)
             {
-                using (var fill = new SolidBrush(Lighten(_background, lift * 0.10f)))
+                using (var fill = new SolidBrush(Palette.Lift(_background, lift * 0.10f)))
                     g.FillRectangle(fill, bounds);
             }
 
@@ -286,12 +288,14 @@ namespace DesktopSwitcher
                     g.FillRectangle(brush, bar);
             }
 
-            // Current desktop reads brighter; hover lifts an inactive one part way.
-            int tone = 200 + (int)(visual.Highlight * 55) + (int)(visual.Hover * 30);
-            if (tone > 255) tone = 255;
-            Color text = Color.FromArgb(tone, tone, tone);
+            // Current desktop reads at full strength; hover carries an inactive one part of
+            // the way there. HoverShare is the ratio the two tone steps used to stand in
+            // before Palette owned the ramp - 30 of the 55 between resting and full - kept
+            // exactly so a dark taskbar renders the same tones it always did.
+            const float HoverShare = 30f / 55f;
+            float emphasis = Math.Min(1f, visual.Highlight + visual.Hover * HoverShare);
 
-            using (var brush = new SolidBrush(text))
+            using (var brush = new SolidBrush(Palette.RampText(_background, emphasis)))
             using (var format = new StringFormat())
             {
                 format.Alignment = StringAlignment.Center;
@@ -312,19 +316,6 @@ namespace DesktopSwitcher
 
             if (_font != null) _font.Dispose();
             _font = new Font("Segoe UI", size, FontStyle.Regular, GraphicsUnit.Pixel);
-        }
-
-        static Color Lighten(Color color, float amount)
-        {
-            int r = color.R + (int)((255 - color.R) * amount);
-            int g = color.G + (int)((255 - color.G) * amount);
-            int b = color.B + (int)((255 - color.B) * amount);
-            return Color.FromArgb(Clamp(r), Clamp(g), Clamp(b));
-        }
-
-        static int Clamp(int v)
-        {
-            return v < 0 ? 0 : (v > 255 ? 255 : v);
         }
 
         // --- input ------------------------------------------------------------

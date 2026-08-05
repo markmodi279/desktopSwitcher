@@ -70,8 +70,11 @@ A desktop's name — set from the menu, or in Task View (`Win+Tab`, right-click 
 **Rename**) — is what the panel is titled with. Renaming from the menu shows up
 immediately; a rename made in Task View is picked up the next time you switch desktops.
 
-Right-click the tray icon for **Start with Windows**, config and log files, a manual
-**Reload strip**, and **Exit**. There is no other way to quit — the strip has no chrome.
+Right-click the tray icon for **Start with Windows**, config and log files,
+**Reload settings**, and **Exit**. There is no other way to quit — the strip has no chrome.
+
+**Reload settings** re-reads `config.ini` and rebuilds the strip, so editing the file does
+not need a restart.
 
 Windows forgets how many desktops you had after a reboot, so the count you were last
 using is saved and restored at login.
@@ -95,7 +98,7 @@ your display automatically.
 | `tooltipMaxWindows` | `8` | titles listed before the rest collapse into `+N more` |
 | `tooltipWidth` | `440` | panel width at 96 DPI; every panel is this wide, longer rows are trimmed |
 | `highlightColor` | `#0078D7` | underline bar under the current desktop |
-| `backgroundColor` | *(blank)* | blank samples the live taskbar colour |
+| `backgroundColor` | *(blank)* | blank samples the live taskbar colour, and re-samples when you switch theme or accent |
 | `diagnostics` | `false` | enable the rolling log |
 
 ## How it works
@@ -112,7 +115,8 @@ anything, start with [CLAUDE.md](CLAUDE.md).
 
 ## Troubleshooting
 
-Set `diagnostics = true` in the config, restart, and open the log from the tray menu. It
+Set `diagnostics = true` in the config, hit **Reload settings**, and open the log from the
+tray menu. It
 records Explorer restarts, strip rebuilds, COM re-acquisition, sink registration, desktop
 changes and any unexpected failure.
 

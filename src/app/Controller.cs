@@ -17,7 +17,11 @@ namespace DesktopSwitcher
     /// </summary>
     sealed class Controller : Form
     {
-        readonly Config _config;
+        // Not readonly: the tray's reload item re-reads config.ini and swaps this for what
+        // the file now says. Nothing holds a reference to the old one - every reader goes
+        // through this field - so the swap is the whole of it.
+        Config _config;
+
         readonly VirtualDesktopApi _api = new VirtualDesktopApi();
         readonly TaskbarHost _host = new TaskbarHost();
         readonly ForegroundTracker _foreground = new ForegroundTracker();
@@ -36,6 +40,7 @@ namespace DesktopSwitcher
         Timer _watchdogTimer;    // strip / taskbar health
         Timer _focusTimer;       // remembers the last real foreground window
         Timer _saveTimer;        // debounced config write
+        Timer _themeTimer;       // debounced rebuild after a theme or accent change
 
         uint _taskbarCreatedMessage;
         int _buttonWidth, _plusWidth, _margin, _barHeight;
@@ -82,8 +87,9 @@ namespace DesktopSwitcher
             _startupTimer.Dispose();
             _startupTimer = null;
 
-            ComputeMetrics();
-
+            // Metrics are computed inside RebuildStrip, below, and deliberately not here:
+            // the taskbar colour is sampled from a point derived from the desktop count,
+            // and there is no count until the service exists.
             _service = new DesktopService(_api, this);
             _inventory = new WindowInventory(_api);
             _service.Start();
@@ -140,22 +146,43 @@ namespace DesktopSwitcher
             return t;
         }
 
-        void ComputeMetrics()
+        /// <summary>
+        /// Every DPI-scaled size the strip is built from, and the colour it sits on.
+        ///
+        /// Takes the desktop count because the colour sample depends on it: the probe point
+        /// sits just left of the strip, so it has to be told how wide the strip will be. It
+        /// used to assume two desktops whatever the count, which with four at 125% put the
+        /// probe inside the strip's own rectangle.
+        ///
+        /// Only ever called from RebuildStrip, and only after DisposeStrip - see there.
+        /// </summary>
+        void ComputeMetrics(int desktopCount)
         {
             _buttonWidth = _host.Scale(_config.ButtonWidth);
             _plusWidth = _host.Scale(_config.PlusWidth);
             _margin = _host.Scale(_config.Margin);
             _barHeight = _host.Scale(3);
 
-            _background = _config.BackgroundColor;
-            if (_background.IsEmpty)
+            if (!_config.BackgroundColor.IsEmpty)
             {
-                Color sampled;
-                int probe = SwitcherStrip.MeasureWidth(2, _buttonWidth, _plusWidth);
-                _background = _host.TrySampleBackground(probe, _margin, out sampled)
-                    ? sampled
-                    : Color.FromArgb(0x1F, 0x1F, 0x1F);
+                _background = _config.BackgroundColor;
+                return;
             }
+
+            Color sampled;
+            int probe = SwitcherStrip.MeasureWidth(desktopCount, _buttonWidth, _plusWidth);
+
+            if (_host.TrySampleBackground(probe, _margin, out sampled))
+                _background = sampled;
+            else if (_background.IsEmpty)
+                _background = Color.FromArgb(0x1F, 0x1F, 0x1F);
+
+            // The third case is deliberate: a failed read keeps the last colour that did
+            // come back. Sampling used to happen three times in a run and now happens on
+            // every rebuild, the watchdog's included, so a single unanswered GetPixel mid
+            // Explorer restart must not repaint a strip that was perfectly fine into the
+            // hardcoded dark grey - which on a light taskbar is a black block sitting there
+            // until something else happens to rebuild.
         }
 
         // --- the strip --------------------------------------------------------
@@ -165,6 +192,20 @@ namespace DesktopSwitcher
             DisposeStrip();
 
             int count = _service.Count > 0 ? _service.Count : 1;
+
+            // After the strip is gone, never before, and never anywhere else. The sample
+            // point is derived from the strip's width and sits a few pixels off its left
+            // edge, so with a strip still on screen - which is what the tray's reload item
+            // and a display change both used to do - what is read back is at best a pixel
+            // the strip has been influencing and at worst the strip itself. The one gesture
+            // meant to notice the taskbar had changed could only ever confirm itself.
+            //
+            // The window is destroyed but Explorer has not necessarily repainted what it
+            // was covering yet. That is why the probe steps clear of the strip rather than
+            // reading where it stood: the pixel under it may be stale for another frame,
+            // the one beside it was never ours.
+            ComputeMetrics(count);
+
             int width = SwitcherStrip.MeasureWidth(count, _buttonWidth, _plusWidth);
 
             Rectangle bounds;
@@ -694,11 +735,10 @@ namespace DesktopSwitcher
                 return;
             }
 
-            ComputeMetrics();
             _api.Drop();
             _service.InvalidateNotifications();
             _service.Tick();
-            RebuildStrip();
+            RebuildStrip();   // re-scales and re-samples on its own, after the strip is gone
 
             Log.Write("controller: recovered from Explorer restart");
         }
@@ -714,17 +754,113 @@ namespace DesktopSwitcher
             else if (_started && m.Msg == 0x007E) // WM_DISPLAYCHANGE
             {
                 Log.Write("controller: display changed");
-                if (_host.Locate())
-                {
-                    ComputeMetrics();
-                    RebuildStrip();
-                }
+                if (_host.Locate()) RebuildStrip();
+            }
+            else if (_started && m.Msg == WM_SETTINGCHANGE && IsImmersiveColorSet(ref m))
+            {
+                QueueThemeRebuild();
             }
 
             base.WndProc(ref m);
         }
 
+        const int WM_SETTINGCHANGE = 0x001A;
+
+        /// <summary>
+        /// Whether this WM_SETTINGCHANGE is the one that means the colours moved.
+        ///
+        /// The message is broadcast for a great many unrelated things - a policy refresh,
+        /// an environment variable, a locale or a work-area change - and rebuilding the
+        /// strip on each would thrash it for no reason. Windows sends "ImmersiveColorSet"
+        /// for the light/dark switch and for an accent colour change, which are exactly the
+        /// two things that move the pixel we sample.
+        ///
+        /// wParam is checked before lParam is read as a string, and that is not tidiness:
+        /// for several other wParam values lParam is a RECT or a flag word, and running
+        /// PtrToStringUni over one of those walks memory looking for a null it has no
+        /// reason to find. The colour-set broadcast always carries wParam 0.
+        /// </summary>
+        static bool IsImmersiveColorSet(ref Message m)
+        {
+            if (m.WParam != IntPtr.Zero || m.LParam == IntPtr.Zero) return false;
+
+            try
+            {
+                string area = System.Runtime.InteropServices.Marshal.PtrToStringUni(m.LParam);
+                return area == "ImmersiveColorSet";
+            }
+            catch (Exception ex)
+            {
+                Log.Write("controller: unreadable WM_SETTINGCHANGE lParam - " + ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Rebuilds the strip a moment after the colours change, and only once.
+        ///
+        /// Windows sends several of these in a burst as the switch propagates, and the
+        /// taskbar has not finished repainting when the first one arrives - sampling then
+        /// reads the colour it is on its way out of, which is worse than not resampling at
+        /// all. One timer, restarted by every message in the burst, so the work happens
+        /// once and late enough for the pixel to have settled.
+        /// </summary>
+        void QueueThemeRebuild()
+        {
+            if (_themeTimer == null)
+            {
+                _themeTimer = new Timer();
+                _themeTimer.Interval = 600;
+                _themeTimer.Tick += delegate
+                {
+                    _themeTimer.Stop();
+                    if (!_started) return;
+
+                    Log.Write("controller: colour set changed - resampling");
+                    RebuildStrip();
+                };
+            }
+
+            _themeTimer.Stop();
+            _themeTimer.Start();
+        }
+
         // --- config persistence -----------------------------------------------
+
+        /// <summary>
+        /// Re-reads config.ini and applies everything that is not the strip's own geometry;
+        /// the caller rebuilds the strip, which is what picks up the sizes, the colours and
+        /// whether the context menu is wired at all.
+        ///
+        /// Editing the file and having to restart is a strange thing to ask of an app whose
+        /// whole pitch is that it installs nothing, and the file is deliberately written
+        /// complete on first run so that every setting is there to be edited. This closes
+        /// the loop those two decisions left open.
+        /// </summary>
+        void ReloadConfig()
+        {
+            // A debounced save still pending holds a desktop count newer than the file's.
+            // Re-reading first would quietly roll it back to whatever was last written and
+            // then write that back out on the next change.
+            if (_pendingCount >= 1 && _saveTimer != null) SavePending(this, EventArgs.Empty);
+
+            _config = Config.Load();
+
+            // Diagnostics is the one setting that takes effect nowhere near the strip.
+            Log.Init(Config.LogPath, _config.Diagnostics);
+
+            if (_reconcileTimer != null) _reconcileTimer.Interval = _config.ReconcileMs;
+
+            // The tray glyph is drawn from highlightColor, and it is the one visible thing
+            // a rebuilt strip does not cover - left alone, a changed accent would show up
+            // on the strip immediately and in the tray only at the next launch.
+            Icon previous = _trayIcon;
+            _trayIcon = CreateIcon(_config.HighlightColor);
+            if (_tray != null) _tray.Icon = _trayIcon;
+            if (previous != null) previous.Dispose();
+
+            Log.Write("controller: settings reloaded from " + Config.FilePath);
+        }
 
         void QueueSave(int count)
         {
@@ -771,11 +907,15 @@ namespace DesktopSwitcher
             openLog.Click += delegate { OpenInShell(Config.LogPath, false); };
             menu.Items.Add(openLog);
 
-            var reload = new ToolStripMenuItem("Reload strip");
+            // Named for what it does now. It used to say "Reload strip", which was accurate
+            // and useless: it rebuilt the strip from the values already in memory, so the
+            // config file - the only settings surface this app has - still needed a restart
+            // to take effect.
+            var reload = new ToolStripMenuItem("Reload settings");
             reload.Click += delegate
             {
                 if (!_started) return;
-                ComputeMetrics();
+                ReloadConfig();
                 RebuildStrip();
             };
             menu.Items.Add(reload);
@@ -897,6 +1037,7 @@ namespace DesktopSwitcher
             StopTimer(ref _reconcileTimer);
             StopTimer(ref _watchdogTimer);
             StopTimer(ref _focusTimer);
+            StopTimer(ref _themeTimer);
 
             if (_saveTimer != null)
             {

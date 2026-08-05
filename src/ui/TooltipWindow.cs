@@ -49,7 +49,7 @@ namespace DesktopSwitcher
         {
             public string Text;
             public Font Font;
-            public int Tone;        // grey level, 0-255
+            public Color Ink;       // resolved when the row is built, not when it is drawn
         }
 
         readonly Color _background;
@@ -198,10 +198,13 @@ namespace DesktopSwitcher
             {
                 g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
-                Add(rows, g, content.Title, _titleFont, 255);
+                // The title carries the desktop's name and is what the panel is answering;
+                // the window rows support it. Both tones come from the sampled background,
+                // so a light taskbar gets dark text rather than white on white.
+                Add(rows, g, content.Title, _titleFont, Palette.PrimaryText(_background));
 
                 foreach (string line in content.Lines)
-                    Add(rows, g, line, _bodyFont, 205);
+                    Add(rows, g, line, _bodyFont, Palette.SecondaryText(_background));
 
                 size = Measure(rows);
             }
@@ -209,12 +212,12 @@ namespace DesktopSwitcher
             return rows;
         }
 
-        void Add(List<Row> rows, Graphics g, string text, Font font, int tone)
+        void Add(List<Row> rows, Graphics g, string text, Font font, Color ink)
         {
             var row = new Row();
             row.Text = Fit(g, text, font, _width - _padX * 2);
             row.Font = font;
-            row.Tone = tone;
+            row.Ink = ink;
             rows.Add(row);
         }
 
@@ -299,8 +302,10 @@ namespace DesktopSwitcher
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
             // Borderless, in the taskbar's own sampled colour, lifted just enough to
-            // separate the panel from the bar it grows out of.
-            using (var back = new SolidBrush(Lighten(_background, 0.06f)))
+            // separate the panel from the bar it grows out of - away from that colour,
+            // so a light taskbar gets a slightly darker panel rather than a whiter one
+            // it would vanish into.
+            using (var back = new SolidBrush(Palette.Lift(_background, 0.06f)))
                 g.FillRectangle(back, 0, 0, width, height);
 
             DrawAccent(g, width, height);
@@ -311,7 +316,7 @@ namespace DesktopSwitcher
             {
                 Row row = _rows[i];
 
-                using (var brush = new SolidBrush(Color.FromArgb(row.Tone, row.Tone, row.Tone)))
+                using (var brush = new SolidBrush(row.Ink))
                     g.DrawString(row.Text, row.Font, brush, _padX, y);
 
                 y += LineHeight(row.Font);
@@ -338,19 +343,6 @@ namespace DesktopSwitcher
 
             using (var brush = new SolidBrush(_highlight))
                 g.FillRectangle(brush, x, y, barWidth, _accent);
-        }
-
-        static Color Lighten(Color color, float amount)
-        {
-            int r = color.R + (int)((255 - color.R) * amount);
-            int g = color.G + (int)((255 - color.G) * amount);
-            int b = color.B + (int)((255 - color.B) * amount);
-            return Color.FromArgb(Clamp(r), Clamp(g), Clamp(b));
-        }
-
-        static int Clamp(int v)
-        {
-            return v < 0 ? 0 : (v > 255 ? 255 : v);
         }
 
         // --- window procedure --------------------------------------------------
