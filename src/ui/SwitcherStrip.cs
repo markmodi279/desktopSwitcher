@@ -63,6 +63,24 @@ namespace DesktopSwitcher
         /// <summary>The same idea for bar geometry: half a pixel cannot be drawn.</summary>
         public const float PixelEpsilon = 0.5f;
 
+        /// <summary>
+        /// How long an already-open panel waits before following the pointer onto another
+        /// button.
+        ///
+        /// Not a second hover delay - the full delay is paid once, to open the first panel,
+        /// and re-charging it per button would wreck the one thing the panel is for, which
+        /// is reading along the strip. This is only a coalescing window: sweeping from
+        /// button 1 to button 5 crosses three buttons nobody asked about, and each crossing
+        /// used to cost a window-inventory query, a row rebuild, a SetWindowPos and a
+        /// repaint, flashing three panels past on the way. Now the sweep produces one panel,
+        /// against whichever button the pointer actually stopped on.
+        ///
+        /// 80ms because it has to sit under the threshold where a delay is felt as one -
+        /// roughly a tenth of a second - while still being longer than a fast sweep spends
+        /// over any single button.
+        /// </summary>
+        public const int ReshowMs = 80;
+
         readonly int _buttonWidth;
         readonly int _plusWidth;
         readonly int _barHeight;
@@ -93,6 +111,7 @@ namespace DesktopSwitcher
         Font _font;
 
         TooltipWindow _tooltip;
+        Timer _reshowTimer;            // runs only between a button change and the follow
 
         public SwitcherStrip(IntPtr parent, Rectangle bounds,
                              int buttonWidth, int plusWidth, int barHeight,
@@ -616,8 +635,8 @@ namespace DesktopSwitcher
 
             if (index < 0)
                 HideTooltip();
-            else if (_tooltip != null && _tooltip.IsVisible)
-                ShowTooltip();   // already open: follow the pointer without re-waiting
+            else
+                QueueReshow();   // already open: follow the pointer without re-waiting
         }
 
         void OnMouseLeave()
@@ -732,8 +751,55 @@ namespace DesktopSwitcher
 
         // --- tooltip ----------------------------------------------------------
 
+        /// <summary>
+        /// Schedules the open panel onto the button now under the pointer, ReshowMs from
+        /// now, restarting the wait if the pointer crosses another button first - so a
+        /// sweep along the strip resolves to a single panel. See ReshowMs.
+        ///
+        /// Does nothing when no panel is open: the first one is WM_MOUSEHOVER's to show,
+        /// after the full delay, and this must not become a second route to opening one.
+        ///
+        /// Only OnMouseMove calls this, and only when the hovered button actually changed,
+        /// so the wait is measured from entering a button rather than from the last mouse
+        /// message. A pointer drifting about inside one button cannot defer the panel
+        /// indefinitely.
+        /// </summary>
+        void QueueReshow()
+        {
+            if (_disposed || _tooltip == null || !_tooltip.IsVisible) return;
+
+            if (_reshowTimer == null)
+            {
+                _reshowTimer = new Timer();
+                _reshowTimer.Interval = ReshowMs;
+                _reshowTimer.Tick += OnReshow;
+            }
+
+            // Stop before Start, always: assigning Enabled = true while it is already true
+            // is a no-op and would leave the original countdown running, which is the exact
+            // opposite of the restart this needs.
+            _reshowTimer.Stop();
+            _reshowTimer.Start();
+        }
+
+        void OnReshow(object sender, EventArgs e)
+        {
+            // One-shot. ShowTooltip stops it too, but not on the path where it bails out.
+            _reshowTimer.Stop();
+            ShowTooltip();
+        }
+
+        void CancelReshow()
+        {
+            if (_reshowTimer != null) _reshowTimer.Stop();
+        }
+
         void ShowTooltip()
         {
+            // Whatever was queued, this is it happening - by hover delay, by re-show timer
+            // or by a caller that got there first.
+            CancelReshow();
+
             if (_disposed || _hoverIndex < 0 || TooltipProvider == null) return;
 
             // The menu already says what this button can do, and the panel would only be in
@@ -764,8 +830,15 @@ namespace DesktopSwitcher
             _tooltip.Show(content, anchor);
         }
 
+        /// <summary>
+        /// The single hide path, which makes it the single place a queued re-show has to be
+        /// dropped. Every caller that invalidates the panel - leaving the strip, clicking,
+        /// a desktop set change - already comes through here, so none of them has to know
+        /// the timer exists.
+        /// </summary>
         void HideTooltip()
         {
+            CancelReshow();
             if (_tooltip != null) _tooltip.Hide();
         }
 
@@ -861,6 +934,10 @@ namespace DesktopSwitcher
             // Before the handle goes, or a frame already queued lands on a destroyed
             // window and invalidates a rectangle that is no longer anybody's.
             if (_frameTimer != null) { _frameTimer.Stop(); _frameTimer.Dispose(); _frameTimer = null; }
+
+            // Same reason, and one worse: a re-show landing after the tooltip is gone would
+            // call ShowTooltip on a disposed panel.
+            if (_reshowTimer != null) { _reshowTimer.Stop(); _reshowTimer.Dispose(); _reshowTimer = null; }
 
             // Before the strip goes, so an Explorer restart cannot strand the panel on
             // screen: the tooltip is top-level and would otherwise outlive its parent.

@@ -179,7 +179,7 @@ namespace DesktopSwitcher
             if (y + size.Height > work.Bottom) y = work.Bottom - size.Height;
             if (y < work.Top) y = work.Top;
 
-            // Centred on the button, so the accent bar lines up under it.
+            // Centred on the button, so the accent stub lines up under it.
             int x = anchor.Left + anchor.Width / 2 - size.Width / 2;
             if (x + size.Width > work.Right) x = work.Right - size.Width;
             if (x < work.Left) x = work.Left;
@@ -324,16 +324,35 @@ namespace DesktopSwitcher
         }
 
         /// <summary>
-        /// A short bar on the edge facing the strip, aligned with the hovered button, so
-        /// the panel reads as belonging to that button rather than floating loose.
+        /// A short stub on the edge facing the strip, centred on the hovered button, so the
+        /// panel reads as belonging to that button rather than floating loose.
+        ///
+        /// Deliberately not the mark it used to be. This was a full-button-width bar at
+        /// Scale(3) tall - which is, attribute for attribute, the underline
+        /// SwitcherStrip.DrawBar puts under the *current* desktop, sitting four pixels above
+        /// it across the gap Place leaves. Hovering desktop 2 while desktop 1 was current
+        /// therefore painted the current-desktop mark over button 2, and the two bars
+        /// stacked read as one indicator drawn twice.
+        ///
+        /// Width and shape are what separate them now: a fraction of the button rather than
+        /// all of it, rounded rather than square. The colour stays _highlight - it was tried
+        /// in a neutral tone off the panel surface and looked worse, and two changed
+        /// attributes out of three carry the distinction on their own.
         /// </summary>
         void DrawAccent(Graphics g, int width, int height)
         {
             Native.RECT client;
             if (!Native.GetWindowRect(Handle, out client)) return;
 
-            int barWidth = _anchor.Width > 0 ? _anchor.Width : Scale(24);
-            int centre = _anchor.Left + _anchor.Width / 2 - client.Left;
+            int anchorWidth = _anchor.Width > 0 ? _anchor.Width : Scale(24);
+
+            // A stub, not a bar. Two fifths of the button still points at it unambiguously
+            // without reading as a copy of it. Floored at _accent because below its own
+            // height there is no room for the two round caps and the pill collapses to a
+            // dot - which only bites at very small button widths on a low-DPI display.
+            int barWidth = Math.Max(_accent, anchorWidth * 2 / 5);
+
+            int centre = _anchor.Left + anchorWidth / 2 - client.Left;
 
             int x = centre - barWidth / 2;
             if (x < 0) x = 0;
@@ -342,7 +361,27 @@ namespace DesktopSwitcher
             int y = _accentAtTop ? 0 : height - _accent;
 
             using (var brush = new SolidBrush(_highlight))
-                g.FillRectangle(brush, x, y, barWidth, _accent);
+            using (var pill = Pill(new Rectangle(x, y, barWidth, _accent)))
+                g.FillPath(brush, pill);
+        }
+
+        /// <summary>
+        /// A rectangle with semicircular ends, each cap a circle of the stub's own height.
+        ///
+        /// At Scale(3) tall the rounding is worth about a pixel a side, which is the whole
+        /// intent: enough to take the hard corners off a mark that used to be square, not
+        /// enough to make it a shape competing for attention.
+        /// </summary>
+        static GraphicsPath Pill(Rectangle r)
+        {
+            var path = new GraphicsPath();
+
+            int d = r.Height;
+            path.AddArc(r.X, r.Y, d, d, 90, 180);
+            path.AddArc(r.Right - d, r.Y, d, d, 270, 180);
+            path.CloseFigure();
+
+            return path;
         }
 
         // --- window procedure --------------------------------------------------
