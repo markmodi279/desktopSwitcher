@@ -8,6 +8,9 @@ rem    build.cmd console    -> console build, for milestone testing / selftest
 rem
 rem  Targets the in-box .NET Framework compiler, so nothing needs installing.
 rem  NOTE: that compiler is C# 5 only - no string interpolation, nameof, ?. etc.
+rem
+rem  -recurse: rather than a plain wildcard, so src\ can be foldered by layer.
+rem  A plain "src\*.cs" does not descend, and would silently compile nothing.
 
 set "CSC=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 set "OUTDIR=%LOCALAPPDATA%\DesktopSwitcher"
@@ -32,7 +35,7 @@ echo Building [%TARGET%] -^> %OUTEXE%
   -r:System.Core.dll ^
   -r:System.Drawing.dll ^
   -r:System.Windows.Forms.dll ^
-  "%~dp0src\*.cs"
+  -recurse:"%~dp0src\*.cs"
 
 if errorlevel 1 (
   echo.

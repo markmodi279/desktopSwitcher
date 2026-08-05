@@ -98,38 +98,17 @@ your display automatically.
 | `backgroundColor` | *(blank)* | blank samples the live taskbar colour |
 | `diagnostics` | `false` | enable the rolling log |
 
-## Design notes
+## How it works
 
-**The strip is a child of `Shell_TrayWnd`, not a floating always-on-top window.** That
-inherits for free what a floating window would have to reimplement: it moves with the
-taskbar, hides when the taskbar hides or a fullscreen app takes over, and shows on every
-virtual desktop. The cost is that an Explorer restart destroys it, which is why the strip
-is disposable and a watchdog rebuilds it.
+The strip is a child of `Shell_TrayWnd`, not a floating always-on-top window. That inherits
+for free what a floating window would have to reimplement: it moves with the taskbar, hides
+when the taskbar hides or a fullscreen app takes over, and shows on every virtual desktop.
+The cost is that an Explorer restart destroys it, which is why the strip is disposable and
+a watchdog rebuilds it.
 
-**Desktop identity is a `Guid`, never an index.** Removing a desktop renumbers every one
-after it, so an index captured before an async notification arrives can easily refer to a
-different desktop by the time it is used.
-
-**Updates are event-driven, with polling as a safety net.** Shell notifications drive the
-UI, so the highlight changes instantly. A slow reconcile tick covers a dead notification
-sink, missed events and Explorer restarts. Notification callbacks arrive on arbitrary RPC
-threads and are marshalled onto the UI thread before touching any state.
-
-**The hover panel is a top-level window, unlike the strip.** A child window is clipped to
-its parent, and the taskbar is exactly as tall as the strip, so a panel parented there
-would be invisible. It is `WS_EX_NOACTIVATE` and click-through: taking focus would break
-click handling and overwrite the window the foreground tracker is holding, which is what
-right-click-to-send depends on.
-
-**Window lists are built on hover, never on a timer.** Windows on other desktops stay
-enumerable, so one sweep plus one `GetWindowDesktopId` per window buckets the whole
-machine at once; the result is cached for a second. Cloaking cannot be used as the filter,
-because the shell cloaks suspended UWP frames with the same flag it uses for windows on an
-inactive desktop — what separates them is that the ghosts have no desktop at all.
-
-**The process is DPI-aware.** Explorer is, and a DPI-unaware child of the taskbar has its
-coordinates silently scaled — on a 125% display a strip positioned at x=1110 lands at
-x=888, correct in every log and wrong on screen.
+The rest — the layering, the threading, and the reasoning behind the parts that look
+strange — is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). If you are going to change
+anything, start with [CLAUDE.md](CLAUDE.md).
 
 ## Troubleshooting
 

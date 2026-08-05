@@ -5,24 +5,31 @@ using System.Text;
 namespace DesktopSwitcher
 {
     /// <summary>
-    /// M2: console selftest harness for the COM layer. The real controller window
-    /// replaces the default (no-argument) path in M7.
+    /// The console selftest harness: every --command the exe accepts.
+    ///
+    /// These exist because almost nothing here can be unit tested. The shell's virtual
+    /// desktop interfaces are undocumented, live only in a running Explorer, and have no
+    /// stand-in worth writing; the taskbar geometry is whatever the machine's taskbar
+    /// happens to be. So each layer got a command that drives it against the real shell
+    /// and prints what it saw, and those commands stayed - they are how a change is
+    /// checked today, and how a new Windows build is proved out.
+    ///
+    /// Kept apart from Program for the plain reason that it dwarfs it: this is the largest
+    /// file in the tree and none of it runs in the shipped app, which is exactly the sort
+    /// of thing that misleads anyone sizing the codebase up.
+    ///
+    /// Only reachable from a console build - build.cmd console. The windowed build has
+    /// nowhere to print.
     /// </summary>
-    static class Program
+    static class SelfTest
     {
-        [STAThread]
-        static int Main(string[] args)
+        /// <summary>
+        /// Dispatches a command line. Failure is reported and swallowed rather than thrown:
+        /// a selftest that dies with a stack trace has told you less than one that says
+        /// which call failed and returns non-zero.
+        /// </summary>
+        public static int Run(string[] args)
         {
-            // Before any window exists, or the taskbar strip lands at the wrong
-            // coordinates on a scaled display.
-            Native.EnableDpiAwareness();
-
-            Config cfg = Config.Load();
-            Log.Init(Config.LogPath, cfg.Diagnostics);
-
-            // No arguments means "run the app". Everything else is selftest.
-            if (args.Length == 0) return RunApp(cfg);
-
             string command = args[0].ToLowerInvariant();
             var api = new VirtualDesktopApi();
 
@@ -60,34 +67,6 @@ namespace DesktopSwitcher
                 Console.WriteLine("ERROR  " + ex.GetType().Name + ": " + ex.Message);
                 Log.Write("selftest failed: " + ex);
                 return 1;
-            }
-        }
-
-        /// <summary>
-        /// Normal operation. A single instance only: two controllers would dock two
-        /// strips into the taskbar and fight over position.
-        /// </summary>
-        static int RunApp(Config cfg)
-        {
-            bool isFirst;
-            using (var single = new System.Threading.Mutex(true, "Local\\DesktopSwitcherInstance", out isFirst))
-            {
-                if (!isFirst)
-                {
-                    Log.Write("startup: another instance is already running");
-                    return 0;
-                }
-
-                System.Windows.Forms.Application.EnableVisualStyles();
-                System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
-
-                using (var controller = new Controller(cfg))
-                {
-                    System.Windows.Forms.Application.Run(controller);
-                }
-
-                GC.KeepAlive(single);
-                return 0;
             }
         }
 
