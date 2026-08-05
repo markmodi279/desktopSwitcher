@@ -35,6 +35,7 @@ namespace DesktopSwitcher
                     case "--switch":  return CmdSwitch(api, args);
                     case "--create":  return CmdCreate(api);
                     case "--remove":  return CmdRemove(api, args);
+                    case "--rename":  return CmdRename(api, args);
                     case "--move":    return CmdMove(api, args);
                     case "--where":   return CmdWhere(api, args);
                     case "--soak":    return CmdSoak(api, args);
@@ -100,6 +101,7 @@ namespace DesktopSwitcher
             Console.WriteLine("  --switch N             switch to desktop N (1-based)");
             Console.WriteLine("  --create               create a new desktop");
             Console.WriteLine("  --remove N             remove desktop N");
+            Console.WriteLine("  --rename N <name>      rename desktop N; no name clears it");
             Console.WriteLine("  --move N <title>       move a window whose title contains <title>");
             Console.WriteLine("  --where <title>        report whether that window is on the current desktop");
             Console.WriteLine("  --soak N               poll for N seconds; survives an Explorer restart");
@@ -220,6 +222,43 @@ namespace DesktopSwitcher
 
             Console.WriteLine("Removed: " + removed + "   count " + before + " -> " + after);
             return removed && after == before - 1 ? 0 : 1;
+        }
+
+        /// <summary>
+        /// Renames a desktop and reads the name back out of the registry to prove the
+        /// shell took it. The read-back is what makes this worth having: SetName reaches
+        /// an undocumented vtable slot, and a slot that is wrong will not say so.
+        /// </summary>
+        static int CmdRename(VirtualDesktopApi api, string[] args)
+        {
+            IList<Desktop> desktops = Snapshot(api);
+            Desktop target = Pick(desktops, args, 1);
+            if (target == null) return 2;
+
+            if (!api.CanRename)
+            {
+                Console.WriteLine("This shell has no naming support (needs Win10 2004+).");
+                return 1;
+            }
+
+            // Everything after the number, so a name with spaces needs no quoting.
+            string name = args.Length > 2 ? string.Join(" ", args, 2, args.Length - 2) : "";
+
+            Console.WriteLine("Renaming " + target.Number + " (" + target.DisplayName
+                              + ") to \"" + name + "\" ...");
+
+            if (!api.SetName(target.Id, name))
+            {
+                Console.WriteLine("FAILED - the shell refused");
+                return 1;
+            }
+
+            string now = VirtualDesktopApi.GetName(target.Id);
+            bool ok = name.Length == 0 ? string.IsNullOrEmpty(now) : now == name;
+
+            Console.WriteLine(ok ? "OK - name is now \"" + (now != null ? now : "") + "\""
+                                 : "MISMATCH - registry says \"" + (now != null ? now : "") + "\"");
+            return ok ? 0 : 1;
         }
 
         static int CmdMove(VirtualDesktopApi api, string[] args)

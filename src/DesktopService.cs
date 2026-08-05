@@ -44,6 +44,9 @@ namespace DesktopSwitcher
         /// <summary>Only the active desktop changed - repaint, no relayout.</summary>
         public event EventHandler CurrentChanged;
 
+        /// <summary>A desktop was renamed - repaint, no relayout. The set is unchanged.</summary>
+        public event EventHandler NamesChanged;
+
         /// <summary>Current model. Only valid on the UI thread.</summary>
         public IList<Desktop> Desktops { get { return _desktops; } }
 
@@ -225,6 +228,38 @@ namespace DesktopSwitcher
             Raise(CurrentChanged);
         }
 
+        /// <summary>
+        /// Swaps one desktop's name in the model, for the same reason and in the same way
+        /// as ApplyCurrent: the set has not moved and the new value is already known, so
+        /// there is nothing to ask the shell.
+        ///
+        /// Deliberately not a re-read. Names live in the registry and SetName is an RPC
+        /// into Explorer, so a read that lands before the write is visible would put the
+        /// old name straight back over the new one.
+        /// </summary>
+        void ApplyName(Guid id, string name)
+        {
+            int index = -1;
+            for (int i = 0; i < _desktops.Count; i++)
+                if (_desktops[i].Id == id) { index = i; break; }
+
+            if (index < 0)
+            {
+                Reconcile();
+                return;
+            }
+
+            var list = new List<Desktop>(_desktops.Count);
+            for (int i = 0; i < _desktops.Count; i++)
+            {
+                Desktop d = _desktops[i];
+                list.Add(new Desktop(d.Id, d.Index, i == index ? name : d.Name, d.IsCurrent));
+            }
+
+            _desktops = list;
+            Raise(NamesChanged);
+        }
+
         // --- operations -------------------------------------------------------
 
         public void SwitchTo(Guid id)
@@ -245,6 +280,26 @@ namespace DesktopSwitcher
         public void MoveWindow(IntPtr hwnd, Guid id)
         {
             Guarded(delegate { _api.MoveWindow(hwnd, id); }, "move window");
+        }
+
+        /// <summary>Whether the shell will accept a rename. False also means "not right now".</summary>
+        public bool CanRename { get { return _api.CanRename; } }
+
+        /// <summary>
+        /// Renames a desktop, correcting the model as it goes.
+        ///
+        /// Nothing re-reads names between set changes, so without the second half of this
+        /// the hover panel and the menu would go on saying the old name until the next
+        /// desktop switch - which is to say, a rename you cannot see.
+        /// </summary>
+        public void Rename(Guid id, string name)
+        {
+            bool renamed = false;
+            Guarded(delegate { renamed = _api.SetName(id, name); }, "rename");
+
+            // Only a rename the shell actually took, or the model would start disagreeing
+            // with the registry every subsequent reconcile puts back.
+            if (renamed) ApplyName(id, name);
         }
 
         /// <summary>

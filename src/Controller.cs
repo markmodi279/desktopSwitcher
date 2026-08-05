@@ -97,6 +97,7 @@ namespace DesktopSwitcher
             // replaces.
             _service.DesktopsChanged += OnDesktopsChanged;
             _service.CurrentChanged += OnCurrentChanged;
+            _service.NamesChanged += OnNamesChanged;
 
             RebuildStrip();
 
@@ -319,6 +320,10 @@ namespace DesktopSwitcher
             Desktop desktop = desktops[index];
             Guid id = desktop.Id;
 
+            // First, where Task View puts it: the name is what the menu is about, and it
+            // titles the rest rather than sitting among the actions.
+            AddRenameBox(menu, desktop);
+
             AddItem(menu, "Switch here", !desktop.IsCurrent, delegate { _service.SwitchTo(id); });
 
             // Resolved now, not when the item is clicked, so the window that moves is the
@@ -343,6 +348,101 @@ namespace DesktopSwitcher
                     delegate { _service.Remove(id); });
 
             return menu;
+        }
+
+        /// <summary>
+        /// The desktop's name, editable in place - Task View's rename, in the menu.
+        ///
+        /// A row rather than a dialog: showing the menu already took the foreground, so the
+        /// box can simply take the caret, and there is no second window to place, to dismiss,
+        /// or to keep out of ForegroundTracker's way. Enter commits, Escape closes the menu
+        /// and changes nothing, which is what a drop-down does anyway.
+        ///
+        /// Adds nothing at all when the shell cannot rename, leaving the menu to open on
+        /// Switch as it did before.
+        /// </summary>
+        void AddRenameBox(ContextMenuStrip menu, Desktop desktop)
+        {
+            if (!_service.CanRename) return;
+
+            Guid id = desktop.Id;
+
+            // What the desktop is called right now, including the "Desktop 3" a nameless
+            // one falls back to: an empty box says nothing about what is being renamed, and
+            // it is selected on open, so typing replaces it either way. Task View shows the
+            // name the same way and for the same reason.
+            //
+            // Whether that text is a real name matters on the way back out, so it is
+            // settled here rather than guessed at from the string later.
+            bool named = !string.IsNullOrEmpty(desktop.Name);
+            string shown = desktop.DisplayName;
+
+            var box = new ToolStripTextBox();
+            box.Text = shown;
+            box.ToolTipText = "Click to rename - Enter to save";
+
+            // The hosted control, not the item wrapper: focus and the caret belong to the
+            // real TextBox, and these are the events that actually report them.
+            TextBox field = box.TextBox;
+
+            // Selecting from the focus event does not survive the click that caused it -
+            // the caret is placed on mouse-up, after focus has already moved - so the
+            // select is deferred to that mouse-up.
+            bool selectPending = false;
+
+            field.Enter += delegate
+            {
+                selectPending = true;
+                if (_menuTheme != null) _menuTheme.ApplyEditing(box);
+            };
+
+            field.MouseUp += delegate
+            {
+                if (!selectPending) return;
+                selectPending = false;
+                box.SelectAll();
+            };
+
+            field.Leave += delegate
+            {
+                selectPending = false;
+
+                // Clicking away is not a save. Enter is the only thing that commits, so
+                // anything half-typed goes back to the name the desktop still has.
+                box.Text = shown;
+                if (_menuTheme != null) _menuTheme.ApplyIdle(box);
+            };
+
+            box.KeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                if (e.KeyCode != Keys.Enter) return;
+
+                // A menu has nowhere for Enter to go, and unswallowed it just beeps.
+                e.SuppressKeyPress = true;
+                e.Handled = true;
+
+                // Handing the fallback straight back means "still no name", not a desktop
+                // literally called "Desktop 3" - which would look identical today and then
+                // stay behind when a removal renumbers everything after it. Only ever
+                // applied to a desktop that had no name to begin with, or opening the menu
+                // on "Comms" and pressing Enter would erase it.
+                string typed = box.Text.Trim();
+                if (!named && typed == shown) typed = "";
+
+                _service.Rename(id, typed);
+
+                // Closed is what hands the button back to the strip, so this is also what
+                // puts the highlight out.
+                menu.Close();
+            };
+
+            menu.Items.Add(box);
+            menu.Items.Add(new ToolStripSeparator());
+
+            // Deliberately not focused when the menu opens. A caret sitting in a row nobody
+            // asked to edit reads as the menu having put you somewhere, and it takes Enter
+            // and the arrow keys away from the rows below, which are what the menu is for.
+            // Clicking the name is what starts a rename - the same as Task View.
         }
 
         /// <summary>Longest window description a row will carry before it is cut short.</summary>
@@ -536,6 +636,20 @@ namespace DesktopSwitcher
         }
 
         void OnCurrentChanged(object sender, EventArgs e)
+        {
+            if (_strip != null) _strip.SetDesktops(_service.Desktops);
+        }
+
+        /// <summary>
+        /// A desktop was renamed. The hover panel and the menu captions read the service
+        /// model directly and are built on demand, so both are already right by the time
+        /// this runs; what it is for is the strip's own copy of the list, which nothing
+        /// else would correct until the set or the current desktop next moved.
+        ///
+        /// Safe while the menu is open - which is exactly when a rename commits - because
+        /// SetDesktops keeps the pinned button lit when the count has not changed.
+        /// </summary>
+        void OnNamesChanged(object sender, EventArgs e)
         {
             if (_strip != null) _strip.SetDesktops(_service.Desktops);
         }

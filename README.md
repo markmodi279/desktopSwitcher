@@ -54,6 +54,10 @@ gestures cannot: **Send "Chrome — Inbox" here** names the window that is going
 Anything impossible right now is greyed rather than hidden — switching to the desktop you
 are already on, sending a window that is already there.
 
+The desktop's name titles the menu. Click it to rename — Enter saves, Escape or clicking
+anywhere else leaves it alone, and an empty name puts the desktop back to **Desktop N**.
+The name is set through the shell, so Task View shows it too.
+
 The button count follows your actual desktops: create one in Task View and a button
 appears; remove one and it disappears. The strip is right-anchored, so the gap to the
 clock never changes as it grows.
@@ -62,8 +66,9 @@ Hover a number and a panel appears above it listing the windows open on that des
 Windows 10 otherwise gives you no way to see that without `Win+Tab`. Desktops with nothing
 on them say so, which is how you find the one that is safe to remove.
 
-Desktops renamed in Task View (`Win+Tab`, right-click a desktop, **Rename**) show that
-name on the panel.
+A desktop's name — set from the menu, or in Task View (`Win+Tab`, right-click a desktop,
+**Rename**) — is what the panel is titled with. Renaming from the menu shows up
+immediately; a rename made in Task View is picked up the next time you switch desktops.
 
 Right-click the tray icon for **Start with Windows**, config and log files, a manual
 **Reload strip**, and **Exit**. There is no other way to quit — the strip has no chrome.

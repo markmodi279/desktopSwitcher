@@ -73,6 +73,35 @@ namespace DesktopSwitcher
         IVirtualDesktop FindDesktop(ref Guid desktopId);
     }
 
+    /// <summary>
+    /// Naming, added in Win10 2004. A second interface off the same CLSID rather than
+    /// more slots on the one above: a distinct IID means QueryService either hands back a
+    /// vtable that matches this layout or fails outright, instead of us guessing at slots
+    /// past the end of an interface that already works.
+    ///
+    /// Verified on 19045.7548 - do not reorder. The first ten slots repeat
+    /// IVirtualDesktopManagerInternal exactly and exist only to keep the vtable aligned;
+    /// SetName is the only method called.
+    /// </summary>
+    [ComImport, Guid("0F3A72B0-4566-487E-9A33-4ED302F6D6CE"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IVirtualDesktopManagerInternal2
+    {
+        int GetCount();
+        void MoveViewToDesktop(IApplicationView view, IVirtualDesktop desktop);
+        bool CanViewMoveDesktops(IApplicationView view);
+        IVirtualDesktop GetCurrentDesktop();
+        void GetDesktops(out IObjectArray desktops);
+        [PreserveSig] int GetAdjacentDesktop(IVirtualDesktop from, int direction, out IVirtualDesktop desktop);
+        void SwitchDesktop(IVirtualDesktop desktop);
+        IVirtualDesktop CreateDesktop();
+        void RemoveDesktop(IVirtualDesktop desktop, IVirtualDesktop fallback);
+        IVirtualDesktop FindDesktop(ref Guid desktopId);
+        void GetDesktopSwitchIncludeExcludeViews(IVirtualDesktop desktop,
+                                                 out IObjectArray unknown1, out IObjectArray unknown2);
+        void SetName(IVirtualDesktop desktop, [MarshalAs(UnmanagedType.HString)] string name);
+    }
+
     /// <summary>The public, documented interface. Used first for window moves.</summary>
     [ComImport, Guid("A5CD92FF-29BE-454C-8D04-D82879FB3F1B"),
      InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -123,6 +152,7 @@ namespace DesktopSwitcher
             new Guid("1841C6D7-4F9D-42C0-AF41-8747538F10E5");
 
         static Guid _iidManagerInternal = new Guid("F31574D6-B682-4CDC-BD56-1827860ABEC6");
+        static Guid _iidManagerInternal2 = new Guid("0F3A72B0-4566-487E-9A33-4ED302F6D6CE");
         static Guid _iidViewCollection  = new Guid("1841C6D7-4F9D-42C0-AF41-8747538F10E5");
         static Guid _iidVirtualDesktop  = new Guid("FF72FFDD-BE7E-43FC-9C03-AD81681E88E4");
 
@@ -133,6 +163,9 @@ namespace DesktopSwitcher
         IVirtualDesktopManagerInternal _manager;
         IApplicationViewCollection _views;
         IVirtualDesktopManager _public;
+
+        /// <summary>Null when this shell cannot name desktops. Optional, unlike the four above.</summary>
+        IVirtualDesktopManagerInternal2 _names;
 
         // --- lifetime ---------------------------------------------------------
 
@@ -174,6 +207,21 @@ namespace DesktopSwitcher
                 _public = pub;
 
                 Log.Write("com: acquired shell interfaces");
+
+                // Deliberately outside the all-or-nothing publish above, and after it:
+                // naming arrived in Win10 2004, and a shell that cannot serve it must
+                // still switch, create and remove. Renaming is simply offered or not.
+                try
+                {
+                    Guid clsidNames = CLSID_VirtualDesktopManagerInternal;
+                    _names = (IVirtualDesktopManagerInternal2)
+                        shell.QueryService(ref clsidNames, ref _iidManagerInternal2);
+                }
+                catch (Exception ex)
+                {
+                    _names = null;
+                    Log.Write("com: naming interface unavailable - " + ex.Message);
+                }
             }
             catch (Exception ex)
             {
@@ -202,6 +250,7 @@ namespace DesktopSwitcher
             _manager = null;
             _views = null;
             _public = null;
+            _names = null;
         }
 
         static bool IsComFailure(Exception ex)
@@ -440,6 +489,58 @@ namespace DesktopSwitcher
         }
 
         // --- names ------------------------------------------------------------
+
+        /// <summary>
+        /// Whether this shell will accept a rename at all. False while Explorer is away,
+        /// so callers get "not now" rather than an exception they would only swallow.
+        /// </summary>
+        public bool CanRename
+        {
+            get
+            {
+                try
+                {
+                    EnsureAcquired();
+                }
+                catch (ShellUnavailableException)
+                {
+                    return false;
+                }
+                return _names != null;
+            }
+        }
+
+        /// <summary>
+        /// Renames a desktop. An empty name clears it, which puts the desktop back to
+        /// "Desktop N" - Desktop.DisplayName already treats blank that way.
+        ///
+        /// Goes through the shell rather than writing the registry value GetName reads,
+        /// so Explorer is told rather than found out: Task View picks the name up, and
+        /// its own cache does not go stale behind us.
+        /// </summary>
+        public bool SetName(Guid id, string name)
+        {
+            return Do(delegate
+            {
+                if (_names == null)
+                {
+                    Log.Write("rename: shell has no naming support, ignoring");
+                    return false;
+                }
+
+                Guid target = id;
+                IVirtualDesktop desktop = _manager.FindDesktop(ref target);
+                if (desktop == null)
+                {
+                    Log.Write("rename: desktop not found, ignoring");
+                    return false;
+                }
+
+                _names.SetName(desktop, name != null ? name : "");
+                Log.Write(delegate { return "desktop renamed " + id + " to \"" + name + "\""; });
+                return true;
+            }, "SetName");
+        }
 
         /// <summary>
         /// User-assigned desktop name, or null. Read on demand only - never polled.

@@ -24,13 +24,21 @@ namespace DesktopSwitcher
 
         readonly Font _font;
         readonly Color _surface;
+        readonly Color _field;
+        readonly double _scale;
         readonly ToolStripRenderer _renderer;
 
         public MenuTheme(Color background, double dpiScale)
         {
+            _scale = dpiScale;
+
             // The panel's own lift, so a menu and a hover panel over the same taskbar are
             // the same colour rather than two guesses at it.
             _surface = Lighten(background, 0.06f);
+
+            // Enough above the surface to read as a well you can type into, and below the
+            // selection colour, so a highlighted row still wins over the box inside it.
+            _field = Lighten(background, 0.14f);
 
             _renderer = new Renderer(new Colors(background, _surface));
 
@@ -53,6 +61,48 @@ namespace DesktopSwitcher
             // the left edge of an otherwise flat panel.
             menu.ShowImageMargin = false;
             menu.ShowCheckMargin = false;
+
+            // After the menu-wide colours, never before: setting those propagates to items
+            // and would undo anything a hosted control had already been given.
+            foreach (ToolStripItem item in menu.Items)
+            {
+                var box = item as ToolStripTextBox;
+                if (box != null) ApplyIdle(box);
+            }
+        }
+
+        /// <summary>
+        /// An editable row at rest, reading as a menu row rather than a form field: the
+        /// name is there to be seen, and only worth framing once it is being typed into.
+        ///
+        /// A hosted control paints itself, which puts it outside everything the renderer
+        /// and the colour table can reach - left alone it comes out as a white box in a
+        /// dark menu, the one thing in the whole strip that looks borrowed.
+        /// </summary>
+        public void ApplyIdle(ToolStripTextBox box)
+        {
+            box.ForeColor = EnabledText;
+            box.Font = _font;
+
+            // Never toggled once the box is live. Changing BorderStyle recreates the
+            // control's window, and a recreate in the middle of taking focus is how you
+            // lose the caret you just asked for - so the two states differ by fill alone.
+            box.BorderStyle = BorderStyle.None;
+
+            // Menus size themselves to their captions, and a hosted control is not a
+            // caption: without a width of its own the box comes out at the WinForms
+            // default, which is neither the menu's width nor scaled for the display.
+            // AutoSize first, or the layout recomputes the width straight back.
+            box.AutoSize = false;
+            box.Width = (int)Math.Round(180 * _scale);
+
+            box.BackColor = _surface;
+        }
+
+        /// <summary>The same row once it has the caret: a well, lit enough to look typed into.</summary>
+        public void ApplyEditing(ToolStripTextBox box)
+        {
+            box.BackColor = _field;
         }
 
         public void Dispose()
