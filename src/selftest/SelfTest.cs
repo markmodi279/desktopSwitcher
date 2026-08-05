@@ -51,6 +51,7 @@ namespace DesktopSwitcher
                     case "--taskbar": return CmdTaskbar(api);
                     case "--testwindow": return CmdTestWindow(args);
                     case "--strip":   return CmdStrip(api, args);
+                    case "--anim":    return CmdAnim(args);
                     case "--help":
                     case "-h":
                     case "/?":        Usage(); return 0;
@@ -89,6 +90,7 @@ namespace DesktopSwitcher
             Console.WriteLine("  --taskbar              print taskbar geometry and computed strip bounds");
             Console.WriteLine("  --testwindow N         dock a plain marker window in the taskbar for N seconds");
             Console.WriteLine("  --strip N              run the real switcher strip for N seconds");
+            Console.WriteLine("  --anim [ms]            step the strip's easing headlessly, frame by frame");
             Console.WriteLine();
         }
 
@@ -722,7 +724,7 @@ namespace DesktopSwitcher
                                               buttonWidth, plusWidth, barHeight,
                                               background, cfg.HighlightColor,
                                               (uint)cfg.TooltipDelayMs, cfg.TooltipWidth,
-                                              host.DpiScale);
+                                              cfg.AnimationMs, host.DpiScale);
 
                 // Hover panels, so --strip exercises them too. A compact echo of
                 // Controller.BuildTooltip - enough to check placement, delay and content.
@@ -822,7 +824,214 @@ namespace DesktopSwitcher
             return 0;
         }
 
+        /// <summary>
+        /// The strip's easing, stepped headlessly and printed frame by frame.
+        ///
+        /// How the animation looks can only be judged by eye. The arithmetic under it
+        /// cannot be judged by eye at all, and it is the part that fails quietly: a value
+        /// that settles at 0.996 instead of 1 draws an identical pixel and leaves a 60Hz
+        /// timer repainting for the rest of the session. So this asks the four questions
+        /// the eye cannot - does it converge, does it land exactly on the target, does it
+        /// ever report itself finished, and does a late frame cost time or only smoothness
+        /// - and answers them without a shell, a taskbar or a window.
+        /// </summary>
+        static int CmdAnim(string[] args)
+        {
+            int animationMs;
+            if (args.Length < 2 || !int.TryParse(args[1], out animationMs))
+                animationMs = Config.Load().AnimationMs;
+
+            // The strip's own interval, not a number of this file's choosing - a headless
+            // frame that is not the frame the strip runs would quietly stop describing it.
+            const int Frame = SwitcherStrip.FrameMs;
+            bool ok = true;
+
+            Console.WriteLine("animationMs   " + animationMs + (animationMs <= 0 ? "   (animation off)" : ""));
+            Console.WriteLine("frame         " + Frame + "ms");
+            Console.WriteLine("rate/frame    " + Fixed(SwitcherStrip.Rate(Frame, animationMs)) +
+                              "   of whatever distance is left");
+            Console.WriteLine("epsilon       " + Fixed(SwitcherStrip.ToneEpsilon) + " tone, " +
+                              Fixed(SwitcherStrip.PixelEpsilon) + " pixel");
+            Console.WriteLine();
+
+            // 1. The ordinary case: a hover fading in, every frame on time.
+            int frames, ms;
+            float settled;
+            ms = RunEase("1. hover fades in - 0 to 1, every frame on time", 0f, 1f,
+                         SwitcherStrip.ToneEpsilon, animationMs,
+                         delegate(int i) { return Frame; }, out frames, out settled);
+
+            if (settled != 1f)
+            {
+                Console.WriteLine("   FAIL  settled at " + Fixed(settled) + ", not exactly 1");
+                ok = false;
+            }
+
+            // 2. The same ease with the UI thread stalled for one frame. The reconcile
+            //    tick, the watchdog and the inventory sweep all share this thread, so a
+            //    frame arriving 120ms late is the normal case rather than the odd one.
+            int stalledFrames;
+            float stalledSettled;
+            int stalledMs = RunEase("2. the same, with one frame arriving 120ms late", 0f, 1f,
+                                    SwitcherStrip.ToneEpsilon, animationMs,
+                                    delegate(int i) { return i == 3 ? 120 : Frame; },
+                                    out stalledFrames, out stalledSettled);
+
+            Console.WriteLine("   on time  " + frames + " frames, " + ms + "ms");
+            Console.WriteLine("   stalled  " + stalledFrames + " frames, " + stalledMs + "ms");
+            Console.WriteLine("   the stall cost frames, not time - which is what stepping by");
+            Console.WriteLine("   elapsed time rather than a fixed amount per tick buys.");
+            Console.WriteLine();
+
+            if (stalledSettled != 1f)
+            {
+                Console.WriteLine("   FAIL  stalled run settled at " + Fixed(stalledSettled));
+                ok = false;
+            }
+
+            // 3. The bar, retargeted twice before it arrives - Win+Ctrl+Right held down.
+            if (!RunTravel(animationMs, Frame)) ok = false;
+
+            Console.WriteLine(ok ? "All checks passed." : "CHECKS FAILED.");
+            Console.WriteLine();
+            return ok ? 0 : 1;
+        }
+
+        /// <summary>
+        /// Eases one value to its target, printing every frame that moved, and returns the
+        /// milliseconds it took. <paramref name="frameMs"/> is asked how long each frame
+        /// was, so a caller can stall one.
+        ///
+        /// The loop condition is the animator's own: it runs while Ease reports movement,
+        /// exactly as the frame timer does, so an ease that never reports itself finished
+        /// hangs here too - which the frame cap turns into a failure rather than a hang.
+        /// </summary>
+        static int RunEase(string label, float value, float target, float epsilon,
+                           int animationMs, Func<int, int> frameMs,
+                           out int frames, out float settled)
+        {
+            const int Cap = 500;
+
+            Console.WriteLine(label);
+            Console.WriteLine();
+            Console.WriteLine("     frame     at      step     value");
+
+            int ms = 0;
+            frames = 0;
+
+            while (frames < Cap)
+            {
+                int elapsed = frameMs(frames + 1);
+                float before = value;
+
+                if (!SwitcherStrip.Ease(ref value, target, SwitcherStrip.Rate(elapsed, animationMs), epsilon))
+                    break;
+
+                frames++;
+                ms += elapsed;
+
+                Console.WriteLine(string.Format("     {0,5}  {1,5}ms   {2,7}   {3}",
+                    frames, ms, Fixed(value - before), Fixed(value)));
+            }
+
+            settled = value;
+
+            if (frames >= Cap)
+            {
+                Console.WriteLine("     FAIL  still moving after " + Cap + " frames - it does not converge");
+                return ms;
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("     settled at " + Fixed(value) + " after " + frames +
+                              " frames (" + ms + "ms); frame " + (frames + 1) +
+                              " moved nothing and stops the timer");
+            Console.WriteLine();
+            return ms;
+        }
+
+        /// <summary>
+        /// The travelling bar, retargeted twice mid-flight. Holding Win+Ctrl+Right changes
+        /// the current desktop several times before anything settles, and the requirement
+        /// is that this reads as one continuous movement.
+        ///
+        /// What proves it is the value column across a retarget line: exponential smoothing
+        /// keeps heading somewhere new from wherever it had got to, so there is nothing to
+        /// re-base and nothing to get wrong. A fixed-duration tween has to reset its start
+        /// value and its start time on every one of these, and the frame it forgets is the
+        /// frame the bar jumps.
+        /// </summary>
+        static bool RunTravel(int animationMs, int frameMs)
+        {
+            const float ButtonWidth = 34f;   // the default, at 96 DPI
+            const int Cap = 500;
+
+            Console.WriteLine("3. the bar travels from button 1, retargeted twice on the way");
+            Console.WriteLine();
+            Console.WriteLine("     frame     at      step         x");
+
+            float x = 0f;
+            float target = ButtonWidth;
+            float biggestStep = 0f;
+            int ms = 0, frames = 0;
+
+            while (frames < Cap)
+            {
+                // Two more switches land while the bar is still moving.
+                if (frames == 2 || frames == 4)
+                {
+                    float was = target;
+                    target += ButtonWidth;
+                    Console.WriteLine("           retarget: target " + Fixed(was) + " -> " + Fixed(target) +
+                                      ", bar stays at " + Fixed(x));
+                }
+
+                float before = x;
+                if (!SwitcherStrip.Ease(ref x, target, SwitcherStrip.Rate(frameMs, animationMs),
+                                        SwitcherStrip.PixelEpsilon))
+                    break;
+
+                frames++;
+                ms += frameMs;
+
+                float step = x - before;
+                if (step > biggestStep) biggestStep = step;
+
+                Console.WriteLine(string.Format("     {0,5}  {1,5}ms   {2,7}   {3}",
+                    frames, ms, Fixed(step), Fixed(x)));
+            }
+
+            Console.WriteLine();
+
+            if (frames >= Cap)
+            {
+                Console.WriteLine("     FAIL  the bar never arrives");
+                Console.WriteLine();
+                return false;
+            }
+
+            Console.WriteLine("     settled at x=" + Fixed(x) + " after " + frames +
+                              " frames (" + ms + "ms), largest step " + Fixed(biggestStep) + "px");
+            Console.WriteLine();
+
+            if (x != target)
+            {
+                Console.WriteLine("     FAIL  settled at " + Fixed(x) + ", not on the button edge at " +
+                                  Fixed(target));
+                Console.WriteLine();
+                return false;
+            }
+
+            return true;
+        }
+
         // --- helpers ----------------------------------------------------------
+
+        /// <summary>Three decimals, invariant - these are numbers to compare, not to read as prose.</summary>
+        static string Fixed(float value)
+        {
+            return value.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture);
+        }
 
         /// <summary>Builds the Desktop model list, exactly as DesktopService will in M4.</summary>
         static IList<Desktop> Snapshot(VirtualDesktopApi api)

@@ -62,6 +62,22 @@ namespace DesktopSwitcher
 
             _taskbarCreatedMessage = Native.RegisterWindowMessage("TaskbarCreated");
 
+            // Force the window into existence, here, on the UI thread.
+            //
+            // SetVisibleCore below means WinForms never shows this form, and a form that is
+            // never shown never creates a window. Everything downstream of that is quiet
+            // until it is not: Control.InvokeRequired answers false when there is no handle
+            // to compare threads against, so DesktopService.Post - which asks exactly that
+            // question - concluded no marshalling was needed and ran every shell
+            // notification inline, on the RPC thread it arrived on. The model, the strip's
+            // list, the tooltip and the repaint were all being touched from a thread that
+            // was never meant to see them; it went unnoticed because each of those happens
+            // to survive it. The animation timer does not - a WinForms timer started from a
+            // thread with no message pump never ticks once - and that is what dragged this
+            // into the light.
+            IntPtr pump = Handle;
+            GC.KeepAlive(pump);
+
             BuildTrayIcon();
 
             // Explorer may not be serving windows yet when a startup entry fires.
@@ -219,7 +235,7 @@ namespace DesktopSwitcher
                                        _buttonWidth, _plusWidth, _barHeight,
                                        _background, _config.HighlightColor,
                                        (uint)_config.TooltipDelayMs, _config.TooltipWidth,
-                                       _host.DpiScale);
+                                       _config.AnimationMs, _host.DpiScale);
 
             _strip.SwitchRequested += delegate(Guid id) { _service.SwitchTo(id); };
             _strip.CreateRequested += delegate { _service.Create(); };

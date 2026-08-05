@@ -353,6 +353,11 @@ namespace DesktopSwitcher
         void Post(Action action)
         {
             ISynchronizeInvoke inv = _marshaller;
+
+            // InvokeRequired is only as truthful as the marshaller's window: with no handle
+            // it answers false from every thread, and this quietly becomes a direct call on
+            // the RPC thread. Controller creates its handle up front for exactly that
+            // reason - see the comment there before changing either end of this.
             if (inv == null || !inv.InvokeRequired)
             {
                 action();

@@ -112,6 +112,12 @@ stand-in worth building. So each layer got a command that drives it against the 
 and prints what it saw. Those are how a change is checked, and how a new Windows build
 would be proved out.
 
+`--anim` is the exception that needs nothing running: it steps the strip's easing headlessly
+and prints a frame at a time. How the animation *looks* is still an eye check, but whether
+it converges, lands exactly on its target and ever reports itself finished is arithmetic,
+and that is the part that fails quietly — a value settling at 0.996 draws an identical pixel
+and leaves the frame timer running for the rest of the session.
+
 ## How a change reaches the screen
 
 The interesting path is the one nobody clicked — you press `Win+Ctrl+Right` and the strip
@@ -147,6 +153,17 @@ the rest of the codebase ignore threading entirely.
 
 `Log` serialises its writes, because it is the one thing an RPC thread may touch directly.
 
+**That quarantine depends on `Controller` having a window handle, and it creates one
+deliberately.** `Post` decides whether to marshal by asking `ISynchronizeInvoke.InvokeRequired`,
+and a `Control` with no handle answers `false` from every thread — there is no window whose
+owning thread it could compare against. `Controller` overrides `SetVisibleCore` so it is never
+shown, and a form that is never shown never creates a window, so for a long time the answer was
+always `false` and every notification ran inline on the RPC thread that delivered it. The model,
+the strip's list, the tooltip and the repaint all tolerated it, so nothing looked wrong. The
+animation timer did not: a WinForms timer started from a thread with no message pump never ticks,
+which froze the strip's animation and is how this was found. Touching `Handle` in the constructor
+is what makes the marshalling real; do not remove it as dead code.
+
 `Controller` runs six timers, all on the UI thread:
 
 | Timer | Interval | Job |
@@ -157,6 +174,13 @@ the rest of the codebase ignore threading entirely.
 | focus | 300 ms | sample the foreground window |
 | save | 2000 ms | debounced config write |
 | theme | 600 ms | debounced rebuild after `WM_SETTINGCHANGE`/`ImmersiveColorSet` |
+
+`SwitcherStrip` owns one more, and it is the only timer in the tree that is not always
+running: the animation frame timer, 16 ms, started when a visual target changes and
+stopped on the first frame where nothing moved. Everything above shares the UI thread with
+it, which is why each frame steps by measured elapsed time rather than by a fixed amount —
+a reconcile tick or an inventory sweep delays frames, and the animation should lose
+smoothness to that, not time.
 
 ## Lifetimes, and what survives what
 
@@ -180,6 +204,25 @@ different desktop by the time it is used. Anything that mutates state takes a `G
 **Updates are event-driven, with polling as a safety net.** Shell notifications drive the
 UI, so the highlight changes instantly. A slow reconcile tick covers a dead notification
 sink, missed events and Explorer restarts.
+
+**The strip animates by easing toward targets, never by playing a tween.** `SyncVisuals`
+is the one place that decides what "current" and "hovered" look like, so it sets targets
+and a frame timer eases toward them; every caller that already went through it animates
+without knowing it does. Exponential smoothing rather than a fixed-duration tween because
+retargeting mid-flight is then free — hold `Win+Ctrl+Right` and the current desktop changes
+several times before anything settles, and a tween has to re-base its start value and start
+time on every one of those or the highlight jumps. The timer stops as soon as every value
+has arrived, and values snap onto their targets once the remaining distance is under 1/255,
+where no pixel can change: this process runs from login to logout, and a permanently
+ticking 60 Hz repaint is not something it gets to do. A change to the desktop *set* snaps
+instead of animating — a removal renumbers everything after it, so animating across one
+animates between two things that are not the same thing.
+
+**The underline bar is strip-level state, not per-button.** Two independent per-button
+floats can only cross-fade, which reads as one bar going out and another coming on. The bar
+is a rectangle that eases as geometry and is drawn once outside the per-button loop, so it
+travels from the old current button to the new one. That is the one place the original M6
+plan was wrong: per-button tweening needed no change to `Render`, and the bar did.
 
 **The hover panel is a top-level window, unlike the strip.** A child window is clipped to
 its parent, and the taskbar is exactly as tall as the strip, so a panel parented there would

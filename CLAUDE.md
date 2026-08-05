@@ -110,6 +110,7 @@ shell.
 | `--desktops` | the full window inventory, per desktop, with app names |
 | `--taskbar` | taskbar geometry, DPI scale, computed strip bounds, sampled colour |
 | `--where <title>` | whether a window is on the current desktop |
+| `--anim [ms]` | steps the strip's easing headlessly and prints each frame; needs no shell at all |
 | `--help` | the command list |
 
 **Ask first** — these mutate desktop state or take over the screen: `--switch`, `--create`,
@@ -120,8 +121,10 @@ A clean compile with zero warnings plus `--list`, `--desktops` and `--taskbar` r
 sane live data is the baseline any change should clear.
 
 Some things can only be checked by eye, and no command covers them: hover panel placement
-and timing, menu appearance, the highlight animation, behaviour across an Explorer restart,
-and anything on a second monitor.
+and timing, menu appearance, how the highlight animation *looks*, behaviour across an
+Explorer restart, and anything on a second monitor. `--anim` covers the arithmetic under
+the animation - that it converges, lands exactly and stops - but nothing about how it
+reads on screen.
 
 ## Where state lives
 

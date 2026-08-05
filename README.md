@@ -62,6 +62,11 @@ The button count follows your actual desktops: create one in Task View and a but
 appears; remove one and it disappears. The strip is right-anchored, so the gap to the
 clock never changes as it grows.
 
+Switching desktops slides the underline across to the new button rather than blinking it
+there, so a `Win+Ctrl+Left/Right` you did not look at still leaves you knowing which way
+you went. Hold the key down and it keeps up, tracking each switch from wherever it had got
+to. Set `animationMs = 0` if you would rather it snapped.
+
 Hover a number and a panel appears above it listing the windows open on that desktop —
 Windows 10 otherwise gives you no way to see that without `Win+Tab`. Desktops with nothing
 on them say so, which is how you find the one that is safe to remove.
@@ -97,6 +102,7 @@ your display automatically.
 | `tooltipDelayMs` | `400` | hover delay before the panel appears |
 | `tooltipMaxWindows` | `8` | titles listed before the rest collapse into `+N more` |
 | `tooltipWidth` | `440` | panel width at 96 DPI; every panel is this wide, longer rows are trimmed |
+| `animationMs` | `80` | how long the underline takes to slide to the new desktop and the hover to fade; `0` snaps instead |
 | `highlightColor` | `#0078D7` | underline bar under the current desktop |
 | `backgroundColor` | *(blank)* | blank samples the live taskbar colour, and re-samples when you switch theme or accent |
 | `diagnostics` | `false` | enable the rolling log |

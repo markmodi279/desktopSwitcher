@@ -49,6 +49,23 @@ namespace DesktopSwitcher
         /// </summary>
         public int TooltipWidth = 440;
 
+        // --- animation --------------------------------------------------------
+        /// <summary>
+        /// How long the strip takes to settle after the highlight or the hover changes:
+        /// the underline slides to the new button and the cell tones ease rather than
+        /// snapping. This is the whole of it, not a time constant - nothing is still
+        /// moving afterwards. 0 turns animation off and the strip snaps as it used to,
+        /// which also means no frame timer is ever created.
+        ///
+        /// 80 rather than the 120 this started at, because the ease is not the only delay
+        /// in the chain. A logged Win+Ctrl+Right measured 36ms before Explorer says a word
+        /// and 20ms more to the first moving pixel, so the animation lands on top of ~56ms
+        /// that is already spent. At 120 the bar arrived 185ms after the key, late enough
+        /// that the desktop had visibly changed first and the strip looked like it was
+        /// catching up. At 80 it arrives around 145ms and reads as a response.
+        /// </summary>
+        public int AnimationMs = 80;
+
         // --- appearance -------------------------------------------------------
         public Color HighlightColor = Color.FromArgb(0x00, 0x78, 0xD7);
         /// <summary>Color.Empty means "sample the live taskbar colour at runtime".</summary>
@@ -119,6 +136,7 @@ namespace DesktopSwitcher
                 case "tooltipdelayms":   TooltipDelayMs  = ParseInt(val, TooltipDelayMs, 0, 5000); break;
                 case "tooltipmaxwindows": TooltipMaxWindows = ParseInt(val, TooltipMaxWindows, 1, 40); break;
                 case "tooltipwidth":     TooltipWidth    = ParseInt(val, TooltipWidth, 160, 1200); break;
+                case "animationms":      AnimationMs     = ParseInt(val, AnimationMs, 0, 2000);   break;
                 case "highlightcolor":   HighlightColor  = ParseColor(val, HighlightColor);      break;
                 case "backgroundcolor":  BackgroundColor = ParseColor(val, Color.Empty);         break;
                 default:                 _unknown[key]   = val;                                  break;
@@ -193,6 +211,7 @@ namespace DesktopSwitcher
             sb.AppendLine("tooltipDelayMs = "  + TooltipDelayMs);
             sb.AppendLine("tooltipMaxWindows = " + TooltipMaxWindows);
             sb.AppendLine("tooltipWidth = "    + TooltipWidth);
+            sb.AppendLine("animationMs = "     + AnimationMs);
             sb.AppendLine("highlightColor = "  + ToHex(HighlightColor));
             sb.AppendLine("backgroundColor = " + (BackgroundColor.IsEmpty ? "" : ToHex(BackgroundColor)));
 
