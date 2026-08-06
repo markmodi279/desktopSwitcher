@@ -40,7 +40,7 @@ namespace DesktopSwitcher
         Timer _watchdogTimer;    // strip / taskbar health
         Timer _focusTimer;       // remembers the last real foreground window
         Timer _saveTimer;        // debounced config write
-        Timer _themeTimer;       // debounced rebuild after a theme or accent change
+        Timer _settleTimer;      // debounced rebuild after a theme, accent, or display change
 
         uint _taskbarCreatedMessage;
         int _buttonWidth, _plusWidth, _margin, _barHeight;
@@ -790,11 +790,11 @@ namespace DesktopSwitcher
             else if (_started && m.Msg == 0x007E) // WM_DISPLAYCHANGE
             {
                 Log.Write("controller: display changed");
-                if (_host.Locate()) RebuildStrip();
+                if (_host.Locate()) QueueSettledRebuild("display changed");
             }
             else if (_started && m.Msg == WM_SETTINGCHANGE && IsImmersiveColorSet(ref m))
             {
-                QueueThemeRebuild();
+                QueueSettledRebuild("colour set changed");
             }
 
             base.WndProc(ref m);
@@ -833,32 +833,38 @@ namespace DesktopSwitcher
         }
 
         /// <summary>
-        /// Rebuilds the strip a moment after the colours change, and only once.
+        /// Rebuilds the strip a moment after the pixel it samples might have moved, and
+        /// only once.
         ///
-        /// Windows sends several of these in a burst as the switch propagates, and the
-        /// taskbar has not finished repainting when the first one arrives - sampling then
-        /// reads the colour it is on its way out of, which is worse than not resampling at
-        /// all. One timer, restarted by every message in the burst, so the work happens
-        /// once and late enough for the pixel to have settled.
+        /// Covers both an accent/light-dark switch and a display change - the latter fires
+        /// on waking from sleep as the monitor comes back, not only on an actual resolution
+        /// change. Windows sends several of these in a burst as the change propagates, and
+        /// the taskbar has not finished repainting when the first one arrives - sampling
+        /// then reads the colour it is on its way out of (or, coming out of sleep, whatever
+        /// transient frame DWM had not yet replaced), which is worse than not resampling at
+        /// all and, unlike a failed read, does not fall back to the last good colour - it
+        /// looks like a successful sample and gets cached until the next trigger. One timer,
+        /// restarted by every message in the burst, so the work happens once and late enough
+        /// for the pixel to have settled.
         /// </summary>
-        void QueueThemeRebuild()
+        void QueueSettledRebuild(string reason)
         {
-            if (_themeTimer == null)
+            if (_settleTimer == null)
             {
-                _themeTimer = new Timer();
-                _themeTimer.Interval = 600;
-                _themeTimer.Tick += delegate
+                _settleTimer = new Timer();
+                _settleTimer.Interval = 600;
+                _settleTimer.Tick += delegate
                 {
-                    _themeTimer.Stop();
+                    _settleTimer.Stop();
                     if (!_started) return;
 
-                    Log.Write("controller: colour set changed - resampling");
+                    Log.Write("controller: " + reason + " - resampling");
                     RebuildStrip();
                 };
             }
 
-            _themeTimer.Stop();
-            _themeTimer.Start();
+            _settleTimer.Stop();
+            _settleTimer.Start();
         }
 
         // --- config persistence -----------------------------------------------
@@ -1073,7 +1079,7 @@ namespace DesktopSwitcher
             StopTimer(ref _reconcileTimer);
             StopTimer(ref _watchdogTimer);
             StopTimer(ref _focusTimer);
-            StopTimer(ref _themeTimer);
+            StopTimer(ref _settleTimer);
 
             if (_saveTimer != null)
             {
