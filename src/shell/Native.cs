@@ -228,6 +228,18 @@ namespace DesktopSwitcher
         [DllImport("user32.dll")]
         public static extern bool InvalidateRect(IntPtr hWnd, IntPtr rect, bool erase);
 
+        /// <summary>
+        /// Paints the pending update region now, on this thread, instead of leaving a
+        /// WM_PAINT to be found whenever the queue next runs dry.
+        ///
+        /// For a window being moved a frame at a time this is what keeps the paint inside
+        /// the tick that caused it: a slow frame then delays the next one rather than
+        /// queueing behind it, which is the difference between dropping frames and
+        /// accumulating a backlog of them.
+        /// </summary>
+        [DllImport("user32.dll")]
+        public static extern bool UpdateWindow(IntPtr hWnd);
+
         [DllImport("user32.dll")]
         public static extern bool TrackMouseEvent(ref TRACKMOUSEEVENT tme);
 
@@ -280,6 +292,17 @@ namespace DesktopSwitcher
         public const uint SWP_NOACTIVATE = 0x0010;
         public const uint SWP_SHOWWINDOW = 0x0040;
         public const uint SWP_HIDEWINDOW = 0x0080;
+
+        /// <summary>
+        /// Discards the client area instead of blitting it to the new position, and
+        /// invalidates the whole of it.
+        ///
+        /// For a window whose contents depend on where it is - the hover panel's accent
+        /// stub is placed against a button in screen coordinates, so every pixel of the
+        /// panel is position-dependent - the copy is pure waste, and worse than waste: it
+        /// briefly shows the old stub at a wrong offset before the real paint lands.
+        /// </summary>
+        public const uint SWP_NOCOPYBITS = 0x0100;
 
         public const int WS_CHILD = unchecked((int)0x40000000);
         public const int WS_POPUP = unchecked((int)0x80000000);

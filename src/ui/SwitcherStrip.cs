@@ -27,6 +27,13 @@ namespace DesktopSwitcher
     /// travel from the old current button to the new one. The M6 note here promised
     /// Render would need no change to animate; that held for the buttons, and did not
     /// anticipate the bar.
+    ///
+    /// The frame timer drives the hover panel as well, which is a window of its own and
+    /// repaints itself. The two motions always begin together - the WM_MOUSEMOVE that
+    /// lifts a button's hover tone is the same one that aims the panel at it - so a second
+    /// timer would duplicate the elapsed-time bookkeeping to run in lockstep with this one.
+    /// OnFrame therefore asks the strip and the panel separately whether they moved, so a
+    /// slide happening entirely above the taskbar does not repaint the taskbar for it.
     /// </summary>
     sealed class SwitcherStrip : NativeWindow, IDisposable
     {
@@ -41,43 +48,27 @@ namespace DesktopSwitcher
         }
 
         /// <summary>
-        /// Frame interval. Deliberately 15 and not 16.
-        ///
-        /// The system timer ticks about every 15.6ms and a WM_TIMER only fires on a tick
-        /// once its interval has elapsed. Ask for 16 and the first tick at 15.6 is one
-        /// step too early, so the frame lands on the second at 31.2 instead - a logged
-        /// trace of a real switch alternated 16ms and 31ms frames, running at nearer 40Hz
-        /// than 60. Asking for 15 is satisfied by every tick.
-        ///
-        /// It only affects smoothness either way: each step is taken against measured
-        /// elapsed time, not against this number.
-        /// </summary>
-        public const int FrameMs = 15;
-
-        /// <summary>
-        /// Below this, a 0..1 value can no longer change an 8-bit colour, so the ease
-        /// finishes there rather than spending frames converging invisibly.
-        /// </summary>
-        public const float ToneEpsilon = 1f / 255f;
-
-        /// <summary>The same idea for bar geometry: half a pixel cannot be drawn.</summary>
-        public const float PixelEpsilon = 0.5f;
-
-        /// <summary>
-        /// How long an already-open panel waits before following the pointer onto another
-        /// button.
+        /// How long an already-open panel waits before changing what it says.
         ///
         /// Not a second hover delay - the full delay is paid once, to open the first panel,
         /// and re-charging it per button would wreck the one thing the panel is for, which
-        /// is reading along the strip. This is only a coalescing window: sweeping from
-        /// button 1 to button 5 crosses three buttons nobody asked about, and each crossing
-        /// used to cost a window-inventory query, a row rebuild, a SetWindowPos and a
-        /// repaint, flashing three panels past on the way. Now the sweep produces one panel,
-        /// against whichever button the pointer actually stopped on.
+        /// is reading along the strip.
         ///
-        /// 80ms because it has to sit under the threshold where a delay is felt as one -
-        /// roughly a tenth of a second - while still being longer than a fast sweep spends
-        /// over any single button.
+        /// It gates the text and nothing else. For one release it gated everything, and that
+        /// was worse than the strobe it fixed: for 80ms the panel sat still, attached to the
+        /// button the pointer had left, describing a desktop that was no longer the one
+        /// being asked about. A panel that is wrong and motionless reads as broken in a way
+        /// a panel that is merely busy does not.
+        ///
+        /// Splitting it is what makes the delay invisible. The panel starts travelling on
+        /// the same mouse message, so something answers the pointer immediately; the text
+        /// lands 80ms later, which - animationMs being 80 as well - is about when the glide
+        /// finishes. The two arrive together and the wait has nowhere to show itself.
+        ///
+        /// The cost per crossing is now MoveTo only: no BuildRows, so no MeasureString per
+        /// row on the thread that is also running the frame timer. (An earlier note here
+        /// claimed a window-inventory query per crossing too. That was wrong - WindowInventory
+        /// caches for a second, so a sweep never re-enumerates.)
         /// </summary>
         public const int ReshowMs = 80;
 
@@ -310,60 +301,6 @@ namespace DesktopSwitcher
         // --- animation --------------------------------------------------------
 
         /// <summary>
-        /// The fraction of the remaining distance to cross in a frame of
-        /// <paramref name="elapsedMs"/>, for a settle time of
-        /// <paramref name="animationMs"/>.
-        ///
-        /// Exponential smoothing rather than a fixed-duration tween, for one reason:
-        /// retargeting mid-flight is free. Hold Win+Ctrl+Right down and the current
-        /// desktop changes several times before anything settles; a tween has to re-base
-        /// its start value and its start time on every one of those or the bar jumps, and
-        /// this simply keeps heading somewhere new from wherever it had got to. It also
-        /// decelerates into place by construction, which is what the motion should do.
-        ///
-        /// animationMs is the time to settle, not a time constant: ln(255) time constants
-        /// is where the remaining distance falls under ToneEpsilon and the ease finishes.
-        /// The snap itself lands on whichever frame comes after that, so --anim reports 120
-        /// arriving at 144 on 16ms frames - frame quantisation, not drift.
-        ///
-        /// A frame that arrives very late gives a rate at or near 1 and lands the value on
-        /// its target, so a busy machine loses frames rather than slowing the animation
-        /// down - which is exactly what stepping by elapsed time is for. The UI thread also
-        /// carries the reconcile tick, the watchdog and the window-inventory sweep, so late
-        /// frames are the normal case, not the pathological one.
-        /// </summary>
-        public static float Rate(int elapsedMs, int animationMs)
-        {
-            if (animationMs <= 0 || elapsedMs <= 0) return 1f;
-
-            const double Settles = 5.5413;   // Math.Log(255)
-
-            double tau = animationMs / Settles;
-            return (float)(1.0 - Math.Exp(-elapsedMs / tau));
-        }
-
-        /// <summary>
-        /// One step of one value toward its target. True when the value moved, which is
-        /// the caller's cue both to repaint and to keep the timer running.
-        ///
-        /// Within <paramref name="epsilon"/> the value is snapped onto the target and the
-        /// snap still counts as a move, so the last frame drawn is the exact one; the call
-        /// after that finds them equal, reports nothing, and that is what stops the timer.
-        /// </summary>
-        public static bool Ease(ref float value, float target, float rate, float epsilon)
-        {
-            if (value == target) return false;
-
-            float distance = target - value;
-            if (distance < 0) distance = -distance;
-
-            if (distance < epsilon) { value = target; return true; }
-
-            value += (target - value) * rate;
-            return true;
-        }
-
-        /// <summary>
         /// Starts the frame timer, unless there is nothing to animate. Called from
         /// SyncVisuals, so every change of intent gets one of these and nothing else
         /// has to remember to.
@@ -373,7 +310,8 @@ namespace DesktopSwitcher
             if (_disposed) return;
 
             // animationMs = 0 means off: apply the targets where they stand and never
-            // create a timer at all.
+            // create a timer at all. The panel is included, so the one setting means the
+            // same thing to everything that moves.
             if (_animationMs <= 0) { Settle(); return; }
 
             if (Settled()) return;
@@ -381,7 +319,7 @@ namespace DesktopSwitcher
             if (_frameTimer == null)
             {
                 _frameTimer = new Timer();
-                _frameTimer.Interval = FrameMs;
+                _frameTimer.Interval = Motion.FrameMs;
                 _frameTimer.Tick += OnFrame;
             }
 
@@ -407,12 +345,17 @@ namespace DesktopSwitcher
             if (elapsed <= 0) return;
 
             _lastFrame = now;
+            float rate = Motion.Rate(elapsed, _animationMs);
 
-            if (Step(Rate(elapsed, _animationMs)))
-            {
-                Invalidate();
-                return;
-            }
+            // Stepped separately and asked separately. The panel is a window of its own and
+            // repaints itself as it moves, so a strip that repainted whenever *anything*
+            // moved would redraw the taskbar sixty times a second for a slide happening
+            // entirely above it.
+            bool strip = Step(rate);
+            bool panel = _tooltip != null && _tooltip.Step(rate);
+
+            if (strip) Invalidate();
+            if (strip || panel) return;
 
             // Everything is on its target. A permanently ticking 60Hz timer that repaints
             // nothing is not something a taskbar utility gets to do.
@@ -428,13 +371,13 @@ namespace DesktopSwitcher
             // before the first that moved.
             for (int i = 0; i < _visuals.Length; i++)
             {
-                moved |= Ease(ref _visuals[i].Highlight, _visuals[i].HighlightTarget, rate, ToneEpsilon);
-                moved |= Ease(ref _visuals[i].Hover, _visuals[i].HoverTarget, rate, ToneEpsilon);
+                moved |= Motion.Ease(ref _visuals[i].Highlight, _visuals[i].HighlightTarget, rate, Motion.ToneEpsilon);
+                moved |= Motion.Ease(ref _visuals[i].Hover, _visuals[i].HoverTarget, rate, Motion.ToneEpsilon);
             }
 
-            moved |= Ease(ref _barX, _barXTarget, rate, PixelEpsilon);
-            moved |= Ease(ref _barWidth, _barWidthTarget, rate, PixelEpsilon);
-            moved |= Ease(ref _barLevel, _barLevelTarget, rate, ToneEpsilon);
+            moved |= Motion.Ease(ref _barX, _barXTarget, rate, Motion.PixelEpsilon);
+            moved |= Motion.Ease(ref _barWidth, _barWidthTarget, rate, Motion.PixelEpsilon);
+            moved |= Motion.Ease(ref _barLevel, _barLevelTarget, rate, Motion.ToneEpsilon);
 
             return moved;
         }
@@ -447,6 +390,8 @@ namespace DesktopSwitcher
                 if (_visuals[i].Hover != _visuals[i].HoverTarget) return false;
             }
 
+            if (_tooltip != null && !_tooltip.Settled) return false;
+
             return _barX == _barXTarget && _barWidth == _barWidthTarget
                 && _barLevel == _barLevelTarget;
         }
@@ -458,6 +403,7 @@ namespace DesktopSwitcher
         void Settle()
         {
             Step(1f);
+            if (_tooltip != null) _tooltip.Settle();
             if (_frameTimer != null) _frameTimer.Stop();
         }
 
@@ -633,10 +579,14 @@ namespace DesktopSwitcher
             // Restart the delay against the button now under the pointer.
             ArmTracking();
 
-            if (index < 0)
-                HideTooltip();
-            else
-                QueueReshow();   // already open: follow the pointer without re-waiting
+            if (index < 0) { HideTooltip(); return; }
+
+            // An open panel follows the pointer in two speeds. The geometry goes now, so it
+            // is already travelling before the pointer has settled; the text waits out
+            // ReshowMs, so a sweep along the strip is one continuous glide carrying one
+            // change of text rather than a flip-book of them.
+            MoveTooltip();
+            QueueReshow();
         }
 
         void OnMouseLeave()
@@ -823,11 +773,35 @@ namespace DesktopSwitcher
                 _tooltip = new TooltipWindow(_background, _highlight, _tooltipWidth, _dpiScale);
 
             // The button in screen coordinates: the panel anchors to it, and the accent
-            // bar lines up under it.
+            // stub lines up under it.
             Rectangle anchor = AnchorFor(_hoverIndex);
             if (anchor.Width == 0) return;
 
             _tooltip.Show(content, anchor);
+
+            // Show only retargets - a panel already open now has somewhere new to be, and
+            // this is what puts a frame timer behind it. SyncVisuals does the same job for
+            // every other kind of change; the panel is the one that does not go through it.
+            Animate();
+        }
+
+        /// <summary>
+        /// Moves an open panel onto the button now under the pointer, without disturbing
+        /// what it says. The immediate half of the pair; QueueReshow is the other.
+        /// </summary>
+        void MoveTooltip()
+        {
+            if (_disposed || _tooltip == null || !_tooltip.IsVisible) return;
+
+            // Same reason ShowTooltip declines: the menu already answers for this button, and
+            // a panel sliding out from under it is noise.
+            if (_menuIndex >= 0) return;
+
+            Rectangle anchor = AnchorFor(_hoverIndex);
+            if (anchor.Width == 0) return;
+
+            _tooltip.MoveTo(anchor);
+            Animate();
         }
 
         /// <summary>

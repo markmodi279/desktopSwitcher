@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Text;
 
 namespace DesktopSwitcher
@@ -52,6 +53,7 @@ namespace DesktopSwitcher
                     case "--testwindow": return CmdTestWindow(args);
                     case "--strip":   return CmdStrip(api, args);
                     case "--anim":    return CmdAnim(args);
+                    case "--slide":   return CmdSlide(args);
                     case "--help":
                     case "-h":
                     case "/?":        Usage(); return 0;
@@ -91,6 +93,7 @@ namespace DesktopSwitcher
             Console.WriteLine("  --testwindow N         dock a plain marker window in the taskbar for N seconds");
             Console.WriteLine("  --strip N              run the real switcher strip for N seconds");
             Console.WriteLine("  --anim [ms]            step the strip's easing headlessly, frame by frame");
+            Console.WriteLine("  --slide [ms]           step the hover panel's travel between buttons");
             Console.WriteLine();
         }
 
@@ -843,22 +846,22 @@ namespace DesktopSwitcher
 
             // The strip's own interval, not a number of this file's choosing - a headless
             // frame that is not the frame the strip runs would quietly stop describing it.
-            const int Frame = SwitcherStrip.FrameMs;
+            const int Frame = Motion.FrameMs;
             bool ok = true;
 
             Console.WriteLine("animationMs   " + animationMs + (animationMs <= 0 ? "   (animation off)" : ""));
             Console.WriteLine("frame         " + Frame + "ms");
-            Console.WriteLine("rate/frame    " + Fixed(SwitcherStrip.Rate(Frame, animationMs)) +
+            Console.WriteLine("rate/frame    " + Fixed(Motion.Rate(Frame, animationMs)) +
                               "   of whatever distance is left");
-            Console.WriteLine("epsilon       " + Fixed(SwitcherStrip.ToneEpsilon) + " tone, " +
-                              Fixed(SwitcherStrip.PixelEpsilon) + " pixel");
+            Console.WriteLine("epsilon       " + Fixed(Motion.ToneEpsilon) + " tone, " +
+                              Fixed(Motion.PixelEpsilon) + " pixel");
             Console.WriteLine();
 
             // 1. The ordinary case: a hover fading in, every frame on time.
             int frames, ms;
             float settled;
             ms = RunEase("1. hover fades in - 0 to 1, every frame on time", 0f, 1f,
-                         SwitcherStrip.ToneEpsilon, animationMs,
+                         Motion.ToneEpsilon, animationMs,
                          delegate(int i) { return Frame; }, out frames, out settled);
 
             if (settled != 1f)
@@ -873,7 +876,7 @@ namespace DesktopSwitcher
             int stalledFrames;
             float stalledSettled;
             int stalledMs = RunEase("2. the same, with one frame arriving 120ms late", 0f, 1f,
-                                    SwitcherStrip.ToneEpsilon, animationMs,
+                                    Motion.ToneEpsilon, animationMs,
                                     delegate(int i) { return i == 3 ? 120 : Frame; },
                                     out stalledFrames, out stalledSettled);
 
@@ -924,7 +927,7 @@ namespace DesktopSwitcher
                 int elapsed = frameMs(frames + 1);
                 float before = value;
 
-                if (!SwitcherStrip.Ease(ref value, target, SwitcherStrip.Rate(elapsed, animationMs), epsilon))
+                if (!Motion.Ease(ref value, target, Motion.Rate(elapsed, animationMs), epsilon))
                     break;
 
                 frames++;
@@ -987,8 +990,8 @@ namespace DesktopSwitcher
                 }
 
                 float before = x;
-                if (!SwitcherStrip.Ease(ref x, target, SwitcherStrip.Rate(frameMs, animationMs),
-                                        SwitcherStrip.PixelEpsilon))
+                if (!Motion.Ease(ref x, target, Motion.Rate(frameMs, animationMs),
+                                        Motion.PixelEpsilon))
                     break;
 
                 frames++;
@@ -1018,6 +1021,353 @@ namespace DesktopSwitcher
             {
                 Console.WriteLine("     FAIL  settled at " + Fixed(x) + ", not on the button edge at " +
                                   Fixed(target));
+                Console.WriteLine();
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// The hover panel's travel between buttons, stepped headlessly.
+        ///
+        /// --anim asks whether the strip's easing converges and lands; this asks the
+        /// questions that only arise once a whole window is the thing being eased, and every
+        /// one of them is a mistake that was actually made and caught here first:
+        ///
+        ///   - does the panel move at all? Place centres a wide panel on a narrow button and
+        ///     then clamps it into the work area, so past a certain point every button on the
+        ///     right resolves to the same x and the slide is silently a no-op.
+        ///   - does the bottom edge hold still while the height changes? Not "is y+h
+        ///     constant" - that is an identity the compiler would honour whatever the code
+        ///     did - but is the rounded, device-pixel bottom edge the same integer on every
+        ///     single frame.
+        ///   - do Measure and Render still agree about where the rows start, now that one
+        ///     builds the height from the top and the other lays out from the bottom.
+        ///   - does the accent stub travel with the panel rather than ahead of it.
+        ///
+        /// Synthetic geometry throughout: no shell, no taskbar, no window. The numbers are
+        /// the real defaults from config, scaled the way TaskbarHost would.
+        /// </summary>
+        static int CmdSlide(string[] args)
+        {
+            int animationMs;
+            if (args.Length < 2 || !int.TryParse(args[1], out animationMs))
+                animationMs = Config.Load().AnimationMs;
+
+            const int Frame = Motion.FrameMs;
+            Config cfg = Config.Load();
+            bool ok = true;
+
+            Console.WriteLine("animationMs   " + animationMs + (animationMs <= 0 ? "   (animation off)" : ""));
+            Console.WriteLine("frame         " + Frame + "ms");
+            Console.WriteLine("epsilon       " + Fixed(Motion.PixelEpsilon) + " pixel");
+            Console.WriteLine();
+
+            if (!SlidePlacement(cfg, 1.25)) ok = false;
+            if (!SlideLayout(cfg, 1.25)) ok = false;
+            if (!SlideTravel(cfg, 1.25, animationMs, Frame)) ok = false;
+            if (!SlideRegime(cfg, 1.25)) ok = false;
+
+            Console.WriteLine(ok ? "All checks passed." : "CHECKS FAILED.");
+            Console.WriteLine();
+            return ok ? 0 : 1;
+        }
+
+        /// <summary>Sizes authored at 96 DPI, scaled as TaskbarHost.Scale would.</summary>
+        static int SlideScale(int value, double scale)
+        {
+            return (int)Math.Round(value * scale);
+        }
+
+        /// <summary>
+        /// The strip, right-anchored ahead of the clock exactly as TaskbarHost computes it,
+        /// and one anchor rectangle per button.
+        /// </summary>
+        static Rectangle[] SlideAnchors(Config cfg, double scale, Rectangle work, int trayLeft,
+                                        int desktops, out int buttonWidth)
+        {
+            buttonWidth = SlideScale(cfg.ButtonWidth, scale);
+            int plusWidth = SlideScale(cfg.PlusWidth, scale);
+            int margin = SlideScale(cfg.Margin, scale);
+
+            int width = SwitcherStrip.MeasureWidth(desktops, buttonWidth, plusWidth);
+            int left = trayLeft - margin - width;
+
+            var anchors = new Rectangle[desktops + 1];
+            for (int i = 0; i < desktops; i++)
+                anchors[i] = new Rectangle(left + i * buttonWidth, work.Bottom,
+                                           buttonWidth, 1);
+
+            anchors[desktops] = new Rectangle(left + desktops * buttonWidth, work.Bottom,
+                                              plusWidth, 1);
+            return anchors;
+        }
+
+        /// <summary>
+        /// Every button must place the panel somewhere different, or there is nothing for the
+        /// slide to do. This is the check that would have caught the feature being dead on
+        /// the buttons nearest the clock - which is where the pointer usually is.
+        /// </summary>
+        static bool SlidePlacement(Config cfg, double scale)
+        {
+            var work = new Rectangle(0, 0, 1920, 1030);
+            int panelWidth = SlideScale(cfg.TooltipWidth, scale);
+            int gap = SlideScale(4, scale);
+
+            int buttonWidth;
+            Rectangle[] anchors = SlideAnchors(cfg, scale, work, 1597, 3, out buttonWidth);
+            var size = new Size(panelWidth, 120);
+
+            Console.WriteLine("1. every button places the panel somewhere different");
+            Console.WriteLine();
+            Console.WriteLine("   work area " + work.Width + "x" + work.Height +
+                              ", panel " + panelWidth + "px wide, buttons " + buttonWidth + "px");
+            Console.WriteLine();
+            Console.WriteLine("     button    centre        x    right   moved");
+
+            bool ok = true;
+            int previous = int.MinValue;
+
+            for (int i = 0; i < anchors.Length; i++)
+            {
+                bool accentAtTop;
+                Point origin = TooltipWindow.Place(size, anchors[i], work, gap, out accentAtTop);
+
+                int centre = anchors[i].Left + anchors[i].Width / 2;
+                int moved = i == 0 ? 0 : origin.X - previous;
+
+                Console.WriteLine(string.Format("     {0,6}    {1,6}   {2,6}   {3,6}   {4,5}",
+                    i < anchors.Length - 1 ? (i + 1).ToString() : "+",
+                    centre, origin.X, origin.X + size.Width, i == 0 ? "-" : moved.ToString()));
+
+                if (i > 0 && moved == 0)
+                {
+                    Console.WriteLine("     FAIL  same x as the button before it - the panel cannot slide here");
+                    ok = false;
+                }
+
+                previous = origin.X;
+            }
+
+            Console.WriteLine();
+            if (ok)
+                Console.WriteLine("     the panel is clear of the work-area edge on every button.");
+            Console.WriteLine();
+            return ok;
+        }
+
+        /// <summary>
+        /// Measure builds the height downward from the top; Render lays the rows out upward
+        /// from the bottom, because the bottom is the edge that holds still. They have to
+        /// meet exactly, or every panel is a pixel or two out at rest - a bug that would look
+        /// like bad padding rather than like a layout disagreement.
+        /// </summary>
+        static bool SlideLayout(Config cfg, double scale)
+        {
+            int padY = SlideScale(9, scale);
+            int accent = SlideScale(3, scale);
+            bool ok = true;
+
+            Console.WriteLine("2. Measure and Render agree about where the rows start");
+            Console.WriteLine();
+            Console.WriteLine("     rows   rowsPx   height   origin   want");
+
+            // Through the overflow row: past tooltipMaxWindows the panel stops growing a row
+            // per window and adds a "+N more" line instead, so that is the last height it
+            // ever takes and the one most worth landing exactly.
+            int[] counts = { 1, 2, 5, cfg.TooltipMaxWindows, cfg.TooltipMaxWindows + 1 };
+
+            for (int i = 0; i < counts.Length; i++)
+            {
+                int rowsHeight = counts[i] * SlideScale(19, scale);
+                int height = TooltipWindow.MeasureHeight(padY, accent, rowsHeight);
+                int origin = TooltipWindow.RowOrigin(height, padY, accent, rowsHeight, false);
+
+                Console.WriteLine(string.Format("     {0,4}   {1,6}   {2,6}   {3,6}   {4,4}",
+                    counts[i], rowsHeight, height, origin, padY));
+
+                if (origin != padY)
+                {
+                    Console.WriteLine("     FAIL  row block starts at " + origin + ", not " + padY);
+                    ok = false;
+                }
+            }
+
+            Console.WriteLine();
+            return ok;
+        }
+
+        /// <summary>
+        /// The slide itself, retargeted mid-flight the way a pointer sweeping along the strip
+        /// retargets it, and with the row count changing so the height has to ease too.
+        ///
+        /// Two invariants are watched on every frame rather than at the end, because both
+        /// fail transiently or not at all: the bottom edge must be the same integer
+        /// throughout, and the stub's offset inside the panel must not change, since panel
+        /// and stub are supposed to be one object.
+        /// </summary>
+        static bool SlideTravel(Config cfg, double scale, int animationMs, int frameMs)
+        {
+            var work = new Rectangle(0, 0, 1920, 1030);
+            int panelWidth = SlideScale(cfg.TooltipWidth, scale);
+            int gap = SlideScale(4, scale);
+            int padY = SlideScale(9, scale);
+            int accent = SlideScale(3, scale);
+            int row = SlideScale(19, scale);
+
+            int buttonWidth;
+            Rectangle[] anchors = SlideAnchors(cfg, scale, work, 1597, 3, out buttonWidth);
+
+            // Button 1 with four rows, then button 2 with eight - a desktop with more windows
+            // on it, which is what makes the height move as well as the position.
+            var from = new Size(panelWidth, TooltipWindow.MeasureHeight(padY, accent, 4 * row));
+            var to = new Size(panelWidth, TooltipWindow.MeasureHeight(padY, accent, 8 * row));
+
+            bool topA, topB;
+            Point a = TooltipWindow.Place(from, anchors[0], work, gap, out topA);
+            Point b = TooltipWindow.Place(to, anchors[1], work, gap, out topB);
+            Point c = TooltipWindow.Place(to, anchors[2], work, gap, out topB);
+
+            Console.WriteLine("3. the panel travels, retargeted mid-flight, growing as it goes");
+            Console.WriteLine();
+            Console.WriteLine("     from button 1 at " + a.X + " (" + from.Height + "px tall)" +
+                              " to button 2 at " + b.X + " (" + to.Height + "px)");
+            Console.WriteLine();
+            Console.WriteLine("     frame     at       left        top   bottom   stub");
+
+            float left = a.X, top = a.Y, bottom = a.Y + from.Height;
+            float centre = anchors[0].Left + anchors[0].Width / 2;
+
+            float leftT = b.X, topT = b.Y, bottomT = b.Y + to.Height;
+            float centreT = anchors[1].Left + anchors[1].Width / 2;
+
+            int wantBottom = (int)Math.Round(bottom);
+            int wantStub = (int)Math.Round(centre - left);
+
+            const int Cap = 500;
+            int frames = 0, ms = 0;
+            bool ok = true;
+
+            while (frames < Cap)
+            {
+                // The pointer keeps going: button 3 while the panel is still short of 2.
+                if (frames == 3)
+                {
+                    leftT = c.X;
+                    centreT = anchors[2].Left + anchors[2].Width / 2;
+                    Console.WriteLine("           retarget: left -> " + Fixed(leftT) +
+                                      ", panel is at " + Fixed(left));
+                }
+
+                float rate = Motion.Rate(frameMs, animationMs);
+                bool moved = false;
+                moved |= Motion.Ease(ref left, leftT, rate, Motion.PixelEpsilon);
+                moved |= Motion.Ease(ref top, topT, rate, Motion.PixelEpsilon);
+                moved |= Motion.Ease(ref bottom, bottomT, rate, Motion.PixelEpsilon);
+                moved |= Motion.Ease(ref centre, centreT, rate, Motion.PixelEpsilon);
+                if (!moved) break;
+
+                frames++;
+                ms += frameMs;
+
+                int gotBottom = (int)Math.Round(bottom);
+                int gotStub = (int)Math.Round(centre - left);
+
+                Console.WriteLine(string.Format("     {0,5}  {1,5}ms   {2,8}   {3,8}   {4,6}   {5,4}",
+                    frames, ms, Fixed(left), Fixed(top), gotBottom, gotStub));
+
+                if (gotBottom != wantBottom)
+                {
+                    Console.WriteLine("     FAIL  bottom edge moved to " + gotBottom +
+                                      ", should be pinned at " + wantBottom);
+                    ok = false;
+                }
+
+                if (gotStub != wantStub)
+                {
+                    Console.WriteLine("     FAIL  stub offset drifted to " + gotStub +
+                                      ", should ride with the panel at " + wantStub);
+                    ok = false;
+                }
+            }
+
+            Console.WriteLine();
+
+            if (frames >= Cap)
+            {
+                Console.WriteLine("     FAIL  the panel never arrives");
+                Console.WriteLine();
+                return false;
+            }
+
+            Console.WriteLine("     settled after " + frames + " frames (" + ms + "ms); frame " +
+                              (frames + 1) + " moved nothing and stops the timer");
+
+            if (left != leftT || top != topT || bottom != bottomT || centre != centreT)
+            {
+                Console.WriteLine("     FAIL  settled off target - left " + Fixed(left) + "/" + Fixed(leftT) +
+                                  ", top " + Fixed(top) + "/" + Fixed(topT));
+                ok = false;
+            }
+            else
+            {
+                Console.WriteLine("     landed exactly on button 3, height " +
+                                  ((int)Math.Round(bottom) - (int)Math.Round(top)) + "px");
+            }
+
+            Console.WriteLine();
+            return ok;
+        }
+
+        /// <summary>
+        /// A panel too tall to fit above the strip flips below it, and then the edge that
+        /// holds still is the top rather than the bottom. Easing across that is not a slide -
+        /// it is the panel crossing the screen - so Show snaps instead, and this proves the
+        /// two placements really are far enough apart to be worth the special case.
+        /// </summary>
+        static bool SlideRegime(Config cfg, double scale)
+        {
+            var work = new Rectangle(0, 0, 1920, 1030);
+            int panelWidth = SlideScale(cfg.TooltipWidth, scale);
+            int gap = SlideScale(4, scale);
+            int padY = SlideScale(9, scale);
+            int accent = SlideScale(3, scale);
+            int row = SlideScale(19, scale);
+
+            int buttonWidth;
+            Rectangle[] anchors = SlideAnchors(cfg, scale, work, 1597, 3, out buttonWidth);
+
+            var small = new Size(panelWidth, TooltipWindow.MeasureHeight(padY, accent, 3 * row));
+            var huge = new Size(panelWidth, TooltipWindow.MeasureHeight(padY, accent, 60 * row));
+
+            bool topSmall, topHuge;
+            Point a = TooltipWindow.Place(small, anchors[0], work, gap, out topSmall);
+            Point b = TooltipWindow.Place(huge, anchors[0], work, gap, out topHuge);
+
+            Console.WriteLine("4. a panel that no longer fits above flips below, and must snap");
+            Console.WriteLine();
+            Console.WriteLine(string.Format("     {0,5}px tall  -> y {1,4}, accent at {2}",
+                small.Height, a.Y, topSmall ? "top" : "bottom"));
+            Console.WriteLine(string.Format("     {0,5}px tall  -> y {1,4}, accent at {2}",
+                huge.Height, b.Y, topHuge ? "top" : "bottom"));
+            Console.WriteLine();
+
+            if (topSmall == topHuge)
+            {
+                Console.WriteLine("     no flip at this screen height - the regime check is inert here.");
+                Console.WriteLine();
+                return true;
+            }
+
+            int jump = Math.Abs(b.Y - a.Y);
+            Console.WriteLine("     the flip moves the panel " + jump + "px, which is why Show snaps");
+            Console.WriteLine("     rather than easing across it.");
+            Console.WriteLine();
+
+            if (jump < small.Height)
+            {
+                Console.WriteLine("     FAIL  flip only moves " + jump + "px - snapping may be unnecessary");
                 Console.WriteLine();
                 return false;
             }

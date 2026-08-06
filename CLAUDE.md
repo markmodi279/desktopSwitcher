@@ -111,6 +111,7 @@ shell.
 | `--taskbar` | taskbar geometry, DPI scale, computed strip bounds, sampled colour |
 | `--where <title>` | whether a window is on the current desktop |
 | `--anim [ms]` | steps the strip's easing headlessly and prints each frame; needs no shell at all |
+| `--slide [ms]` | the same for the hover panel's travel between buttons: placement, the pinned bottom edge, the row-block origin, the accent stub |
 | `--help` | the command list |
 
 **Ask first** — these mutate desktop state or take over the screen: `--switch`, `--create`,
@@ -122,9 +123,11 @@ sane live data is the baseline any change should clear.
 
 Some things can only be checked by eye, and no command covers them: hover panel placement
 and timing, menu appearance, how the highlight animation *looks*, behaviour across an
-Explorer restart, and anything on a second monitor. `--anim` covers the arithmetic under
+Explorer restart, and anything on a second monitor. `--anim` and `--slide` cover the arithmetic under
 the animation - that it converges, lands exactly and stops - but nothing about how it
-reads on screen.
+reads on screen. For the hover panel specifically, `--slide` cannot see trails behind a
+moving `WS_EX_TRANSPARENT` topmost window, which is the one thing worth checking over a
+playing video rather than over the desktop.
 
 ## Where state lives
 
@@ -153,6 +156,8 @@ it before the next went on top.
 | **M8** | Hover tooltips: `TooltipWindow` and `WindowInventory` — see what is on a desktop without `Win+Tab`. |
 | **M9** | Right-click menus: every action reachable without a middle click, which a touchpad cannot do. `MenuTheme` to stop them looking borrowed. |
 | **M10** | Rename a desktop from the menu, through the shell, so Task View agrees. |
+| **M11** | The underline bar travels between buttons instead of snapping. `Motion`, and the easing model everything animated now shares. |
+| **M12** | The hover panel travels too. Its edges are eased rather than an origin and a size, the strip's frame timer drives both, and `--slide` proves the arithmetic. |
 
 Between M8 and M9, two fixes worth knowing: tooltip rows lead with the owning app resolved
 from the process, and the tooltip width is fixed rather than sized to content so it does not

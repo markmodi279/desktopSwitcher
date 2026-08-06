@@ -63,10 +63,45 @@ namespace DesktopSwitcher
 
         Bitmap _buffer;
         List<Row> _rows = new List<Row>();
-        Rectangle _anchor;      // the hovered button, in screen coordinates
         bool _accentAtTop;      // panel sits below the anchor, so the accent flips
         bool _visible;
         bool _disposed;
+
+        // GEOMETRY: edges in screen coordinates, not an origin and a size.
+        //
+        // The obvious model - ease x, y and height - makes the bottom edge hold still only
+        // as an accident of arithmetic. For a bottom taskbar Place derives y from height, so
+        // y + height is constant across buttons, and easing both at one rate preserves the
+        // sum. True in exact arithmetic, and false in four places that all apply here:
+        // rounding each value to an int independently can land the sum a pixel out, Ease
+        // snaps each value onto its target independently once inside the epsilon so one can
+        // arrive a frame before the other, Place's two work-area clamps do not preserve the
+        // sum at all, and nothing in the code states the requirement - so easing the height
+        // faster than the slide, which is a reasonable thing to want, would silently break
+        // an edge nobody knew was load-bearing.
+        //
+        // Holding the edges instead makes it structural. For a bottom taskbar _bottomTarget
+        // equals _bottom always, Ease reports it unmoved, and the bottom edge is identical
+        // in device pixels because it was never a computed quantity in the first place.
+        // Width is not here: it is fixed at _width and never animates.
+        float _left, _top, _bottom;
+        float _leftTarget, _topTarget, _bottomTarget;
+
+        // The hovered button's centre, eased alongside the panel at the same rate.
+        //
+        // DrawAccent used to derive the stub from the anchor rect against a live
+        // GetWindowRect, so on the frame the pointer moved, the stub jumped the full width
+        // of a button while the panel had not moved at all, then drifted back as the panel
+        // caught up - a rubber band rather than one object. Easing the centre too makes both
+        // deltas equal, so the stub's offset within the panel is constant and the two move
+        // as one body.
+        //
+        // It also earns its keep in the case the panel cannot move: against the right edge
+        // of the work area consecutive buttons clamp to the same x, and then the panel is
+        // still while the stub alone travels - motion pointing where the pointer went, where
+        // there would otherwise be none.
+        float _anchorCentre, _anchorCentreTarget;
+        int _anchorWidth;
 
         public TooltipWindow(Color background, Color highlight, int width, double dpiScale)
         {
@@ -112,21 +147,25 @@ namespace DesktopSwitcher
         // --- show / hide ------------------------------------------------------
 
         /// <summary>
-        /// Heights the panel to its content - the width is fixed - places it clear of the
-        /// anchor, and shows it without activating. Safe to call while already visible -
-        /// that is how the panel follows the pointer between buttons without re-arming
-        /// the delay.
+        /// Gives the panel new text, heights it to fit - the width is fixed - and aims it at
+        /// a button. Safe to call while already visible.
+        ///
+        /// This is the expensive half of the pair. MoveTo is the other, and the split is
+        /// what lets the panel start travelling the moment the pointer does while the text
+        /// underneath it changes only once, at the button the pointer stopped on.
         /// </summary>
         public void Show(TooltipContent content, Rectangle anchorScreenRect)
         {
             if (_disposed || content == null) return;
 
-            _anchor = anchorScreenRect;
-
+            // Built before anything is committed. The anchor used to be assigned first, so a
+            // layout that threw left the stub pointing at the button the pointer had just
+            // reached while the rows still described the desktop it came from.
+            List<Row> rows;
             Size size;
             try
             {
-                _rows = BuildRows(content, out size);
+                rows = BuildRows(content, out size);
             }
             catch (Exception ex)
             {
@@ -134,14 +173,69 @@ namespace DesktopSwitcher
                 return;
             }
 
-            Point origin = Place(size, anchorScreenRect);
+            _rows = rows;
+            Retarget(size, anchorScreenRect);
 
-            Native.SetWindowPos(Handle, Native.HWND_TOPMOST,
-                origin.X, origin.Y, size.Width, size.Height,
-                Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
+            // The first show is one SetWindowPos already at its final place: the window is
+            // created without WS_VISIBLE precisely so it never appears somewhere else first,
+            // and letting the frame path reveal it would put that flash straight back.
+            if (!_visible)
+            {
+                _visible = true;
+                Apply(Native.HWND_TOPMOST, Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
+                return;
+            }
 
-            _visible = true;
-            Native.InvalidateRect(Handle, IntPtr.Zero, false);
+            // The text changed even where the geometry did not, so this repaints regardless
+            // of whether anything is about to move.
+            Apply(IntPtr.Zero, Native.SWP_NOACTIVATE | Native.SWP_NOZORDER
+                             | Native.SWP_NOCOPYBITS);
+        }
+
+        /// <summary>
+        /// Aims the panel at a different button without touching what it says, keeping the
+        /// height it already has.
+        ///
+        /// The cheap half: no BuildRows, so no MeasureString per row and no Fit trim loop on
+        /// the UI thread that is also driving the frame timer. That matters because this is
+        /// called on every button the pointer crosses, where Show is called once.
+        ///
+        /// It only retargets. Nothing is applied here - the strip's frame loop owns the
+        /// travelling, and if animation is switched off Settle applies the arrival instead.
+        /// </summary>
+        public void MoveTo(Rectangle anchorScreenRect)
+        {
+            if (_disposed || !_visible) return;
+
+            Retarget(Measure(_rows), anchorScreenRect);
+        }
+
+        /// <summary>
+        /// Points the geometry at a button, at a size the caller has already decided.
+        /// </summary>
+        void Retarget(Size size, Rectangle anchor)
+        {
+            _anchorWidth = anchor.Width;
+
+            bool accentAtTop;
+            Point origin = Place(size, anchor, Screen.FromRectangle(anchor).WorkingArea,
+                                 Scale(4), out accentAtTop);
+
+            // Which edge the panel grows from decides which edge holds still, so a change of
+            // regime invalidates the geometry rather than retargeting it: the panel no
+            // longer fits above the strip and flips below, which --slide measures at 927px
+            // on a 1080 screen. That is the panel crossing the display, not a slide, so it
+            // snaps. Same for the first show, which must simply be correct rather than
+            // arriving from wherever the last one happened to end.
+            bool relocated = accentAtTop != _accentAtTop || !_visible;
+            _accentAtTop = accentAtTop;
+
+            _leftTarget = origin.X;
+            _topTarget = origin.Y;
+            _bottomTarget = origin.Y + size.Height;
+            _anchorCentreTarget = anchor.Left + anchor.Width / 2;
+
+            if (relocated) Settle();
         }
 
         public void Hide()
@@ -153,6 +247,118 @@ namespace DesktopSwitcher
                 | Native.SWP_HIDEWINDOW);
 
             _visible = false;
+
+            // Arrive where it was heading before going dark. A panel left mid-flight would
+            // otherwise keep a frame source alive stepping SetWindowPos against a window
+            // nobody can see, and would slide the rest of the way the next time it opened.
+            Settle();
+        }
+
+        // --- geometry ---------------------------------------------------------
+
+        /// <summary>The panel's current edges, rounded once, so every caller agrees.</summary>
+        Rectangle Bounds()
+        {
+            int x = (int)Math.Round(_left);
+            int y = (int)Math.Round(_top);
+            return new Rectangle(x, y, _width, (int)Math.Round(_bottom) - y);
+        }
+
+        /// <summary>What the panel will be once it arrives. What the back buffer is sized for.</summary>
+        int TargetHeight()
+        {
+            return (int)Math.Round(_bottomTarget) - (int)Math.Round(_topTarget);
+        }
+
+        /// <summary>
+        /// Pushes the current edges at the window. Guarded on the handle: a frame that lands
+        /// after DestroyHandle would otherwise reach InvalidateRect with a null hwnd, and a
+        /// null hwnd there does not mean "nothing" - it means invalidate every window on the
+        /// desktop, sixty-six times a second.
+        /// </summary>
+        void Apply(IntPtr insertAfter, uint flags)
+        {
+            if (_disposed || Handle == IntPtr.Zero) return;
+
+            Rectangle b = Bounds();
+            Native.SetWindowPos(Handle, insertAfter, b.X, b.Y, b.Width, b.Height, flags);
+
+            // Every pixel of this panel is position-dependent - the stub is placed against a
+            // button in screen coordinates - so the whole client area is repainted whatever
+            // moved. SWP_NOCOPYBITS on the frame path means the system does not first blit
+            // the old pixels to the new place for us to immediately paint over.
+            Native.InvalidateRect(Handle, IntPtr.Zero, false);
+            Native.UpdateWindow(Handle);
+        }
+
+        /// <summary>
+        /// Arrive now, without animating - a regime flip, a hide, or animation switched off
+        /// entirely.
+        ///
+        /// Applies as well as assigns, because for the animation-off path this is the only
+        /// thing that will: MoveTo deliberately does not touch the window, leaving that to
+        /// the frame loop, and with animationMs at 0 there is no frame loop to leave it to.
+        /// Guarded on _visible so Hide, which settles after going dark, does not push a
+        /// hidden window around.
+        /// </summary>
+        public void Settle()
+        {
+            _left = _leftTarget;
+            _top = _topTarget;
+            _bottom = _bottomTarget;
+            _anchorCentre = _anchorCentreTarget;
+
+            if (_visible)
+                Apply(IntPtr.Zero, Native.SWP_NOACTIVATE | Native.SWP_NOZORDER
+                                 | Native.SWP_NOCOPYBITS);
+        }
+
+        public bool Settled
+        {
+            get
+            {
+                return _left == _leftTarget && _top == _topTarget
+                    && _bottom == _bottomTarget && _anchorCentre == _anchorCentreTarget;
+            }
+        }
+
+        /// <summary>
+        /// One frame of travel, at a rate the strip has already computed. True when anything
+        /// moved, which is the strip's cue to keep its timer running.
+        ///
+        /// The panel does not own a timer of its own. It could - but the strip already has
+        /// one, already owns this object, and the two motions always start together, because
+        /// the same WM_MOUSEMOVE that lifts a button's hover tone is what retargets the
+        /// panel. A second timer would mean a second _lastFrame, a second copy of the
+        /// TickCount wrap reasoning and a second stop condition, all to run in lockstep with
+        /// the first.
+        ///
+        /// All four values are eased at the one rate, which is what keeps the bottom edge
+        /// pinned and the accent stub riding at a fixed offset inside the panel rather than
+        /// racing ahead of it.
+        /// </summary>
+        public bool Step(float rate)
+        {
+            if (_disposed || !_visible) return false;
+
+            bool moved = false;
+            moved |= Motion.Ease(ref _left, _leftTarget, rate, Motion.PixelEpsilon);
+            moved |= Motion.Ease(ref _top, _topTarget, rate, Motion.PixelEpsilon);
+            moved |= Motion.Ease(ref _bottom, _bottomTarget, rate, Motion.PixelEpsilon);
+            moved |= Motion.Ease(ref _anchorCentre, _anchorCentreTarget, rate, Motion.PixelEpsilon);
+
+            if (moved)
+                Apply(IntPtr.Zero, Native.SWP_NOACTIVATE | Native.SWP_NOZORDER
+                                 | Native.SWP_NOCOPYBITS);
+
+            return moved;
+        }
+
+        /// <summary>The monitor and gap this panel's placement is resolved against.</summary>
+        Point Place(Size size, Rectangle anchor)
+        {
+            return Place(size, anchor, Screen.FromRectangle(anchor).WorkingArea,
+                         Scale(4), out _accentAtTop);
         }
 
         /// <summary>
@@ -163,18 +369,27 @@ namespace DesktopSwitcher
         /// excludes the taskbar, so "above" lands on-screen for a bottom taskbar, fails
         /// the fit test for a top one and falls through to "below", and for a side-docked
         /// taskbar the horizontal clamp pushes the panel clear of the bar.
+        ///
+        /// Static, pure, and taking the work area rather than asking Screen for it, so that
+        /// --slide can drive the real placement against synthetic geometry instead of
+        /// asserting an identity of its own construction. The instance overload above
+        /// supplies the two things only a live panel knows.
+        ///
+        /// accentAtTop is an out parameter and not a field for the same reason: which edge
+        /// the panel grew from used to be a side effect written from inside a method called
+        /// Place, which is why the flip was invisible to every caller. The slide has to see
+        /// it - crossing between the two regimes moves the panel the height of the screen
+        /// and must snap rather than ease.
         /// </summary>
-        Point Place(Size size, Rectangle anchor)
+        public static Point Place(Size size, Rectangle anchor, Rectangle work, int gap,
+                                  out bool accentAtTop)
         {
-            Rectangle work = Screen.FromRectangle(anchor).WorkingArea;
-            int gap = Scale(4);
-
             int y = anchor.Top - size.Height - gap;
-            _accentAtTop = false;
+            accentAtTop = false;
             if (y < work.Top)
             {
                 y = anchor.Bottom + gap;
-                _accentAtTop = true;
+                accentAtTop = true;
             }
             if (y + size.Height > work.Bottom) y = work.Bottom - size.Height;
             if (y < work.Top) y = work.Top;
@@ -228,12 +443,50 @@ namespace DesktopSwitcher
         /// </summary>
         Size Measure(List<Row> rows)
         {
-            int height = _padY * 2 + _accent;
+            return new Size(_width, MeasureHeight(_padY, _accent, RowsHeight(rows)));
+        }
+
+        /// <summary>
+        /// The panel's height for a given stack of rows. Static so --slide can build the
+        /// same height Measure would, rather than a number of its own that happens to agree.
+        /// </summary>
+        public static int MeasureHeight(int padY, int accent, int rowsHeight)
+        {
+            return padY * 2 + accent + rowsHeight;
+        }
+
+        /// <summary>
+        /// Where the row block starts, measured from whichever edge is holding still - the
+        /// one the accent is not on.
+        ///
+        /// Static and shared with Render for the same reason as MeasureHeight: the property
+        /// that matters is that this and MeasureHeight agree, and a test that recomputed
+        /// both would prove only that arithmetic is arithmetic. Feed it a height that
+        /// MeasureHeight produced and it must return exactly padY; change the anchoring in
+        /// one place without the other and --slide says so.
+        /// </summary>
+        public static int RowOrigin(int height, int padY, int accent, int rowsHeight,
+                                    bool accentAtTop)
+        {
+            if (accentAtTop) return padY + accent;
+            return height - accent - padY - rowsHeight;
+        }
+
+        /// <summary>
+        /// The stacked height of the rows alone. Shared with Render, which lays them out from
+        /// the stationary edge and so has to know the same total Measure built the height
+        /// from - the two agreeing is what makes the settled origin come out at exactly _padY.
+        /// </summary>
+        int RowsHeight() { return RowsHeight(_rows); }
+
+        int RowsHeight(List<Row> rows)
+        {
+            int height = 0;
 
             for (int i = 0; i < rows.Count; i++)
                 height += LineHeight(rows[i].Font);
 
-            return new Size(_width, height);
+            return height;
         }
 
         int LineHeight(Font font)
@@ -270,10 +523,17 @@ namespace DesktopSwitcher
                 int w = client.Width, h = client.Height;
                 if (w <= 0 || h <= 0) return;
 
-                if (_buffer == null || _buffer.Width != w || _buffer.Height != h)
+                // Sized for where the panel is going, not where it currently is, and only
+                // ever grown. A height ease climbs a few pixels a frame, so a buffer that
+                // must match the client exactly is a fresh Bitmap on every single frame -
+                // and "grow only" alone does not help, because the growth is monotonic and
+                // fails the test every time. Taking the target height up front means one
+                // allocation for the whole slide.
+                int needH = Math.Max(h, TargetHeight());
+                if (_buffer == null || _buffer.Width < w || _buffer.Height < needH)
                 {
                     if (_buffer != null) _buffer.Dispose();
-                    _buffer = new Bitmap(w, h);
+                    _buffer = new Bitmap(Math.Max(w, _width), needH);
                 }
 
                 using (var g = Graphics.FromImage(_buffer))
@@ -283,7 +543,9 @@ namespace DesktopSwitcher
 
                 using (var target = Graphics.FromHdc(hdc))
                 {
-                    target.DrawImageUnscaled(_buffer, 0, 0);
+                    // Clipped, because the buffer is now generally taller than the window
+                    // and the surplus holds whatever the last larger frame left there.
+                    target.DrawImageUnscaledAndClipped(_buffer, new Rectangle(0, 0, w, h));
                 }
             }
             catch (Exception ex)
@@ -310,7 +572,16 @@ namespace DesktopSwitcher
 
             DrawAccent(g, width, height);
 
-            int y = _padY + (_accentAtTop ? _accent : 0);
+            // Laid out from whichever edge is holding still, which is the edge the accent is
+            // NOT on. Rows were always measured from the top, and that was invisible while
+            // the panel only ever teleported; once the height eases, a top-anchored block
+            // inside a panel whose bottom is pinned slides upward the whole way, so new text
+            // appears in the old place and then wanders. Anchoring it to the stationary edge
+            // makes it sit still while the panel unrolls behind it.
+            //
+            // At the settled height this is identically _padY - Measure builds the height out
+            // of exactly these terms - so nothing moves at rest. --slide asserts that.
+            int y = RowOrigin(height, _padY, _accent, RowsHeight(), _accentAtTop);
 
             for (int i = 0; i < _rows.Count; i++)
             {
@@ -341,10 +612,7 @@ namespace DesktopSwitcher
         /// </summary>
         void DrawAccent(Graphics g, int width, int height)
         {
-            Native.RECT client;
-            if (!Native.GetWindowRect(Handle, out client)) return;
-
-            int anchorWidth = _anchor.Width > 0 ? _anchor.Width : Scale(24);
+            int anchorWidth = _anchorWidth > 0 ? _anchorWidth : Scale(24);
 
             // A stub, not a bar. Two fifths of the button still points at it unambiguously
             // without reading as a copy of it. Floored at _accent because below its own
@@ -352,7 +620,11 @@ namespace DesktopSwitcher
             // dot - which only bites at very small button widths on a low-DPI display.
             int barWidth = Math.Max(_accent, anchorWidth * 2 / 5);
 
-            int centre = _anchor.Left + anchorWidth / 2 - client.Left;
+            // Against the panel's own eased left edge, not a live GetWindowRect. Two
+            // reasons: it is one syscall per frame saved, and more importantly it is the
+            // same number the window was positioned from, so the stub cannot disagree with
+            // where the panel actually is on a frame where the two were read apart.
+            int centre = (int)Math.Round(_anchorCentre - _left);
 
             int x = centre - barWidth / 2;
             if (x < 0) x = 0;

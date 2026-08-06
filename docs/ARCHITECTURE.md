@@ -82,7 +82,8 @@ commented `do not reorder`. They are not stable across Windows versions; see
 | File | Purpose |
 |---|---|
 | [TaskbarHost.cs](../src/ui/TaskbarHost.cs) | Finds the taskbar, works out where the strip goes, docks it there, and samples the taskbar's colour. |
-| [SwitcherStrip.cs](../src/ui/SwitcherStrip.cs) | The strip itself: owner-drawn buttons, animation, mouse input. Raises intent as events; decides nothing. |
+| [SwitcherStrip.cs](../src/ui/SwitcherStrip.cs) | The strip itself: owner-drawn buttons, animation, mouse input. Raises intent as events; decides nothing. Owns the one frame timer, and drives the hover panel's travel from it as well as its own. |
+| [Motion.cs](../src/ui/Motion.cs) | The easing every moving thing is stepped by — frame interval, epsilons, and the exponential `Rate`/`Ease` pair. Belongs to neither the strip nor the panel, so the panel does not have to reach back through the class that owns it. |
 | [TooltipWindow.cs](../src/ui/TooltipWindow.cs) | The hover panel. A top-level, click-through window that draws whatever text it is handed. |
 | [MenuTheme.cs](../src/ui/MenuTheme.cs) | Dresses a `ContextMenuStrip` in colours derived from the sampled taskbar colour. |
 | [Palette.cs](../src/ui/Palette.cs) | The one place that knows which way "away from the background" is. Lifts a surface off the taskbar colour and picks text tones for it, in whichever direction that colour demands. |
@@ -112,11 +113,21 @@ stand-in worth building. So each layer got a command that drives it against the 
 and prints what it saw. Those are how a change is checked, and how a new Windows build
 would be proved out.
 
-`--anim` is the exception that needs nothing running: it steps the strip's easing headlessly
-and prints a frame at a time. How the animation *looks* is still an eye check, but whether
-it converges, lands exactly on its target and ever reports itself finished is arithmetic,
-and that is the part that fails quietly — a value settling at 0.996 draws an identical pixel
-and leaves the frame timer running for the rest of the session.
+`--anim` and `--slide` are the exceptions that need nothing running: they step the easing
+headlessly and print a frame at a time. How the animation *looks* is still an eye check, but
+whether it converges, lands exactly on its target and ever reports itself finished is
+arithmetic, and that is the part that fails quietly — a value settling at 0.996 draws an
+identical pixel and leaves the frame timer running for the rest of the session.
+
+`--slide` covers the hover panel, where being a whole window rather than a rectangle inside
+one adds questions `--anim` never had to ask. It checks that consecutive buttons actually
+place the panel somewhere different — `Place` centres a wide panel on a narrow button and
+then clamps it into the work area, so past a certain point every button on the right resolves
+to the same x and the travel is silently a no-op — that the rounded bottom edge is the same
+integer on every frame while the height changes, that `Measure` and `Render` still agree
+about where the row block starts now that one builds downward and the other lays out upward,
+and that the accent stub rides at a fixed offset inside the panel instead of racing ahead of
+it.
 
 ## How a change reaches the screen
 
@@ -175,12 +186,18 @@ is what makes the marshalling real; do not remove it as dead code.
 | save | 2000 ms | debounced config write |
 | theme | 600 ms | debounced rebuild after `WM_SETTINGCHANGE`/`ImmersiveColorSet` |
 
-`SwitcherStrip` owns one more, and it is the only timer in the tree that is not always
-running: the animation frame timer, 16 ms, started when a visual target changes and
-stopped on the first frame where nothing moved. Everything above shares the UI thread with
-it, which is why each frame steps by measured elapsed time rather than by a fixed amount —
-a reconcile tick or an inventory sweep delays frames, and the animation should lose
-smoothness to that, not time.
+`SwitcherStrip` owns two more, and they are the only timers in the tree that are not always
+running. The animation frame timer, 15 ms, is started when a visual target changes and
+stopped on the first frame where nothing moved; it steps the strip's own buttons and bar
+*and* the hover panel's travel, because the two always move together — the same
+`WM_MOUSEMOVE` that lifts a button's hover tone is what aims the panel at it — and a second
+timer would only duplicate the elapsed-time bookkeeping to run in lockstep with the first.
+The re-show timer, 80 ms, is a one-shot that gates the panel's *text* while its geometry
+follows the pointer immediately.
+
+Everything above shares the UI thread with them, which is why each frame steps by measured
+elapsed time rather than by a fixed amount — a reconcile tick or an inventory sweep delays
+frames, and the animation should lose smoothness to that, not time.
 
 ## Lifetimes, and what survives what
 
@@ -217,6 +234,19 @@ where no pixel can change: this process runs from login to logout, and a permane
 ticking 60 Hz repaint is not something it gets to do. A change to the desktop *set* snaps
 instead of animating — a removal renumbers everything after it, so animating across one
 animates between two things that are not the same thing.
+
+**The hover panel travels, and its edges are what get eased — not an origin and a size.**
+Moving between buttons used to teleport it. It now slides, retargeting mid-flight for the
+same reason the bar does, so sweeping along the strip is one continuous movement rather than
+a queue of jumps. The state it eases is `left`, `top`, `bottom` and the anchored button's
+centre, which is less obvious than easing x/y/height and is the point: for a bottom taskbar
+the bottom edge is *the same float as its own target*, so `Ease` reports it unmoved and the
+edge is stationary in device pixels by construction. Easing y and height instead makes that
+an identity in exact arithmetic which independent rounding, per-value epsilon snapping and
+`Place`'s work-area clamps can each break. The button centre is eased alongside at the same
+rate so the accent stub keeps a constant offset inside the panel: the two are meant to read
+as one object, and a stub derived from a live window rect instead jumps a full button ahead
+and rubber-bands back.
 
 **The underline bar is strip-level state, not per-button.** Two independent per-button
 floats can only cross-fade, which reads as one bar going out and another coming on. The bar
