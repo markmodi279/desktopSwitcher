@@ -123,7 +123,7 @@ namespace DesktopSwitcher
 
             RebuildStrip();
 
-            _reconcileTimer = StartTimer(_config.ReconcileMs, delegate { _service.Tick(); });
+            _reconcileTimer = StartTimer(_config.ReconcileMs, delegate { _service.Tick(); RefreshOccupancy(); });
             _watchdogTimer = StartTimer(1000, delegate { Watchdog(); });
             _focusTimer = StartTimer(300, delegate { _foreground.Sample(); });
 
@@ -255,8 +255,27 @@ namespace DesktopSwitcher
 
             _strip.SetDesktops(_service.Desktops);
             _host.Reassert(_strip.Handle, _strip.Width, _margin);
+            RefreshOccupancy();
 
             Log.Write("controller: strip rebuilt");
+        }
+
+        /// <summary>
+        /// Which desktops have windows, pushed to the strip's occupancy dots. Called from
+        /// the reconcile tick, which is what "refreshed on the existing 2s tick" means, and
+        /// also right after every relayout - a rebuild or a desktop-set change - so the
+        /// strip does not sit undotted for up to 2s after either.
+        ///
+        /// Skipped below two desktops, where the dot would only ever answer a question
+        /// nobody is asking: with one desktop there is nowhere else for a window to be.
+        /// </summary>
+        void RefreshOccupancy()
+        {
+            if (_strip == null || _service == null || _inventory == null) return;
+            if (!_config.OccupancyDots) return;
+            if (_service.Count < 2) return;
+
+            _strip.SetOccupancy(_inventory.OccupiedDesktops(_service.Count));
         }
 
         void DisposeStrip()
@@ -688,6 +707,7 @@ namespace DesktopSwitcher
 
             _strip.SetDesktops(_service.Desktops);
             _host.Reassert(_strip.Handle, _strip.Width, _margin);
+            RefreshOccupancy();
 
             QueueSave(_service.Count);
         }

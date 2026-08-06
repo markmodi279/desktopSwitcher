@@ -42,9 +42,11 @@ namespace DesktopSwitcher
         {
             public float Highlight;   // 0 = inactive, 1 = current desktop
             public float Hover;       // 0 = idle,     1 = pointer over
+            public float Dot;         // 0 = empty,    1 = has windows
 
             public float HighlightTarget;
             public float HoverTarget;
+            public float DotTarget;
         }
 
         /// <summary>
@@ -82,6 +84,13 @@ namespace DesktopSwitcher
 
         List<Desktop> _desktops = new List<Desktop>();
         ButtonVisual[] _visuals = new ButtonVisual[0];
+
+        // Which desktops have windows, by Guid - keyed the same way _desktops is read in
+        // SyncVisuals, so a set change and an occupancy refresh landing in either order
+        // still end up pointing at the right button. Empty until the first refresh, which
+        // reads as every button empty rather than every button occupied - the safer of
+        // the two wrong answers for the one frame before real data arrives.
+        ICollection<Guid> _occupied = new HashSet<Guid>();
 
         // The underline bar, in strip coordinates. Strip-level rather than per-button
         // because a bar that travels is one object moving, not two fading.
@@ -271,6 +280,11 @@ namespace DesktopSwitcher
                 // A button whose menu is open reads as hovered whatever the pointer is
                 // doing, so it stays visibly the one the menu belongs to.
                 _visuals[i].HoverTarget = (i == _hoverIndex || i == _menuIndex) ? 1f : 0f;
+
+                // The '+' button has no desktop and so is never in _occupied - i beyond
+                // _desktops.Count reads false here the same way isCurrent does above.
+                bool occupied = i < _desktops.Count && _occupied.Contains(_desktops[i].Id);
+                _visuals[i].DotTarget = occupied ? 1f : 0f;
             }
 
             if (current >= 0)
@@ -295,6 +309,24 @@ namespace DesktopSwitcher
         {
             if (_background == color) return;
             _background = color;
+            Invalidate();
+        }
+
+        /// <summary>
+        /// Which desktops have windows, refreshed independently of the desktop set - a
+        /// window opening or closing does not change which buttons exist. Null holds
+        /// whatever is already on screen: the shell being unavailable mid-refresh is not
+        /// the same thing as every desktop actually being empty.
+        ///
+        /// Goes through SyncVisuals like every other change of intent, so the dot fades
+        /// rather than snaps, and Invalidate is still needed alongside it for the
+        /// animationMs = 0 case - see the same pairing in OnMouseMove.
+        /// </summary>
+        public void SetOccupancy(ICollection<Guid> occupied)
+        {
+            if (occupied == null) return;
+            _occupied = occupied;
+            SyncVisuals();
             Invalidate();
         }
 
@@ -373,6 +405,7 @@ namespace DesktopSwitcher
             {
                 moved |= Motion.Ease(ref _visuals[i].Highlight, _visuals[i].HighlightTarget, rate, Motion.ToneEpsilon);
                 moved |= Motion.Ease(ref _visuals[i].Hover, _visuals[i].HoverTarget, rate, Motion.ToneEpsilon);
+                moved |= Motion.Ease(ref _visuals[i].Dot, _visuals[i].DotTarget, rate, Motion.ToneEpsilon);
             }
 
             moved |= Motion.Ease(ref _barX, _barXTarget, rate, Motion.PixelEpsilon);
@@ -388,6 +421,7 @@ namespace DesktopSwitcher
             {
                 if (_visuals[i].Highlight != _visuals[i].HighlightTarget) return false;
                 if (_visuals[i].Hover != _visuals[i].HoverTarget) return false;
+                if (_visuals[i].Dot != _visuals[i].DotTarget) return false;
             }
 
             if (_tooltip != null && !_tooltip.Settled) return false;
@@ -530,7 +564,51 @@ namespace DesktopSwitcher
                 // Nudge up so the glyph looks centred in the space above the bar.
                 var textBounds = new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height - _barHeight);
                 g.DrawString(caption, _font, brush, textBounds, format);
+
+                DrawDot(g, textBounds, caption, visual.Dot);
             }
+        }
+
+        /// <summary>
+        /// A muted dot beside the number, faded in by visual.Dot: dim when the desktop has
+        /// windows, invisible when it does not.
+        ///
+        /// Beside the glyph rather than under it. Under was tried first and cost two
+        /// rounds of fighting the same problem: the button is barely 30px tall, so any
+        /// vertical space taken for the dot comes straight out of the number's centring,
+        /// and the dot ended up either visibly nudging the glyph up or sitting jammed
+        /// against the underline. The button has width to spare that it does not have
+        /// height for, so the dot goes there instead and the glyph's position is
+        /// untouched - textBounds is exactly what it was before this feature existed.
+        ///
+        /// Measures the caption to place the dot off its actual right edge rather than a
+        /// fixed offset, because Number can be two digits - up to 32 desktops - and a
+        /// fixed offset tuned for one digit would sit on top of the second.
+        ///
+        /// A fixed tone rather than one that rides the hover/current ramp: it answers "is
+        /// this desktop occupied", a fact about the desktop and not about the pointer, and
+        /// riding the ramp would read as a second state mark competing with the underline.
+        /// </summary>
+        void DrawDot(Graphics g, Rectangle textBounds, string caption, float amount)
+        {
+            if (amount <= 0.001f) return;
+
+            int diameter = Math.Max(2, _barHeight);
+            int gap = Math.Max(2, _barHeight);
+
+            float halfGlyph = g.MeasureString(caption, _font).Width / 2f;
+            int x = textBounds.X + textBounds.Width / 2 + (int)Math.Ceiling(halfGlyph) + gap;
+
+            // Clamped to the button's own right edge so a two-digit number on a narrow
+            // button cannot push the dot into the next button over.
+            int rightLimit = textBounds.Right - diameter;
+            if (x > rightLimit) x = rightLimit;
+
+            int y = textBounds.Y + textBounds.Height / 2 - diameter / 2;
+
+            Color muted = Palette.MutedText(_background);
+            using (var brush = new SolidBrush(Color.FromArgb((int)(255 * amount), muted)))
+                g.FillEllipse(brush, x, y, diameter, diameter);
         }
 
         void EnsureFont(int height)

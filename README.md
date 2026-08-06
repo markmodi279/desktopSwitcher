@@ -71,6 +71,11 @@ Hover a number and a panel appears above it listing the windows open on that des
 Windows 10 otherwise gives you no way to see that without `Win+Tab`. Desktops with nothing
 on them say so, which is how you find the one that is safe to remove.
 
+A dim dot beside a number means that desktop has windows on it; no dot means it is empty —
+the same thing the hover panel tells you, without having to hover. It follows the desktops
+themselves, refreshed every couple of seconds, so a window opened or closed elsewhere
+catches up shortly rather than only at the next hover.
+
 A desktop's name — set from the menu, or in Task View (`Win+Tab`, right-click a desktop,
 **Rename**) — is what the panel is titled with. Renaming from the menu shows up
 immediately; a rename made in Task View is picked up the next time you switch desktops.
@@ -98,6 +103,7 @@ your display automatically.
 | `margin` | `6` | gap between the strip and the tray icons |
 | `reconcileMs` | `2000` | safety-net poll interval |
 | `contextMenu` | `true` | right-click menu; `false` puts right click back to sending the window |
+| `occupancyDots` | `true` | dot beside a number that has windows on it; `false` stops the sweep entirely |
 | `tooltips` | `true` | hover panel showing each desktop's windows |
 | `tooltipDelayMs` | `400` | hover delay before the panel appears |
 | `tooltipMaxWindows` | `8` | titles listed before the rest collapse into `+N more` |

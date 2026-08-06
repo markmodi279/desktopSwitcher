@@ -90,10 +90,74 @@ namespace DesktopSwitcher
             return new WindowEntry(app, TrimRepeat(title, app));
         }
 
+        /// <summary>
+        /// Which desktops have at least one window, without the cost of describing what:
+        /// no process query, no UWP frame/core pairing, no title work - a boolean needs
+        /// none of it. What the strip's occupancy dot asks for, on the reconcile tick,
+        /// where the full sweep - priced per hover in EnsureFresh's own doc - could not
+        /// run every couple of seconds without cost.
+        ///
+        /// Reuses a still-fresh full sweep's keys rather than re-enumerating: they are
+        /// already the answer, and a hover moments before a tick would otherwise pay for
+        /// the same windows twice.
+        ///
+        /// Stops early once every desktop passed is accounted for, so a machine with one
+        /// window per desktop pays for one GetWindowDesktopId, not the whole window list.
+        ///
+        /// Null when the shell is unavailable, mid-restart - the caller's cue to hold
+        /// whatever dots are already on screen rather than blank them, the same contract
+        /// Refresh() keeps for the full sweep.
+        /// </summary>
+        public HashSet<Guid> OccupiedDesktops(int desktopCount)
+        {
+            if (_age.IsRunning && _age.ElapsedMilliseconds < CacheMs)
+                return new HashSet<Guid>(_byDesktop.Keys);
+
+            var occupied = new HashSet<Guid>();
+            try
+            {
+                List<IntPtr> candidates = EnumerateAltTabWindows();
+                for (int i = 0; i < candidates.Count && occupied.Count < desktopCount; i++)
+                {
+                    Guid desktop;
+                    if (_api.TryGetWindowDesktop(candidates[i], out desktop))
+                        occupied.Add(desktop);
+                }
+            }
+            catch (ShellUnavailableException)
+            {
+                Log.Write("inventory: shell unavailable, occupancy sweep skipped");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("inventory: occupancy sweep failed - " + ex.Message);
+                return null;
+            }
+
+            return occupied;
+        }
+
         void EnsureFresh()
         {
             if (_age.IsRunning && _age.ElapsedMilliseconds < CacheMs) return;
             Refresh();
+        }
+
+        /// <summary>
+        /// GetTopWindow/GW_HWNDNEXT rather than EnumWindows: same set, but in z-order, so
+        /// each desktop's list reads most-recently-used first.
+        /// </summary>
+        static List<IntPtr> EnumerateAltTabWindows()
+        {
+            var candidates = new List<IntPtr>();
+            IntPtr hwnd = Native.GetTopWindow(IntPtr.Zero);
+            while (hwnd != IntPtr.Zero)
+            {
+                if (Native.IsAltTabWindow(hwnd)) candidates.Add(hwnd);
+                hwnd = Native.GetWindow(hwnd, Native.GW_HWNDNEXT);
+            }
+            return candidates;
         }
 
         void Refresh()
@@ -107,16 +171,7 @@ namespace DesktopSwitcher
 
             try
             {
-                // GetTopWindow/GW_HWNDNEXT rather than EnumWindows: same set, but in
-                // z-order, so each desktop's list reads most-recently-used first.
-                var candidates = new List<IntPtr>();
-                IntPtr hwnd = Native.GetTopWindow(IntPtr.Zero);
-                while (hwnd != IntPtr.Zero)
-                {
-                    if (Native.IsAltTabWindow(hwnd)) candidates.Add(hwnd);
-                    hwnd = Native.GetWindow(hwnd, Native.GW_HWNDNEXT);
-                }
-
+                List<IntPtr> candidates = EnumerateAltTabWindows();
                 var uwp = new UwpPairs(candidates);
 
                 for (int i = 0; i < candidates.Count; i++)

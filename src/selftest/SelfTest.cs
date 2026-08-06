@@ -40,6 +40,7 @@ namespace DesktopSwitcher
                 {
                     case "--list":    return CmdList(api);
                     case "--desktops": return CmdDesktops(api);
+                    case "--occupancy": return CmdOccupancy(api);
                     case "--switch":  return CmdSwitch(api, args);
                     case "--create":  return CmdCreate(api);
                     case "--remove":  return CmdRemove(api, args);
@@ -80,6 +81,7 @@ namespace DesktopSwitcher
             Console.WriteLine("Selftest commands:");
             Console.WriteLine("  --list                 show all desktops");
             Console.WriteLine("  --desktops             show all desktops with the windows on each");
+            Console.WriteLine("  --occupancy            check the occupancy dot's cheap sweep against the full sweep");
             Console.WriteLine("  --switch N             switch to desktop N (1-based)");
             Console.WriteLine("  --create               create a new desktop");
             Console.WriteLine("  --remove N             remove desktop N");
@@ -163,6 +165,58 @@ namespace DesktopSwitcher
             Console.WriteLine("  " + total + " windows total. Compare against Win+Tab.");
             Console.WriteLine();
             return 0;
+        }
+
+        /// <summary>
+        /// Cross-checks WindowInventory.OccupiedDesktops - the cheap sweep behind the
+        /// strip's occupancy dot - against the full sweep CmdDesktops already trusts. The
+        /// dot is wrong exactly when these two disagree, which is not something the eye
+        /// can catch: a dim dot and no dot look the same amount of correct from the
+        /// screenshot alone.
+        ///
+        /// Two WindowInventory instances, deliberately - not one sequence of calls on one.
+        /// A single instance's OccupiedDesktops would reuse the full sweep's still-fresh
+        /// cache and trivially agree with it by construction, proving nothing about the
+        /// cheap path's own enumeration. Separate instances force it to actually run.
+        /// </summary>
+        static int CmdOccupancy(VirtualDesktopApi api)
+        {
+            IList<Desktop> desktops = Snapshot(api);
+
+            var full = new WindowInventory(api);
+            var byFullSweep = new HashSet<Guid>();
+            foreach (Desktop d in desktops)
+                if (full.WindowsOn(d.Id).Count > 0) byFullSweep.Add(d.Id);
+
+            var cheapInventory = new WindowInventory(api);
+            HashSet<Guid> cheap = cheapInventory.OccupiedDesktops(desktops.Count);
+
+            Console.WriteLine("Desktops (" + desktops.Count + "):");
+            Console.WriteLine();
+
+            bool mismatch = false;
+            foreach (Desktop d in desktops)
+            {
+                bool isFull = byFullSweep.Contains(d.Id);
+                bool isCheap = cheap != null && cheap.Contains(d.Id);
+                bool agree = cheap == null || isFull == isCheap;
+                if (!agree) mismatch = true;
+
+                Console.WriteLine(string.Format("  [{0}] {1,-20} full={2,-5} cheap={3,-5}{4}",
+                    d.Number, d.DisplayName, isFull, isCheap,
+                    agree ? "" : "   <== MISMATCH"));
+            }
+
+            Console.WriteLine();
+            if (cheap == null)
+                Console.WriteLine("  cheap sweep returned null (shell unavailable) - the dot would hold its last state.");
+            else if (mismatch)
+                Console.WriteLine("  MISMATCH - the occupancy dot would disagree with the hover panel.");
+            else
+                Console.WriteLine("  cheap sweep agrees with the full sweep on every desktop.");
+            Console.WriteLine();
+
+            return mismatch ? 1 : 0;
         }
 
         static int CmdSwitch(VirtualDesktopApi api, string[] args)
@@ -793,12 +847,23 @@ namespace DesktopSwitcher
 
                 foreground.Ignore(strip.Handle);
 
+                // Echoes Controller.RefreshOccupancy: the same inventory instance the
+                // tooltip provider already sweeps, pushed to the strip on the same tick
+                // the real app would use. Gated the same way too, so --strip with the
+                // config's occupancyDots off shows exactly what the app would.
+                EventHandler refreshOccupancy = delegate
+                {
+                    if (!cfg.OccupancyDots || service.Count < 2) return;
+                    strip.SetOccupancy(inventory.OccupiedDesktops(service.Count));
+                };
+
                 service.Start();
                 relayout(null, EventArgs.Empty);
+                refreshOccupancy(null, EventArgs.Empty);
 
                 var ticker = new System.Windows.Forms.Timer();
                 ticker.Interval = cfg.ReconcileMs;
-                ticker.Tick += delegate { service.Tick(); };
+                ticker.Tick += delegate { service.Tick(); refreshOccupancy(null, EventArgs.Empty); };
                 ticker.Start();
 
                 // Faster than the reconcile tick: focus changes need catching promptly

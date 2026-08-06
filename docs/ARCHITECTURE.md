@@ -74,7 +74,7 @@ commented `do not reorder`. They are not stable across Windows versions; see
 |---|---|
 | [DesktopService.cs](../src/model/DesktopService.cs) | The only type the UI talks to. Owns the authoritative desktop list and merges the two sources it arrives from. |
 | [Desktop.cs](../src/model/Desktop.cs) | Immutable snapshot of one desktop: id, index, name, whether it is current. |
-| [WindowInventory.cs](../src/model/WindowInventory.cs) | Which windows are on which desktop, and which app owns each one. Built on demand, cached for a second. |
+| [WindowInventory.cs](../src/model/WindowInventory.cs) | Which windows are on which desktop, and which app owns each one. Built on demand, cached for a second. Also answers the cheaper question of which desktops merely *have* windows, for the occupancy dot. |
 | [ForegroundTracker.cs](../src/model/ForegroundTracker.cs) | Remembers the last real window to hold focus, so "send the active window here" has something to send. |
 
 ### `src/ui/` — pixels and input
@@ -180,7 +180,7 @@ is what makes the marshalling real; do not remove it as dead code.
 | Timer | Interval | Job |
 |---|---|---|
 | startup | 500 ms | waits for the taskbar to exist at login, then stops |
-| reconcile | `reconcileMs` (2000) | model safety net |
+| reconcile | `reconcileMs` (2000) | model safety net, plus the occupancy dot's cheap window sweep |
 | watchdog | 1000 ms | is the taskbar still there, is the strip still in it |
 | focus | 300 ms | sample the foreground window |
 | save | 2000 ms | debounced config write |
@@ -260,11 +260,17 @@ be invisible. It is `WS_EX_NOACTIVATE` and click-through: taking focus would bre
 handling and overwrite the window the foreground tracker is holding, which is what
 right-click-to-send depends on.
 
-**Window lists are built on hover, never on a timer.** Windows on other desktops stay
-enumerable, so one sweep plus one `GetWindowDesktopId` per window buckets the whole machine
-at once; the result is cached for a second. Cloaking cannot be used as the filter, because
-the shell cloaks suspended UWP frames with the same flag it uses for windows on an inactive
-desktop — what separates them is that the ghosts have no desktop at all.
+**Full window lists are built on hover, never on a timer — but occupancy, being a boolean,
+can afford one.** Windows on other desktops stay enumerable, so one sweep plus one
+`GetWindowDesktopId` per window buckets the whole machine at once; the result is cached for
+a second. Cloaking cannot be used as the filter, because the shell cloaks suspended UWP
+frames with the same flag it uses for windows on an inactive desktop — what separates them
+is that the ghosts have no desktop at all. That sweep also resolves a process name per
+window, which is the part a timer cannot be allowed to pay for repeatedly. The occupancy
+dot needs none of it: `WindowInventory.OccupiedDesktops` runs the same enumeration and the
+same `GetWindowDesktopId` calls, skips everything after, and stops early once every desktop
+passed in has turned up occupied — cheap enough for the reconcile tick to call it every
+couple of seconds, which is what feeds the dot.
 
 **The foreground window cannot be read at click time.** Clicking the taskbar hands focus to
 Explorer, so by the time a handler runs, the foreground window is `Shell_TrayWnd` — and
