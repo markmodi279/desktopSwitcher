@@ -46,6 +46,8 @@ namespace DesktopSwitcher
         int _buttonWidth, _plusWidth, _margin, _barHeight;
         Color _background;
         bool _started;
+        bool _sessionNotifications;   // whether the unlock message is being delivered
+        string _settleReason = "";    // what queued the pending rebuild, for the log
         int _pendingCount = -1;
 
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -77,6 +79,12 @@ namespace DesktopSwitcher
             // into the light.
             IntPtr pump = Handle;
             GC.KeepAlive(pump);
+
+            // Needs the handle, so it goes after the line above and not before it.
+            _sessionNotifications =
+                Native.WTSRegisterSessionNotification(pump, Native.NOTIFY_FOR_THIS_SESSION);
+            if (!_sessionNotifications)
+                Log.Write("controller: session notifications unavailable - unlock resample disabled");
 
             BuildTrayIcon();
 
@@ -796,11 +804,43 @@ namespace DesktopSwitcher
             {
                 QueueSettledRebuild("colour set changed");
             }
+            else if (_started && m.Msg == WM_POWERBROADCAST
+                     && (int)m.WParam == PBT_APMRESUMEAUTOMATIC)
+            {
+                QueueSettledRebuild("resumed from sleep");
+            }
+            else if (_started && m.Msg == WM_WTSSESSION_CHANGE
+                     && (int)m.WParam == WTS_SESSION_UNLOCK)
+            {
+                QueueSettledRebuild("session unlocked");
+            }
 
             base.WndProc(ref m);
         }
 
         const int WM_SETTINGCHANGE = 0x001A;
+
+        // Waking is two events, not one, and the strip's colour depends on the second.
+        //
+        // The resume fires while the lock screen is still covering the taskbar, so the
+        // rebuild it triggers cannot sample - TrySampleBackground now refuses, and the strip
+        // keeps the colour it had, which is the right answer for a wallpaper that did not
+        // change. The unlock is when the taskbar is genuinely back, and its rebuild is the
+        // one that can read a real pixel. Handling only the resume was the whole bug;
+        // handling only the unlock would leave a wake without a lock screen uncovered.
+        //
+        // Both are wanted anyway: either may be the one that notices a theme changed while
+        // the machine was asleep, and QueueSettledRebuild collapses a burst of them into a
+        // single rebuild, so the pair costs nothing.
+        //
+        // PBT_APMRESUMEAUTOMATIC and not PBT_APMRESUMESUSPEND: the automatic one is sent for
+        // every resume, where the suspend one is sent only when the wake was user-initiated
+        // and is skipped entirely when the machine woke on a timer or the lid.
+        const int WM_POWERBROADCAST = 0x0218;
+        const int PBT_APMRESUMEAUTOMATIC = 0x0012;
+
+        const int WM_WTSSESSION_CHANGE = 0x02B1;
+        const int WTS_SESSION_UNLOCK = 0x8;
 
         /// <summary>
         /// Whether this WM_SETTINGCHANGE is the one that means the colours moved.
@@ -836,19 +876,28 @@ namespace DesktopSwitcher
         /// Rebuilds the strip a moment after the pixel it samples might have moved, and
         /// only once.
         ///
-        /// Covers both an accent/light-dark switch and a display change - the latter fires
-        /// on waking from sleep as the monitor comes back, not only on an actual resolution
-        /// change. Windows sends several of these in a burst as the change propagates, and
-        /// the taskbar has not finished repainting when the first one arrives - sampling
-        /// then reads the colour it is on its way out of (or, coming out of sleep, whatever
-        /// transient frame DWM had not yet replaced), which is worse than not resampling at
-        /// all and, unlike a failed read, does not fall back to the last good colour - it
-        /// looks like a successful sample and gets cached until the next trigger. One timer,
-        /// restarted by every message in the burst, so the work happens once and late enough
-        /// for the pixel to have settled.
+        /// Covers an accent or light-dark switch, a display change, a resume, and an unlock.
+        /// Windows sends several of these in a burst as the change propagates, and the
+        /// taskbar has not finished repainting when the first one arrives - sampling then
+        /// reads the colour it is on its way out of. One timer, restarted by every message
+        /// in the burst, so the work happens once and late enough for the pixel to have
+        /// settled.
+        ///
+        /// The delay is for repaints in progress and nothing more. It used to be asked to
+        /// carry the sleep case too, which it could not: the taskbar was not mid-repaint
+        /// after a wake, it was underneath the lock screen, and no delay reaches past a
+        /// sign-in that might not come for hours. That belongs to the probe's ownership
+        /// check in TrySampleBackground, which is what makes firing this on a resume safe
+        /// rather than actively harmful.
         /// </summary>
         void QueueSettledRebuild(string reason)
         {
+            // The reason has to live outside the closure. The Tick handler is built once, on
+            // the first call, so a captured parameter would pin whichever reason happened to
+            // come first and every later log line would name it - the burst that actually
+            // triggered the rebuild going unrecorded, in the one log written to diagnose it.
+            _settleReason = reason;
+
             if (_settleTimer == null)
             {
                 _settleTimer = new Timer();
@@ -858,7 +907,7 @@ namespace DesktopSwitcher
                     _settleTimer.Stop();
                     if (!_started) return;
 
-                    Log.Write("controller: " + reason + " - resampling");
+                    Log.Write("controller: " + _settleReason + " - resampling");
                     RebuildStrip();
                 };
             }
@@ -1074,6 +1123,13 @@ namespace DesktopSwitcher
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             Log.Write("controller: shutting down");
+
+            // Before the handle goes, while there is still something to unregister.
+            if (_sessionNotifications)
+            {
+                Native.WTSUnRegisterSessionNotification(Handle);
+                _sessionNotifications = false;
+            }
 
             StopTimer(ref _startupTimer);
             StopTimer(ref _reconcileTimer);

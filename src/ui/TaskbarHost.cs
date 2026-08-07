@@ -214,6 +214,15 @@ namespace DesktopSwitcher
         /// read. What came back was the colour the strip was already painted, which it then
         /// dutifully repainted itself - a sample that could confirm anything except that
         /// the taskbar had changed.
+        ///
+        /// Fails rather than guessing when the taskbar is not the window at that pixel. The
+        /// screen DC returns what is on screen, not what the taskbar is, and on waking from
+        /// sleep the lock screen is on screen - fullscreen, over the taskbar - when the
+        /// display change arrives. GetPixel read the lock screen's wallpaper, succeeded, and
+        /// the strip repainted itself that colour and kept it: nothing resamples after an
+        /// unlock, so it survived until an Explorer restart, a theme change, or the tray's
+        /// reload item. Delaying the read cannot help, and the delay already there was aimed
+        /// at this and missed. The pixel had settled. It belonged to a different window.
         /// </summary>
         public bool TrySampleBackground(int stripWidth, int margin, out Color color)
         {
@@ -238,6 +247,17 @@ namespace DesktopSwitcher
             int x = anchorScreenX - margin - stripWidth - Scale(8);
             int y = tray.Top + tray.Height / 2;
             if (x < tray.Left) x = tray.Left + Scale(4);
+
+            // Whose pixel is this? Anything covering the taskbar - the lock screen after a
+            // wake, a fullscreen app - would otherwise be sampled as though it were the
+            // taskbar. Returning false here hands the caller its existing "keep the last
+            // good colour" path, which is the right answer: a translucent taskbar over an
+            // unchanged wallpaper is still the colour it was.
+            if (Native.RootWindowFromPoint(x, y) != _tray)
+            {
+                Log.Write("taskbar: probe point is not the taskbar - sample skipped");
+                return false;
+            }
 
             // The screen DC, not the taskbar's own. Under DWM a foreign window's DC does
             // not contain its composited pixels, so GetPixel there returns CLR_INVALID;

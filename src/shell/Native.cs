@@ -183,6 +183,37 @@ namespace DesktopSwitcher
         [DllImport("user32.dll", SetLastError = true)]
         public static extern IntPtr GetParent(IntPtr hWnd);
 
+        [DllImport("user32.dll")]
+        public static extern IntPtr WindowFromPoint(POINT point);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+
+        public const uint GA_ROOT = 2;
+
+        /// <summary>
+        /// The top-level window that owns whatever is on screen at a point.
+        ///
+        /// GA_ROOT, not a bare GetParent: WindowFromPoint returns the deepest child at the
+        /// point, so over an empty stretch of taskbar it answers MSTaskListWClass, and over
+        /// the tray it answers something else again. Comparing that against Shell_TrayWnd
+        /// directly would reject every point on the taskbar except the few pixels the
+        /// taskbar itself still owns. Walking to the root is the question actually being
+        /// asked - which window is this pixel part of.
+        /// </summary>
+        public static IntPtr RootWindowFromPoint(int x, int y)
+        {
+            var pt = new POINT();
+            pt.X = x;
+            pt.Y = y;
+
+            IntPtr hit = WindowFromPoint(pt);
+            if (hit == IntPtr.Zero) return IntPtr.Zero;
+
+            IntPtr root = GetAncestor(hit, GA_ROOT);
+            return root != IntPtr.Zero ? root : hit;
+        }
+
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool SetWindowPos(IntPtr hWnd, IntPtr insertAfter,
                                                int x, int y, int cx, int cy, uint flags);
@@ -326,6 +357,24 @@ namespace DesktopSwitcher
 
         [DllImport("kernel32.dll")]
         public static extern uint GetCurrentThreadId();
+
+        // --- session notifications ---------------------------------------------
+
+        // Lock and unlock are the only way to learn that the screen is ours again after a
+        // wake. WM_POWERBROADCAST arrives with the lock screen still up, so on its own it
+        // says the machine is awake and nothing about whether the taskbar is visible.
+        //
+        // Unlike WM_POWERBROADCAST, which every top-level window gets for free, these have
+        // to be asked for. Failing is survivable - the resample simply waits for the next
+        // trigger - so the caller logs and carries on rather than treating it as fatal.
+
+        [DllImport("wtsapi32.dll", SetLastError = true)]
+        public static extern bool WTSRegisterSessionNotification(IntPtr hWnd, uint flags);
+
+        [DllImport("wtsapi32.dll", SetLastError = true)]
+        public static extern bool WTSUnRegisterSessionNotification(IntPtr hWnd);
+
+        public const uint NOTIFY_FOR_THIS_SESSION = 0;
 
         // --- constants --------------------------------------------------------
 
