@@ -214,6 +214,21 @@ namespace DesktopSwitcher
             return new Rectangle(strip.Left + button.X, strip.Top, button.Width, strip.Height);
         }
 
+        /// <summary>
+        /// The whole strip in screen coordinates. What the removal confirmation anchors
+        /// to - unlike a button anchor, it does not travel with whichever button was
+        /// clicked, since the dialog is modal and has no pointer to follow.
+        ///
+        /// Empty when the strip has no window rect, which means it is being torn down.
+        /// </summary>
+        public Rectangle ScreenBounds()
+        {
+            Native.RECT strip;
+            if (!Native.GetWindowRect(Handle, out strip)) return Rectangle.Empty;
+
+            return new Rectangle(strip.Left, strip.Top, strip.Width, strip.Height);
+        }
+
         // --- model ------------------------------------------------------------
 
         /// <summary>

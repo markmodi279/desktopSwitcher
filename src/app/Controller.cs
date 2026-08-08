@@ -247,7 +247,7 @@ namespace DesktopSwitcher
 
             _strip.SwitchRequested += delegate(Guid id) { _service.SwitchTo(id); };
             _strip.CreateRequested += delegate { _service.Create(); };
-            _strip.RemoveRequested += delegate(Guid id) { _service.Remove(id); };
+            _strip.RemoveRequested += delegate(Guid id) { RequestRemove(id); };
             _strip.MoveWindowRequested += OnMoveWindowRequested;
             _strip.TooltipProvider = BuildTooltip;
 
@@ -429,9 +429,46 @@ namespace DesktopSwitcher
             // Windows moves the windows to another desktop rather than closing them, but
             // finding them again is still a nuisance.
             AddItem(menu, RemoveCaption(desktop), desktops.Count > 1,
-                    delegate { _service.Remove(id); });
+                    delegate { RequestRemove(id); });
 
             return menu;
+        }
+
+        /// <summary>
+        /// The one gate both removal paths - middle click and the menu's Remove item -
+        /// go through. An empty desktop is removed on the spot, exactly as before;
+        /// one with windows on it gets a themed confirmation first, since the OS moves
+        /// those windows to a neighbour rather than closing them, and finding them again
+        /// afterward is a nuisance worth a second click to avoid by accident.
+        /// </summary>
+        void RequestRemove(Guid id)
+        {
+            Desktop desktop = Find(id);
+            if (desktop == null) return;
+
+            int count = _inventory.WindowsOn(id).Count;
+            if (count == 0)
+            {
+                _service.Remove(id);
+                return;
+            }
+
+            Rectangle anchor = _strip != null ? _strip.ScreenBounds() : Rectangle.Empty;
+
+            using (var dialog = new ConfirmDialog(desktop.DisplayName, count, _background,
+                                                   _host.DpiScale, anchor))
+            {
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                    _service.Remove(id);
+            }
+        }
+
+        Desktop Find(Guid id)
+        {
+            IList<Desktop> desktops = _service.Desktops;
+            for (int i = 0; i < desktops.Count; i++)
+                if (desktops[i].Id == id) return desktops[i];
+            return null;
         }
 
         /// <summary>
