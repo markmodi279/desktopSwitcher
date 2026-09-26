@@ -239,11 +239,35 @@ namespace DesktopSwitcher
                 return;
             }
 
-            _strip = new SwitcherStrip(_host.TrayWindow, bounds,
-                                       _buttonWidth, _plusWidth, _barHeight,
-                                       _background, _config.HighlightColor,
-                                       (uint)_config.TooltipDelayMs, _config.TooltipWidth,
-                                       _config.AnimationMs, _host.DpiScale);
+            // Creating a child of Shell_TrayWnd can fail, and at login it does: the taskbar
+            // window exists and has a notification area, which is all TryStart waits for, but
+            // Explorer may still be replacing it, and CreateWindowEx on a parent that is
+            // gone or not yet accepting children throws Win32Exception "Error creating
+            // window handle". Uncaught, that escaped the timer tick as WinForms' "Unhandled
+            // exception" dialog, and the damage was not the dialog. TryStart had already
+            // stopped its startup timer and had not yet reached the lines that start the
+            // watchdog or set _started, so the app sat in the tray for good with no strip
+            // and nothing left running that would ever try again.
+            //
+            // So a failure here is an ordinary "no strip yet": leave _strip null, which is
+            // exactly the state the watchdog already treats as "strip missing - rebuilding",
+            // and let it retry every second until Explorer has settled. A stale parent is
+            // also caught by its IsHealthy check, which re-locates the taskbar first.
+            try
+            {
+                _strip = new SwitcherStrip(_host.TrayWindow, bounds,
+                                           _buttonWidth, _plusWidth, _barHeight,
+                                           _background, _config.HighlightColor,
+                                           (uint)_config.TooltipDelayMs, _config.TooltipWidth,
+                                           _config.AnimationMs, _host.DpiScale);
+            }
+            catch (System.ComponentModel.Win32Exception ex)
+            {
+                Log.Write("controller: strip window creation failed (win32 " + ex.NativeErrorCode
+                          + ") - " + ex.Message + "; watchdog will retry");
+                _strip = null;
+                return;
+            }
 
             _strip.SwitchRequested += delegate(Guid id) { _service.SwitchTo(id); };
             _strip.CreateRequested += delegate { _service.Create(); };
