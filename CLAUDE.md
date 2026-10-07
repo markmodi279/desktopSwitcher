@@ -109,6 +109,7 @@ shell.
 | `--list` | desktop enumeration, names, which is current |
 | `--desktops` | the full window inventory, per desktop, with app names |
 | `--occupancy` | the occupancy dot's cheap sweep against the full sweep, per desktop |
+| `--stats [N]` | the stats panel's rows a second apart, what each reading cost, and which network adapters are counted |
 | `--taskbar` | taskbar geometry, DPI scale, computed strip bounds, sampled colour |
 | `--where <title>` | whether a window is on the current desktop |
 | `--anim [ms]` | steps the strip's easing headlessly and prints each frame; needs no shell at all |
@@ -160,6 +161,7 @@ it before the next went on top.
 | **M11** | The underline bar travels between buttons instead of snapping. `Motion`, and the easing model everything animated now shares. |
 | **M12** | The hover panel travels too. Its edges are eased rather than an origin and a size, the strip's frame timer drives both, and `--slide` proves the arithmetic. |
 | **M13** | Occupancy dots: a cheap sweep in `WindowInventory` answers "does this desktop have windows" without the cost of the full one, pushed to the strip on the reconcile tick. `--occupancy` proves the cheap sweep against the full one. |
+| **M14** | The stats tile: CPU, memory and network in the hover panel, refreshed live, pinned open by a click. `SystemStats` samples on the reconcile tick so the first panel already has rates; `--stats` checks the figures and the adapter filter. |
 
 Between M8 and M9, two fixes worth knowing: tooltip rows lead with the owning app resolved
 from the process, and the tooltip width is fixed rather than sized to content so it does not

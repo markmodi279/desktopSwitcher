@@ -25,7 +25,10 @@ namespace DesktopSwitcher
 
         public string Title { get { return _title; } }
 
-        /// <summary>Window titles, or a single "empty" marker.</summary>
+        /// <summary>
+        /// Window titles, or a single "empty" marker - or, for the stats tile, tab-separated
+        /// columns, which the panel lines up on its tab stops.
+        /// </summary>
         public IList<string> Lines { get { return _lines; } }
     }
 
@@ -58,6 +61,13 @@ namespace DesktopSwitcher
 
         readonly Font _titleFont;
         readonly Font _bodyFont;
+
+        // Tab stops for rows that are columns rather than prose - the stats panel's
+        // "Memory <tab> 9.8 / 15.9 GB <tab> 61%". Spaces cannot line those up in a
+        // proportional font, and with the figures changing every second, unaligned columns
+        // would shuffle sideways on every refresh. Only rows that contain a tab are drawn or
+        // measured with it, so window titles render exactly as they always have.
+        readonly StringFormat _tabs;
 
         readonly int _padX, _padY, _accent, _width;
 
@@ -121,6 +131,12 @@ namespace DesktopSwitcher
             float body = (float)(12 * dpiScale);
             _titleFont = new Font("Segoe UI", body, FontStyle.Bold, GraphicsUnit.Pixel);
             _bodyFont = new Font("Segoe UI", body, FontStyle.Regular, GraphicsUnit.Pixel);
+
+            // Successive distances, not positions: stops at 72 and 72 + 110, authored at 96
+            // DPI. The first clears the longest label, "Network"; the second clears the
+            // widest main figure, "9.8 / 15.9 GB" or a download rate.
+            _tabs = new StringFormat();
+            _tabs.SetTabStops(0f, new float[] { Scale(72), Scale(110) });
 
             var cp = new CreateParams();
             cp.Caption = "DesktopSwitcherTooltip";
@@ -430,7 +446,7 @@ namespace DesktopSwitcher
         void Add(List<Row> rows, Graphics g, string text, Font font, Color ink)
         {
             var row = new Row();
-            row.Text = Fit(g, text, font, _width - _padX * 2);
+            row.Text = Fit(g, text, font, FormatFor(text), _width - _padX * 2);
             row.Font = font;
             row.Ink = ink;
             rows.Add(row);
@@ -494,17 +510,32 @@ namespace DesktopSwitcher
             return (int)Math.Ceiling(font.GetHeight()) + Scale(3);
         }
 
-        /// <summary>Trims a title to fit, with an ellipsis. Window titles run long.</summary>
-        static string Fit(Graphics g, string text, Font font, int maxWidth)
+        /// <summary>The tab-stop format for a row that has columns, null for one that does not.</summary>
+        StringFormat FormatFor(string text)
+        {
+            return text != null && text.IndexOf('\t') >= 0 ? _tabs : null;
+        }
+
+        /// <summary>
+        /// Trims a title to fit, with an ellipsis. Window titles run long. Measured with the
+        /// row's tab stops when it has them, since a tab is as wide as the gap to its stop.
+        /// </summary>
+        static string Fit(Graphics g, string text, Font font, StringFormat format, int maxWidth)
         {
             if (string.IsNullOrEmpty(text)) return "";
-            if (g.MeasureString(text, font).Width <= maxWidth) return text;
+            if (Width(g, text, font, format) <= maxWidth) return text;
 
             string s = text;
-            while (s.Length > 4 && g.MeasureString(s + "...", font).Width > maxWidth)
+            while (s.Length > 4 && Width(g, s + "...", font, format) > maxWidth)
                 s = s.Substring(0, s.Length - 4);
 
             return s + "...";
+        }
+
+        static float Width(Graphics g, string text, Font font, StringFormat format)
+        {
+            if (format == null) return g.MeasureString(text, font).Width;
+            return g.MeasureString(text, font, PointF.Empty, format).Width;
         }
 
         // --- rendering --------------------------------------------------------
@@ -587,8 +618,12 @@ namespace DesktopSwitcher
             {
                 Row row = _rows[i];
 
+                StringFormat format = FormatFor(row.Text);
                 using (var brush = new SolidBrush(row.Ink))
-                    g.DrawString(row.Text, row.Font, brush, _padX, y);
+                {
+                    if (format == null) g.DrawString(row.Text, row.Font, brush, _padX, y);
+                    else g.DrawString(row.Text, row.Font, brush, new PointF(_padX, y), format);
+                }
 
                 y += LineHeight(row.Font);
             }
@@ -692,6 +727,7 @@ namespace DesktopSwitcher
             if (_buffer != null) { _buffer.Dispose(); _buffer = null; }
             _titleFont.Dispose();
             _bodyFont.Dispose();
+            _tabs.Dispose();
         }
     }
 }

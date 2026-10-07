@@ -34,6 +34,22 @@ namespace DesktopSwitcher
     /// timer would duplicate the elapsed-time bookkeeping to run in lockstep with this one.
     /// OnFrame therefore asks the strip and the panel separately whether they moved, so a
     /// slide happening entirely above the taskbar does not repaint the taskbar for it.
+    ///
+    /// STATS TILE: optional, after '+', at index _desktops.Count + 1. It has no desktop and
+    /// raises no intent; its whole job is the panel, which shows CPU, memory and network and
+    /// refreshes once a second while it is up. Hover shows only an ordinary tooltip naming
+    /// the tile; the figures come from a click, which pins the panel, and a pinned panel is
+    /// where the panel *rests*: it still follows the pointer
+    /// to describe other buttons, and wherever it would otherwise have hidden - the pointer
+    /// leaving, a click, a desktop change - it returns to the tile instead. The content is
+    /// the controller's, through StatsProvider, for the same reason tooltip text is.
+    ///
+    /// Pinned comes in two strengths. Opened by a click on the tile, it is a popup: a press
+    /// anywhere but the tile closes it - see ClickWatcher. Opened by "Keep open" from the
+    /// tile's menu, it is kept: clicks elsewhere leave it alone, and only the tile or the
+    /// menu again close it. Either way, while the taskbar is not on
+    /// screen - auto-hidden, or under a fullscreen app - the panel is put away without
+    /// being unpinned, and comes back with the taskbar. See StatsCovered.
     /// </summary>
     sealed class SwitcherStrip : NativeWindow, IDisposable
     {
@@ -74,8 +90,30 @@ namespace DesktopSwitcher
         /// </summary>
         public const int ReshowMs = 80;
 
+        /// <summary>
+        /// How often an open stats panel re-reads its figures. A second is what Task Manager
+        /// uses at its normal speed, and it is slow enough that a figure can be read before
+        /// it changes. The timer behind it runs only while the stats panel is on screen.
+        /// </summary>
+        public const int StatsRefreshMs = 1000;
+
+        /// <summary>
+        /// How often a pinned panel checks that the taskbar it rests on is still on screen.
+        /// Faster than the refresh because the cases it catches are visible: an auto-hide
+        /// taskbar slides away a moment after the pointer leaves, and a panel lingering a
+        /// full second after it reads as left behind. The check is two cheap calls.
+        /// </summary>
+        public const int StatsGuardMs = 250;
+
+        /// <summary>
+        /// Posted by the ClickWatcher for every mouse press on the system, with the screen
+        /// point in lParam. Private to this window class, so WM_APP's range is ours.
+        /// </summary>
+        const int WM_CLICK_ANYWHERE = Native.WM_APP + 1;
+
         readonly int _buttonWidth;
         readonly int _plusWidth;
+        readonly int _statsWidth;      // 0 means no stats tile at all
         readonly int _barHeight;
         readonly uint _hoverDelay;
         readonly int _tooltipWidth;
@@ -100,10 +138,19 @@ namespace DesktopSwitcher
         Timer _frameTimer;             // runs only while something is actually moving
         int _lastFrame;                // Environment.TickCount at the last stepped frame
 
-        int _hoverIndex = -1;          // == _desktops.Count means the '+' button
+        int _hoverIndex = -1;          // == _desktops.Count means '+', one past it the stats tile
         int _menuIndex = -1;           // button whose context menu is open, by the same index
         bool _trackingMouse;
         bool _disposed;
+
+        bool _statsPinned;             // the panel rests on the stats tile instead of hiding
+        bool _statsKept;               // pinned from "Keep open": a click elsewhere does not close it
+        bool _showingStats;            // what the open panel says is the stats, not a button's
+        bool _statsDismissed;          // unpinned by a click; no hover panel until the pointer leaves the tile
+        bool _statsSuppressed;         // pinned, but put away because the taskbar is not on screen
+        int _statsShownAt;             // Environment.TickCount the figures were last read
+        Timer _statsTimer;             // runs only while the stats panel is up, or suppressed
+        ClickWatcher _clicks;          // exists only while pinned
 
         Color _background;
         Color _highlight;
@@ -114,13 +161,14 @@ namespace DesktopSwitcher
         Timer _reshowTimer;            // runs only between a button change and the follow
 
         public SwitcherStrip(IntPtr parent, Rectangle bounds,
-                             int buttonWidth, int plusWidth, int barHeight,
+                             int buttonWidth, int plusWidth, int statsWidth, int barHeight,
                              Color background, Color highlight,
                              uint hoverDelay, int tooltipWidth, int animationMs,
                              double dpiScale)
         {
             _buttonWidth = buttonWidth;
             _plusWidth = plusWidth;
+            _statsWidth = Math.Max(0, statsWidth);
             _barHeight = barHeight;
             _hoverDelay = hoverDelay;
             _tooltipWidth = tooltipWidth;
@@ -166,26 +214,58 @@ namespace DesktopSwitcher
         /// <summary>
         /// Supplies the text for a button's tooltip, by the same index HitTest returns -
         /// so _desktops.Count means the '+' button. Returning null suppresses the tooltip.
+        /// The stats tile comes here too, for its hover hint - StatsIndex - while it is not
+        /// pinned; its figures come from StatsProvider.
         ///
         /// The strip contributes geometry only. Content needs the desktop model, the
         /// window inventory and the foreground tracker, none of which belong here.
         /// </summary>
         public Func<int, TooltipContent> TooltipProvider { get; set; }
 
+        /// <summary>
+        /// Supplies the stats panel's text, told whether the panel is kept open so the title
+        /// can say so - a kept panel ignoring clicks elsewhere needs to explain itself, a
+        /// popup does not. Called once when the panel opens and again every StatsRefreshMs
+        /// while it stays up. Returning null suppresses the panel.
+        /// </summary>
+        public Func<bool, TooltipContent> StatsProvider { get; set; }
+
+        /// <summary>
+        /// The stats panel was pinned, kept or closed - (pinned, kept) - from a click on the
+        /// tile, a click elsewhere, or SetStatsPinned. The strip is rebuilt from scratch after
+        /// an Explorer restart, a theme change or an unlock, and the state would die with it;
+        /// the controller keeps it from here and hands it back to the new strip.
+        /// </summary>
+        public event Action<bool, bool> StatsPinChanged;
+
         // --- layout -----------------------------------------------------------
 
-        public static int MeasureWidth(int desktopCount, int buttonWidth, int plusWidth)
+        public static int MeasureWidth(int desktopCount, int buttonWidth, int plusWidth, int statsWidth)
         {
-            return desktopCount * buttonWidth + plusWidth;
+            return desktopCount * buttonWidth + plusWidth + Math.Max(0, statsWidth);
         }
 
-        public int Width { get { return MeasureWidth(_desktops.Count, _buttonWidth, _plusWidth); } }
+        public int Width { get { return MeasureWidth(_desktops.Count, _buttonWidth, _plusWidth, _statsWidth); } }
+
+        /// <summary>
+        /// The stats tile's index, by the same numbering HitTest uses, or -1 when there is no
+        /// tile. Public so the controller can tell its context menu apart from '+'.
+        /// </summary>
+        public int StatsIndex { get { return _statsWidth > 0 ? _desktops.Count + 1 : -1; } }
+
+        /// <summary>Every button, '+' and the stats tile included: what _visuals is sized to.</summary>
+        int SlotCount { get { return _desktops.Count + (_statsWidth > 0 ? 2 : 1); } }
 
         Rectangle ButtonBounds(int index, int height)
         {
-            if (index >= _desktops.Count)
-                return new Rectangle(_desktops.Count * _buttonWidth, 0, _plusWidth, height);
-            return new Rectangle(index * _buttonWidth, 0, _buttonWidth, height);
+            if (index < _desktops.Count)
+                return new Rectangle(index * _buttonWidth, 0, _buttonWidth, height);
+
+            int plusX = _desktops.Count * _buttonWidth;
+            if (index == _desktops.Count || _statsWidth <= 0)
+                return new Rectangle(plusX, 0, _plusWidth, height);
+
+            return new Rectangle(plusX + _plusWidth, 0, _statsWidth, height);
         }
 
         int HitTest(int x, int y)
@@ -195,6 +275,7 @@ namespace DesktopSwitcher
             int buttonsWidth = _desktops.Count * _buttonWidth;
             if (x < buttonsWidth) return x / _buttonWidth;
             if (x < buttonsWidth + _plusWidth) return _desktops.Count;
+            if (x < buttonsWidth + _plusWidth + _statsWidth) return _desktops.Count + 1;
             return -1;
         }
 
@@ -248,15 +329,22 @@ namespace DesktopSwitcher
 
             _desktops = new List<Desktop>(desktops);
 
-            if (_visuals.Length != _desktops.Count + 1)
-                _visuals = new ButtonVisual[_desktops.Count + 1];
+            if (_visuals.Length != SlotCount)
+                _visuals = new ButtonVisual[SlotCount];
 
-            if (_hoverIndex > _desktops.Count) _hoverIndex = -1;
-            if (_menuIndex > _desktops.Count) _menuIndex = -1;
+            if (_hoverIndex >= SlotCount) _hoverIndex = -1;
+            if (_menuIndex >= SlotCount) _menuIndex = -1;
 
             // Anything the panel was saying about desktop N may now describe a different
-            // desktop, since a removal renumbers everything after it.
-            HideTooltip();
+            // desktop, since a removal renumbers everything after it. The stats panel
+            // describes no desktop and is left exactly where it is: this runs on every
+            // desktop switch, and a pinned panel that blinked out and back each time would
+            // be pinned in name only. Not even re-anchored, because it does not need to be -
+            // the strip is right-anchored and the tile is its last button, so the tile's
+            // place on screen does not move when the count does. (Re-anchoring here would be
+            // actively wrong: the controller resizes the strip only after this returns, so
+            // the window rect AnchorFor reads is still the old one.)
+            if (!ShowingStats) RestOrHide();
 
             SyncVisuals();
             if (!sameSet) Settle();
@@ -293,11 +381,14 @@ namespace DesktopSwitcher
                 _visuals[i].HighlightTarget = isCurrent ? 1f : 0f;
 
                 // A button whose menu is open reads as hovered whatever the pointer is
-                // doing, so it stays visibly the one the menu belongs to.
-                _visuals[i].HoverTarget = (i == _hoverIndex || i == _menuIndex) ? 1f : 0f;
+                // doing, so it stays visibly the one the menu belongs to. A pinned stats
+                // tile likewise, so it is visibly the thing holding the panel up - and the
+                // thing to click to put it away.
+                bool pinned = _statsPinned && i == StatsIndex;
+                _visuals[i].HoverTarget = (i == _hoverIndex || i == _menuIndex || pinned) ? 1f : 0f;
 
-                // The '+' button has no desktop and so is never in _occupied - i beyond
-                // _desktops.Count reads false here the same way isCurrent does above.
+                // '+' and the stats tile have no desktop and so are never in _occupied - i
+                // at or beyond _desktops.Count reads false here the same way isCurrent does.
                 bool occupied = i < _desktops.Count && _occupied.Contains(_desktops[i].Id);
                 _visuals[i].DotTarget = occupied ? 1f : 0f;
             }
@@ -526,6 +617,10 @@ namespace DesktopSwitcher
             if (plusIndex < _visuals.Length)
                 DrawButton(g, ButtonBounds(plusIndex, height), "+", _visuals[plusIndex]);
 
+            int statsIndex = StatsIndex;
+            if (statsIndex >= 0 && statsIndex < _visuals.Length)
+                DrawStatsButton(g, ButtonBounds(statsIndex, height), _visuals[statsIndex]);
+
             DrawBar(g, height);
         }
 
@@ -549,6 +644,25 @@ namespace DesktopSwitcher
 
         void DrawButton(Graphics g, Rectangle bounds, string caption, ButtonVisual visual)
         {
+            DrawCell(g, bounds, visual);
+
+            using (var brush = new SolidBrush(Palette.RampText(_background, Emphasis(visual))))
+            using (var format = new StringFormat())
+            {
+                format.Alignment = StringAlignment.Center;
+                format.LineAlignment = StringAlignment.Center;
+
+                // Nudge up so the glyph looks centred in the space above the bar.
+                var textBounds = new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height - _barHeight);
+                g.DrawString(caption, _font, brush, textBounds, format);
+
+                DrawDot(g, textBounds, caption, visual.Dot);
+            }
+        }
+
+        /// <summary>The cell behind a button's glyph, lifted by hover and current.</summary>
+        void DrawCell(Graphics g, Rectangle bounds, ButtonVisual visual)
+        {
             // Hover and current both separate the cell from the bar; current adds the
             // underline. Which way that separation goes is Palette's problem - on a light
             // taskbar the cell darkens instead of lightening.
@@ -562,25 +676,77 @@ namespace DesktopSwitcher
             // The underline is not drawn here. See DrawBar: it travels between buttons,
             // and a bar drawn inside this loop can only fade out of one cell and into the
             // next, which reads as two bars rather than one moving.
+        }
 
+        /// <summary>How far up the text ramp a glyph sits, 0 resting to 1 full.</summary>
+        static float Emphasis(ButtonVisual visual)
+        {
             // Current desktop reads at full strength; hover carries an inactive one part of
             // the way there. HoverShare is the ratio the two tone steps used to stand in
             // before Palette owned the ramp - 30 of the 55 between resting and full - kept
             // exactly so a dark taskbar renders the same tones it always did.
             const float HoverShare = 30f / 55f;
-            float emphasis = Math.Min(1f, visual.Highlight + visual.Hover * HoverShare);
+            return Math.Min(1f, visual.Highlight + visual.Hover * HoverShare);
+        }
 
-            using (var brush = new SolidBrush(Palette.RampText(_background, emphasis)))
-            using (var format = new StringFormat())
+        /// <summary>
+        /// The stats tile: a dot with two arcs either side, "(( . ))" - a broadcast mark
+        /// with the mast taken out.
+        ///
+        /// The mast was the first version on the table and was dropped on purpose: a mast
+        /// with arcs is the network icon, and Windows draws its own a hundred pixels to the
+        /// right in the tray. Dot and arcs alone keep the look and lose the resemblance.
+        /// It replaced a three-bar chart drawn in the grey text ramp.
+        ///
+        /// In the accent colour rather than the text ramp - the one mark on the strip that is
+        /// not a number gets the one colour that is not grey. Muted at rest and full strength
+        /// when hovered or pinned, which carries the same "this one is live" cue the ramp
+        /// gives the numbers. Full accent at rest competed with the current-desktop underline,
+        /// which is the only other thing on the strip in that colour.
+        ///
+        /// Drawn rather than a character: no Segoe UI glyph has this shape, and the symbol
+        /// fonts that do would fall back to colour emoji or ignore the accent entirely.
+        /// Sized off the font, not the cell, so it is as tall as a digit beside it and centred
+        /// on the same line - textBounds is the same nudged-up rectangle the numbers centre in.
+        /// </summary>
+        void DrawStatsButton(Graphics g, Rectangle bounds, ButtonVisual visual)
+        {
+            DrawCell(g, bounds, visual);
+
+            var textBounds = new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height - _barHeight);
+
+            float cx = textBounds.X + textBounds.Width / 2f;
+            float cy = textBounds.Y + textBounds.Height / 2f;
+
+            // Outer arc as tall as a digit is, near enough; the inner one and the dot are
+            // proportions of it so the mark scales as one shape with DPI.
+            float glyph = Math.Max(8f, _font.Size * 0.85f);
+            float outer = glyph * 0.55f;
+            float inner = glyph * 0.32f;
+            float dot = Math.Max(1.5f, glyph * 0.12f);
+            float stroke = Math.Max(1.25f, (float)(_dpiScale * 1.3));
+
+            // 65% at rest, 100% hovered or pinned. Alpha rather than a blend toward the
+            // background so it holds the same hue on a light taskbar as on a dark one.
+            float strength = 0.65f + 0.35f * Math.Min(1f, visual.Hover);
+            Color ink = Color.FromArgb((int)(255 * strength), _highlight);
+
+            using (var pen = new Pen(ink, stroke))
+            using (var brush = new SolidBrush(ink))
             {
-                format.Alignment = StringAlignment.Center;
-                format.LineAlignment = StringAlignment.Center;
+                // Round caps, or the arc ends are square stubs that read as a broken circle.
+                pen.StartCap = LineCap.Round;
+                pen.EndCap = LineCap.Round;
 
-                // Nudge up so the glyph looks centred in the space above the bar.
-                var textBounds = new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height - _barHeight);
-                g.DrawString(caption, _font, brush, textBounds, format);
+                g.FillEllipse(brush, cx - dot, cy - dot, dot * 2, dot * 2);
 
-                DrawDot(g, textBounds, caption, visual.Dot);
+                // 90 degrees each, centred on the horizontal: wide enough to read as arcs,
+                // short enough that the pairs never close into rings.
+                foreach (float r in new float[] { inner, outer })
+                {
+                    g.DrawArc(pen, cx - r, cy - r, r * 2, r * 2, -45f, 90f);   // right
+                    g.DrawArc(pen, cx - r, cy - r, r * 2, r * 2, 135f, 90f);   // left
+                }
             }
         }
 
@@ -666,13 +832,14 @@ namespace DesktopSwitcher
             if (index == _hoverIndex) return;
 
             _hoverIndex = index;
+            _statsDismissed = false;   // off the tile, so the click that dismissed it is done
             SyncVisuals();
             Invalidate();
 
             // Restart the delay against the button now under the pointer.
             ArmTracking();
 
-            if (index < 0) { HideTooltip(); return; }
+            if (index < 0) { RestOrHide(); return; }
 
             // An open panel follows the pointer in two speeds. The geometry goes now, so it
             // is already travelling before the pointer has settled; the text waits out
@@ -685,11 +852,16 @@ namespace DesktopSwitcher
         void OnMouseLeave()
         {
             _trackingMouse = false;
-            HideTooltip();
 
-            if (_hoverIndex == -1) return;
-
+            // Cleared before RestOrHide, not after: a pinned panel's refresh decides whether
+            // to keep going by where the pointer is, and it has to see the pointer as gone.
+            bool wasHovering = _hoverIndex != -1;
             _hoverIndex = -1;
+            _statsDismissed = false;
+
+            RestOrHide();
+
+            if (!wasHovering) return;
 
             // SyncVisuals keeps a pinned button lit, so opening a menu - which takes the
             // pointer off the strip and fires this - does not darken the button under it.
@@ -704,7 +876,7 @@ namespace DesktopSwitcher
             ArmTracking();
 
             int index = HitTest(x, y);
-            if (index < 0) return;
+            if (index < 0) { RestOrHide(); return; }
 
             // The menu is the touchpad's only way to the actions the other buttons carry,
             // so it answers on every button, '+' included. With nothing listening - the
@@ -712,19 +884,46 @@ namespace DesktopSwitcher
             // before the menu existed.
             if (button == MouseButtons.Right && !shift && OpenMenu(index)) return;
 
-            if (index >= _desktops.Count)
+            // Before the '+' check, which would otherwise claim it: the tile is also an
+            // index at or past _desktops.Count.
+            if (index == StatsIndex)
             {
-                if (button == MouseButtons.Left) Raise(CreateRequested);
+                // Only left click means anything here. Pinning shows the panel at once,
+                // without the hover delay - the click is the request.
+                if (button == MouseButtons.Left)
+                {
+                    bool pin = !_statsPinned;
+                    SetStatsPinned(pin);
+
+                    // Unpinning is a request to put the panel away, but the pointer is still
+                    // on the tile and tracking was re-armed above, so the hover would put it
+                    // straight back 400ms later and the click would look like it did nothing.
+                    // Held off until the pointer leaves the tile.
+                    if (!pin) _statsDismissed = true;
+                }
+                else RestOrHide();
                 return;
             }
 
-            Guid id = _desktops[index].Id;
-            switch (button)
+            if (index >= _desktops.Count)
             {
-                case MouseButtons.Left:   Raise(SwitchRequested, id); break;
-                case MouseButtons.Right:  Raise(MoveWindowRequested, id); break;   // shift held
-                case MouseButtons.Middle: Raise(RemoveRequested, id); break;
+                if (button == MouseButtons.Left) Raise(CreateRequested);
             }
+            else
+            {
+                Guid id = _desktops[index].Id;
+                switch (button)
+                {
+                    case MouseButtons.Left:   Raise(SwitchRequested, id); break;
+                    case MouseButtons.Right:  Raise(MoveWindowRequested, id); break;   // shift held
+                    case MouseButtons.Middle: Raise(RemoveRequested, id); break;
+                }
+            }
+
+            // The click hid whatever was open. Pinned, the panel goes back to the tile -
+            // a click that changes nothing, like the current desktop's own button, would
+            // otherwise leave it dark until the pointer next left the strip.
+            RestOrHide();
         }
 
         // --- context menu -----------------------------------------------------
@@ -776,6 +975,10 @@ namespace DesktopSwitcher
 
             SyncVisuals();
             Invalidate();
+
+            // The panel declined to show while the menu was up. A pinned one comes back now
+            // rather than waiting for the pointer to leave.
+            if (_statsPinned) ShowStats();
         }
 
         int HitTestScreen(Point screen)
@@ -843,7 +1046,22 @@ namespace DesktopSwitcher
             // or by a caller that got there first.
             CancelReshow();
 
-            if (_disposed || _hoverIndex < 0 || TooltipProvider == null) return;
+            if (_disposed || _hoverIndex < 0) return;
+
+            // Hovering the tile gets an ordinary tooltip saying what it is, from
+            // TooltipProvider like any other button; the figures are only ever shown by a
+            // click. A live readout appearing on hover turned out to be more than anyone
+            // passing the pointer along the strip asked for. Pinned, the panel is already the
+            // stats and stays the stats - swapping it for the hint would read as the click
+            // having been undone. And just after a click put it away, nothing at all: the
+            // hint popping up in its place would look like the panel refusing to close.
+            if (_hoverIndex == StatsIndex)
+            {
+                if (_statsPinned) { ShowStats(); return; }
+                if (_statsDismissed) return;
+            }
+
+            if (TooltipProvider == null) return;
 
             // The menu already says what this button can do, and the panel would only be in
             // front of it or behind it.
@@ -862,8 +1080,7 @@ namespace DesktopSwitcher
 
             if (content == null) { HideTooltip(); return; }
 
-            if (_tooltip == null)
-                _tooltip = new TooltipWindow(_background, _highlight, _tooltipWidth, _dpiScale);
+            EnsureTooltip();
 
             // The button in screen coordinates: the panel anchors to it, and the accent
             // stub lines up under it.
@@ -871,6 +1088,11 @@ namespace DesktopSwitcher
             if (anchor.Width == 0) return;
 
             _tooltip.Show(content, anchor);
+
+            // It says something about a button now, so the stats refresh has nothing left
+            // to refresh and must not drag the panel back to the tile a second from now.
+            _showingStats = false;
+            StopStatsRefresh();
 
             // Show only retargets - a panel already open now has somewhere new to be, and
             // this is what puts a frame timer behind it. SyncVisuals does the same job for
@@ -906,7 +1128,313 @@ namespace DesktopSwitcher
         void HideTooltip()
         {
             CancelReshow();
+            StopStatsRefresh();
+            _showingStats = false;
+            _statsSuppressed = false;   // with the timer stopped, nothing would bring it back
             if (_tooltip != null) _tooltip.Hide();
+        }
+
+        void EnsureTooltip()
+        {
+            if (_tooltip == null)
+                _tooltip = new TooltipWindow(_background, _highlight, _tooltipWidth, _dpiScale);
+        }
+
+        // --- stats panel ------------------------------------------------------
+
+        /// <summary>The open panel is showing the stats, as opposed to a button or nothing.</summary>
+        bool ShowingStats
+        {
+            get { return _showingStats && _tooltip != null && _tooltip.IsVisible; }
+        }
+
+        /// <summary>
+        /// Whether the stats panel is on screen and taking its own readings once a second.
+        /// The controller skips its reconcile-tick reading while this is true: two callers
+        /// sampling on unrelated clocks, with MinIntervalMs settling the collisions, made
+        /// the window each rate was measured over wander between 0.6s and 1.4s, and the CPU
+        /// figure jumped about with it. One sampler keeps the window a steady second.
+        /// </summary>
+        public bool StatsShowing { get { return ShowingStats; } }
+
+        /// <summary>
+        /// Where the panel goes when nothing is asking for it: back to the tile when pinned,
+        /// away otherwise. Every place that used to hide the panel unconditionally - leaving
+        /// the strip, a click, a desktop set change - comes through here instead, so none of
+        /// them has to know a pin exists.
+        /// </summary>
+        void RestOrHide()
+        {
+            if (_statsPinned && StatsIndex >= 0) ShowStats();
+            else HideTooltip();
+        }
+
+        /// <summary>
+        /// Pins the stats panel as a popup, or unpins it. Pinning shows it now, unpinning puts
+        /// it away now. A no-op when there is no tile.
+        /// </summary>
+        public void SetStatsPinned(bool pinned)
+        {
+            SetStatsPinned(pinned, false);
+        }
+
+        /// <summary>
+        /// Pins the stats panel, kept or as a popup, or unpins it. A kept panel has no click
+        /// watch behind it at all, rather than one that ignores what it sees: the hook is a
+        /// system-wide cost, and a panel that will not act on clicks has no reason to pay it.
+        /// Switching a popup to kept, or back, leaves the panel exactly where it is.
+        /// </summary>
+        public void SetStatsPinned(bool pinned, bool kept)
+        {
+            if (_disposed || StatsIndex < 0) pinned = false;
+            if (!pinned) kept = false;
+            if (pinned == _statsPinned && kept == _statsKept) return;
+
+            bool wasPinned = _statsPinned;
+            _statsPinned = pinned;
+            _statsKept = kept;
+            _statsDismissed = false;
+            SyncVisuals();
+            Invalidate();
+
+            WatchClicks(pinned && !kept);
+
+            // Re-shown on a change of strength too, not only on opening, so the title picks
+            // up or drops "(kept open)" now rather than at the next refresh.
+            if (pinned) ShowStats();
+            else if (wasPinned && (ShowingStats || _statsSuppressed)) HideTooltip();
+
+            if (StatsPinChanged != null)
+            {
+                try { StatsPinChanged(pinned, kept); }
+                catch (Exception ex) { Log.Write("strip: handler threw - " + ex.Message); }
+            }
+        }
+
+        /// <summary>Whether the panel is kept open, as opposed to open as a popup or closed.</summary>
+        public bool StatsKept { get { return _statsKept; } }
+
+        /// <summary>
+        /// Puts the stats on the panel, anchored to the tile, and keeps them current. Safe
+        /// to call on a panel already showing them - that is exactly what each refresh is.
+        /// </summary>
+        void ShowStats()
+        {
+            CancelReshow();
+
+            int index = StatsIndex;
+            if (_disposed || index < 0 || StatsProvider == null) return;
+
+            // Same as ShowTooltip: the menu is up and answering for its button. MenuClosed
+            // brings a pinned panel back.
+            if (_menuIndex >= 0) return;
+
+            // Checked here rather than only on the guard tick, because this is also how a
+            // desktop change, a closed menu and a rebuild bring the panel back - and a
+            // Win+Ctrl+Arrow from inside a fullscreen game must not put it over the game.
+            if (StatsCovered()) { SuppressStats(); return; }
+
+            TooltipContent content;
+            try
+            {
+                content = StatsProvider(_statsKept);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("strip: stats provider threw - " + ex.Message);
+                return;
+            }
+
+            if (content == null) { HideTooltip(); return; }
+
+            EnsureTooltip();
+
+            Rectangle anchor = AnchorFor(index);
+            if (anchor.Width == 0) return;
+
+            _tooltip.Show(content, anchor);
+            _showingStats = true;
+            _statsSuppressed = false;
+            _statsShownAt = Environment.TickCount;
+            StartStatsRefresh();
+
+            // A panel arriving from another button slides here, and the frame timer is
+            // what carries it - see the same call at the end of ShowTooltip.
+            Animate();
+        }
+
+        void StartStatsRefresh()
+        {
+            if (_disposed) return;
+
+            if (_statsTimer == null)
+            {
+                _statsTimer = new Timer();
+                _statsTimer.Interval = StatsGuardMs;
+                _statsTimer.Tick += OnStatsRefresh;
+            }
+
+            // Not restarted if already running: a refresh is itself a call to ShowStats, and
+            // restarting from inside the tick it is handling would be harmless, but a hover
+            // re-show landing mid-interval would push the next refresh back each time.
+            if (!_statsTimer.Enabled) _statsTimer.Start();
+        }
+
+        void StopStatsRefresh()
+        {
+            if (_statsTimer != null) _statsTimer.Stop();
+        }
+
+        /// <summary>
+        /// Every StatsGuardMs: is the taskbar still there, and is a second up since the
+        /// figures were last read. The figures are re-read only on the second, so the
+        /// faster tick costs the check and nothing else.
+        /// </summary>
+        void OnStatsRefresh(object sender, EventArgs e)
+        {
+            // Pinned, with the pointer on the tile or off the strip. With the pointer on
+            // another button the panel is on its way there, and a refresh would yank it back.
+            bool wanted = _statsPinned && (_hoverIndex == StatsIndex || _hoverIndex < 0);
+
+            if (_statsSuppressed)
+            {
+                if (!_statsPinned) { HideTooltip(); return; }
+                if (StatsCovered()) return;   // still away; keep watching for the taskbar
+
+                // The taskbar is back. If the pointer is already on another button, that
+                // button's hover owns the panel now, and leaving the strip will bring the
+                // stats back through RestOrHide like any other time.
+                _statsSuppressed = false;
+                if (wanted) ShowStats();
+                else StopStatsRefresh();
+                return;
+            }
+
+            if (!ShowingStats || !wanted)
+            {
+                StopStatsRefresh();
+                return;
+            }
+
+            if (StatsCovered()) { SuppressStats(); return; }
+
+            // Half a guard tick of slack: a WinForms timer lands a few ms either side of its
+            // interval, and a strict 1000 would miss on the fourth tick at 998 and wait for
+            // the fifth, turning a one-second refresh into one of 1.0 or 1.25 at random.
+            int age = unchecked(Environment.TickCount - _statsShownAt);
+            if (age < 0 || age >= StatsRefreshMs - StatsGuardMs / 2) ShowStats();
+        }
+
+        /// <summary>
+        /// The taskbar the panel rests on is not on screen, so the panel should not be
+        /// either. Three ways that happens:
+        ///
+        /// The strip is hidden - it is the taskbar's child, so it is hidden whenever the
+        /// taskbar is. An auto-hide taskbar is different again: it is not hidden but slid
+        /// off the monitor edge with a two-pixel sliver left showing, so the strip is
+        /// "visible" and simply not on the monitor. Hence the containment test rather than
+        /// IsWindowVisible alone.
+        ///
+        /// And a fullscreen app, which covers the taskbar without moving it. That one the
+        /// shell has to tell us; see Native.SHQueryUserNotificationState.
+        /// </summary>
+        bool StatsCovered()
+        {
+            if (!Native.IsWindowVisible(Handle)) return true;
+
+            Native.RECT strip;
+            if (!Native.GetWindowRect(Handle, out strip)) return true;
+
+            var info = new Native.MONITORINFO();
+            info.cbSize = System.Runtime.InteropServices.Marshal.SizeOf(typeof(Native.MONITORINFO));
+            IntPtr monitor = Native.MonitorFromWindow(Handle, Native.MONITOR_DEFAULTTONEAREST);
+            if (monitor != IntPtr.Zero && Native.GetMonitorInfo(monitor, ref info))
+            {
+                Native.RECT m = info.rcMonitor;
+                if (strip.Left < m.Left || strip.Top < m.Top
+                    || strip.Right > m.Right || strip.Bottom > m.Bottom)
+                    return true;
+            }
+
+            int state;
+            try
+            {
+                if (Native.SHQueryUserNotificationState(out state) != 0) return false;
+            }
+            catch (Exception)
+            {
+                // Missing export or a shell that will not answer: assume nothing is in the
+                // way. Wrong only over a fullscreen app, which is how it behaved before.
+                return false;
+            }
+
+            return state == Native.QUNS_BUSY
+                || state == Native.QUNS_RUNNING_D3D_FULL_SCREEN
+                || state == Native.QUNS_PRESENTATION_MODE
+                || state == Native.QUNS_NOT_PRESENT;
+        }
+
+        /// <summary>
+        /// Puts the panel away without unpinning it, and keeps the guard tick running so it
+        /// comes back when the taskbar does. Not HideTooltip, which stops that tick.
+        /// </summary>
+        void SuppressStats()
+        {
+            CancelReshow();
+            _showingStats = false;
+            _statsSuppressed = true;
+            if (_tooltip != null && _tooltip.IsVisible) _tooltip.Hide();
+            StartStatsRefresh();
+        }
+
+        /// <summary>
+        /// Installs or removes the system-wide click watch that closes a pinned panel on a
+        /// click elsewhere. Only ever present while pinned.
+        /// </summary>
+        void WatchClicks(bool watch)
+        {
+            if (watch && _clicks == null && !_disposed)
+            {
+                try
+                {
+                    _clicks = new ClickWatcher(Handle, WM_CLICK_ANYWHERE);
+                }
+                catch (Exception ex)
+                {
+                    // Survivable: the panel still closes from its own tile, as it always did.
+                    Log.Write("strip: no click watch - " + ex.Message);
+                }
+            }
+            else if (!watch && _clicks != null)
+            {
+                _clicks.Dispose();
+                _clicks = null;
+            }
+        }
+
+        /// <summary>
+        /// A mouse press somewhere on the system, from the ClickWatcher. Anywhere but the
+        /// tile unpins the panel - the tile's own click is OnClick's, which toggles it, and
+        /// answering it here as well would close the panel on the press and reopen it on
+        /// the release.
+        ///
+        /// Ignored while a context menu is up. The press is then usually on the menu, and
+        /// one of its items is "Keep open"; unpinning on the press would close the popup the
+        /// item was about to keep. A press outside the menu closes the
+        /// menu, and MenuClosed brings the panel back - a second click closes it.
+        ///
+        /// A press on another of the strip's buttons counts as outside. That is the popup
+        /// convention, and it is what a panel opened by a click is: open until you click
+        /// elsewhere. A switch by keyboard still leaves it open - see SetDesktops. A kept
+        /// panel never gets here, since it has no watch installed; the check is for a press
+        /// already posted when "Keep open" was chosen.
+        /// </summary>
+        void OnClickAnywhere(Point screen)
+        {
+            if (!_statsPinned || _statsKept || _menuIndex >= 0) return;
+            if (HitTestScreen(screen) == StatsIndex) return;
+
+            SetStatsPinned(false);
         }
 
         void Raise(Action<Guid> handler, Guid id)
@@ -981,6 +1509,10 @@ namespace DesktopSwitcher
                     OnClick(Native.LoWord(m.LParam), Native.HiWord(m.LParam),
                             MouseButtons.Middle, Shift(m.WParam));
                     return;
+
+                case WM_CLICK_ANYWHERE:
+                    OnClickAnywhere(new Point(Native.LoWord(m.LParam), Native.HiWord(m.LParam)));
+                    return;
             }
 
             base.WndProc(ref m);
@@ -1005,6 +1537,11 @@ namespace DesktopSwitcher
             // Same reason, and one worse: a re-show landing after the tooltip is gone would
             // call ShowTooltip on a disposed panel.
             if (_reshowTimer != null) { _reshowTimer.Stop(); _reshowTimer.Dispose(); _reshowTimer = null; }
+            if (_statsTimer != null) { _statsTimer.Stop(); _statsTimer.Dispose(); _statsTimer = null; }
+
+            // A system-wide hook must not outlive the window it posts to. The controller
+            // hands the pin to the next strip, which installs its own.
+            if (_clicks != null) { _clicks.Dispose(); _clicks = null; }
 
             // Before the strip goes, so an Explorer restart cannot strand the panel on
             // screen: the tooltip is top-level and would otherwise outlive its parent.

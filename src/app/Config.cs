@@ -44,6 +44,15 @@ namespace DesktopSwitcher
         /// </summary>
         public bool OccupancyDots = true;
 
+        // --- system stats -------------------------------------------------------
+        /// <summary>
+        /// A tile after '+' whose panel shows CPU, memory and network throughput. Click to
+        /// open it, click again to close it; hovering only names the tile. Off removes the
+        /// tile and the sampling behind it, so it costs nothing.
+        /// </summary>
+        public bool StatsTile = true;
+        public int StatsWidth = 26;
+
         // --- tooltips ---------------------------------------------------------
         public bool Tooltips = true;
         /// <summary>Hover delay before the panel appears. 400ms is the Windows default.</summary>
@@ -141,6 +150,8 @@ namespace DesktopSwitcher
                 case "diagnostics":      Diagnostics     = ParseBool(val, Diagnostics);          break;
                 case "contextmenu":      ContextMenu     = ParseBool(val, ContextMenu);          break;
                 case "occupancydots":    OccupancyDots   = ParseBool(val, OccupancyDots);        break;
+                case "systemstats":      StatsTile       = ParseBool(val, StatsTile);            break;
+                case "statswidth":       StatsWidth      = ParseInt(val, StatsWidth, 12, 128);   break;
                 case "tooltips":         Tooltips        = ParseBool(val, Tooltips);             break;
                 case "tooltipdelayms":   TooltipDelayMs  = ParseInt(val, TooltipDelayMs, 0, 5000); break;
                 case "tooltipmaxwindows": TooltipMaxWindows = ParseInt(val, TooltipMaxWindows, 1, 40); break;
@@ -217,6 +228,8 @@ namespace DesktopSwitcher
             sb.AppendLine("diagnostics = "     + (Diagnostics ? "true" : "false"));
             sb.AppendLine("contextMenu = "     + (ContextMenu ? "true" : "false"));
             sb.AppendLine("occupancyDots = "   + (OccupancyDots ? "true" : "false"));
+            sb.AppendLine("systemStats = "     + (StatsTile ? "true" : "false"));
+            sb.AppendLine("statsWidth = "      + StatsWidth);
             sb.AppendLine("tooltips = "        + (Tooltips ? "true" : "false"));
             sb.AppendLine("tooltipDelayMs = "  + TooltipDelayMs);
             sb.AppendLine("tooltipMaxWindows = " + TooltipMaxWindows);

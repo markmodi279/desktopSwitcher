@@ -57,6 +57,7 @@ Everything undocumented lives here, and nothing above this folder knows a GUID.
 | [VirtualDesktopApi.cs](../src/shell/VirtualDesktopApi.cs) | The COM interfaces and every operation on a desktop: list, switch, create, remove, rename, move a window. No caching, no policy. |
 | [VirtualDesktopNotify.cs](../src/shell/VirtualDesktopNotify.cs) | The notification sink. Registers a COM object with the shell and turns its callbacks into .NET events. |
 | [Native.cs](../src/shell/Native.cs) | P/Invoke. Window enumeration, geometry, parenting, painting, DPI, process lookup. |
+| [ClickWatcher.cs](../src/shell/ClickWatcher.cs) | A low-level mouse hook on a thread of its own, posting every button press on the system to a window. Installed only while the stats panel is pinned, so a click elsewhere can close it. |
 
 Two rules hold this layer together. **`IVirtualDesktop` pointers are never held across
 calls** — they go stale the instant a desktop is added or removed, so every operation
@@ -76,6 +77,7 @@ commented `do not reorder`. They are not stable across Windows versions; see
 | [Desktop.cs](../src/model/Desktop.cs) | Immutable snapshot of one desktop: id, index, name, whether it is current. |
 | [WindowInventory.cs](../src/model/WindowInventory.cs) | Which windows are on which desktop, and which app owns each one. Built on demand, cached for a second. Also answers the cheaper question of which desktops merely *have* windows, for the occupancy dot. |
 | [ForegroundTracker.cs](../src/model/ForegroundTracker.cs) | Remembers the last real window to hold focus, so "send the active window here" has something to send. |
+| [SystemStats.cs](../src/model/SystemStats.cs) | CPU, memory and network throughput for the stats tile. Rates from the difference between two readings, network adapters cached between change notifications. |
 
 ### `src/ui/` — pixels and input
 
@@ -180,20 +182,23 @@ is what makes the marshalling real; do not remove it as dead code.
 | Timer | Interval | Job |
 |---|---|---|
 | startup | 500 ms | waits for the taskbar to exist at login, then stops |
-| reconcile | `reconcileMs` (2000) | model safety net, plus the occupancy dot's cheap window sweep |
+| reconcile | `reconcileMs` (2000) | model safety net, the occupancy dot's cheap window sweep, and a stats reading |
 | watchdog | 1000 ms | is the taskbar still there, is the strip still in it |
 | focus | 300 ms | sample the foreground window |
 | save | 2000 ms | debounced config write |
 | theme | 600 ms | debounced rebuild after `WM_SETTINGCHANGE`/`ImmersiveColorSet` |
 
-`SwitcherStrip` owns two more, and they are the only timers in the tree that are not always
+`SwitcherStrip` owns three more, and they are the only timers in the tree that are not always
 running. The animation frame timer, 15 ms, is started when a visual target changes and
 stopped on the first frame where nothing moved; it steps the strip's own buttons and bar
 *and* the hover panel's travel, because the two always move together — the same
 `WM_MOUSEMOVE` that lifts a button's hover tone is what aims the panel at it — and a second
 timer would only duplicate the elapsed-time bookkeeping to run in lockstep with the first.
 The re-show timer, 80 ms, is a one-shot that gates the panel's *text* while its geometry
-follows the pointer immediately.
+follows the pointer immediately. The stats timer, 250 ms, runs only while the stats panel is
+pinned: each tick checks that the taskbar is still on screen, and every fourth re-reads the
+figures. While it runs, the reconcile tick takes no stats reading of its own, so each rate is
+measured over a steady second rather than over whatever gap two unrelated clocks left.
 
 Everything above shares the UI thread with them, which is why each frame steps by measured
 elapsed time rather than by a fixed amount — a reconcile tick or an inventory sweep delays
@@ -271,6 +276,40 @@ dot needs none of it: `WindowInventory.OccupiedDesktops` runs the same enumerati
 same `GetWindowDesktopId` calls, skips everything after, and stops early once every desktop
 passed in has turned up occupied — cheap enough for the reconcile tick to call it every
 couple of seconds, which is what feeds the dot.
+
+**The stats tile is the panel's resting place when pinned, not a second panel.** It reuses
+the hover panel rather than opening a window of its own, so it slides, themes and places
+exactly as the desktop panels do. Only a click shows the figures. Hovering the tile gets the
+same kind of one-line hint `+` gets, because a live readout appearing on a passing hover was
+more than anyone asked for. Pinning changes one thing: every path that used to hide
+the panel — the pointer leaving, a click, a desktop change — goes through `RestOrHide`
+instead, which sends a pinned panel back to the tile. The panel still follows the pointer to
+describe other buttons in between. A desktop change leaves a stats panel untouched rather
+than re-anchoring it, and this is safe because the strip is right-anchored and the tile is
+its last button, so the tile does not move on screen when the count changes. The pin lives
+in `Controller` as well as the strip, because the strip is thrown away on every rebuild and
+an unlock is not the user closing the panel.
+
+**A pinned panel closes on a click elsewhere, and hides with the taskbar.** Both follow from
+the panel being a top-level topmost window rather than the taskbar's child. Nothing the app
+owns hears a click on another window, so `ClickWatcher` installs a low-level mouse hook while
+the panel is pinned, and any press other than on the tile unpins it. "Keep open" from the
+tile's menu pins it without the hook, for a panel that is meant to sit through clicks. The hook runs on a
+thread that does nothing but pump messages, because every mouse event on the system waits
+for the hook's thread to answer, and the UI thread is sometimes busy for tens of
+milliseconds. The strip is hidden along with the taskbar, but the panel is not, so it would
+float over a fullscreen video or hang in mid-air above an auto-hidden taskbar.
+`SwitcherStrip.StatsCovered` checks for both — the strip off its monitor, or
+`SHQueryUserNotificationState` reporting a fullscreen app — and the panel is put away
+without being unpinned until the taskbar is back.
+
+**Stats readings are cheap because the adapter list is cached.** CPU and memory are kernel32
+reads costing microseconds. `NetworkInterface.GetAllNetworkInterfaces` measured ~70 ms a
+call, too much for the UI thread every reconcile tick, while reading byte counters off
+adapters already enumerated measured 0.1 ms. So the list is rebuilt only when
+`NetworkChange` reports an address change, or every five minutes as a fallback.
+`PerformanceCounter` was avoided for the same kind of reason: the first one constructed in
+a process can stall for a second, and its category names are localised.
 
 **The foreground window cannot be read at click time.** Clicking the taskbar hands focus to
 Explorer, so by the time a handler runs, the foreground window is `Shell_TrayWnd` — and

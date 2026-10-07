@@ -376,6 +376,130 @@ namespace DesktopSwitcher
 
         public const uint NOTIFY_FOR_THIS_SESSION = 0;
 
+        // --- system counters ---------------------------------------------------
+
+        // The stats tile's CPU and memory figures. Both are plain kernel32 reads costing
+        // microseconds, which is why they and not PerformanceCounter: the first counter
+        // constructed in a process loads the perf libraries and can stall the UI thread
+        // for a second or more, and counter names are localised, so "Processor" is not
+        // what the category is called on a German install.
+
+        /// <summary>
+        /// Cumulative idle, kernel and user time across every processor, in 100ns ticks
+        /// since boot. Kernel time INCLUDES idle time - busy is (kernel + user - idle).
+        /// FILETIMEs, read straight into longs: both are 8 bytes, little-endian, and the
+        /// low dword comes first in each.
+        /// </summary>
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool GetSystemTimes(out long idle, out long kernel, out long user);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MEMORYSTATUSEX
+        {
+            public uint dwLength;           // must be set to the struct size before the call
+            public uint dwMemoryLoad;       // percent, 0..100
+            public ulong ullTotalPhys;
+            public ulong ullAvailPhys;
+            public ulong ullTotalPageFile;
+            public ulong ullAvailPageFile;
+            public ulong ullTotalVirtual;
+            public ulong ullAvailVirtual;
+            public ulong ullAvailExtendedVirtual;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX status);
+
+        // --- is the taskbar on screen ------------------------------------------
+
+        // The pinned stats panel is a top-level topmost window, so unlike the strip - a
+        // child of the taskbar, which Windows hides along with it - it has to be told when
+        // the taskbar is not there to rest on. These answer that cheaply enough to ask four
+        // times a second.
+
+        /// <summary>
+        /// The shell's own verdict on whether now is a time to put something in front of
+        /// the user. It is what toast notifications consult, so it already knows the cases
+        /// that matter - a fullscreen game, a fullscreen video, a presentation, the lock
+        /// screen - without our having to compare window rects against monitors.
+        /// </summary>
+        [DllImport("shell32.dll")]
+        public static extern int SHQueryUserNotificationState(out int state);
+
+        public const int QUNS_NOT_PRESENT = 1;               // locked, screensaver, user switch
+        public const int QUNS_BUSY = 2;                      // a fullscreen app has the foreground
+        public const int QUNS_RUNNING_D3D_FULL_SCREEN = 3;   // exclusive fullscreen D3D
+        public const int QUNS_PRESENTATION_MODE = 4;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MONITORINFO
+        {
+            public int cbSize;              // must be set to the struct size before the call
+            public RECT rcMonitor;
+            public RECT rcWork;
+            public uint dwFlags;
+        }
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
+
+        [DllImport("user32.dll")]
+        public static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
+
+        public const uint MONITOR_DEFAULTTONEAREST = 2;
+
+        // --- low-level mouse hook ----------------------------------------------
+
+        // For closing the pinned stats panel on a click anywhere else. See ClickWatcher.
+
+        public delegate IntPtr LowLevelMouseProc(int code, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc proc,
+                                                     IntPtr module, uint threadId);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool UnhookWindowsHookEx(IntPtr hook);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        public static extern IntPtr GetModuleHandle(string moduleName);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MSG
+        {
+            public IntPtr hwnd;
+            public uint message;
+            public IntPtr wParam;
+            public IntPtr lParam;
+            public uint time;
+            public POINT pt;
+        }
+
+        [DllImport("user32.dll")]
+        public static extern int GetMessage(out MSG msg, IntPtr hWnd, uint filterMin, uint filterMax);
+
+        [DllImport("user32.dll")]
+        public static extern bool PeekMessage(out MSG msg, IntPtr hWnd, uint filterMin, uint filterMax, uint remove);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool PostThreadMessage(uint threadId, int msg, IntPtr wParam, IntPtr lParam);
+
+        public const int WH_MOUSE_LL = 14;
+        public const uint PM_NOREMOVE = 0x0000;
+
+        public const int WM_QUIT = 0x0012;
+        public const int WM_APP = 0x8000;
+        public const int WM_LBUTTONDOWN = 0x0201;
+        public const int WM_RBUTTONDOWN = 0x0204;
+        public const int WM_MBUTTONDOWN = 0x0207;
+        public const int WM_XBUTTONDOWN = 0x020B;
+
         // --- constants --------------------------------------------------------
 
         public const uint GW_HWNDNEXT = 2;

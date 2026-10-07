@@ -46,6 +46,8 @@ Run the exe with no arguments. Then, on the strip:
 | Middle click a number | remove that desktop |
 | Left click `+` | create a desktop |
 | Right click `+` | menu — **New desktop** |
+| Left click the signal tile | open the CPU, memory and network panel; click again to close it |
+| Right click the signal tile | menu — **Keep open**, **Task Manager** |
 
 The menu exists because a touchpad cannot middle-click, which otherwise leaves removing a
 desktop with no gesture at all. It also says what it is about to do, which the bare
@@ -76,6 +78,22 @@ the same thing the hover panel tells you, without having to hover. It follows th
 themselves, refreshed every couple of seconds, so a window opened or closed elsewhere
 catches up shortly rather than only at the next hover.
 
+The small `(( • ))` mark after `+`, in your highlight colour, is the system tile. Hovering
+it only names it; click it for CPU, memory in use, and network throughput down and up,
+refreshed every second. The panel stays open once clicked: it still follows the pointer to
+describe other buttons, but goes back to the stats rather than disappearing when the pointer
+leaves. The mark brightens and its cell stays lit while the panel is open. Clicking it again,
+or clicking anywhere else, closes it. To have it stay through clicks elsewhere, right-click
+the tile and tick **Keep open**; it then closes only from the tile or by unticking. It steps aside while the taskbar is out of sight —
+auto-hidden, or behind a fullscreen video or game — and comes back with it.
+
+The figures are close to Task Manager's but not identical. CPU is "% Processor Time", which
+can read lower than Task Manager under load on a turbo-boosting CPU. Network is in bytes per
+second, the unit a browser shows downloads in; Task Manager shows bits, so its number is eight
+times larger. Virtual adapters — WSL, Hyper-V, VMware, VirtualBox — are left out of the
+network total, because their traffic also passes through the real adapter and would be
+counted twice. `--stats` lists which adapters are counted.
+
 A desktop's name — set from the menu, or in Task View (`Win+Tab`, right-click a desktop,
 **Rename**) — is what the panel is titled with. Renaming from the menu shows up
 immediately; a rename made in Task View is picked up the next time you switch desktops.
@@ -104,6 +122,8 @@ your display automatically.
 | `reconcileMs` | `2000` | safety-net poll interval |
 | `contextMenu` | `true` | right-click menu; `false` puts right click back to sending the window |
 | `occupancyDots` | `true` | dot beside a number that has windows on it; `false` stops the sweep entirely |
+| `systemStats` | `true` | the signal tile after `+` and its CPU / memory / network panel; `false` removes the tile and stops the sampling |
+| `statsWidth` | `26` | width of the signal tile at 96 DPI |
 | `tooltips` | `true` | hover panel showing each desktop's windows |
 | `tooltipDelayMs` | `400` | hover delay before the panel appears |
 | `tooltipMaxWindows` | `8` | titles listed before the rest collapse into `+N more` |

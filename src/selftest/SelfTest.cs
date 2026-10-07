@@ -41,6 +41,7 @@ namespace DesktopSwitcher
                     case "--list":    return CmdList(api);
                     case "--desktops": return CmdDesktops(api);
                     case "--occupancy": return CmdOccupancy(api);
+                    case "--stats":   return CmdStats(args);
                     case "--switch":  return CmdSwitch(api, args);
                     case "--create":  return CmdCreate(api);
                     case "--remove":  return CmdRemove(api, args);
@@ -82,6 +83,7 @@ namespace DesktopSwitcher
             Console.WriteLine("  --list                 show all desktops");
             Console.WriteLine("  --desktops             show all desktops with the windows on each");
             Console.WriteLine("  --occupancy            check the occupancy dot's cheap sweep against the full sweep");
+            Console.WriteLine("  --stats [N]            print the stats panel N times, a second apart, and which adapters count");
             Console.WriteLine("  --switch N             switch to desktop N (1-based)");
             Console.WriteLine("  --create               create a new desktop");
             Console.WriteLine("  --remove N             remove desktop N");
@@ -217,6 +219,120 @@ namespace DesktopSwitcher
             Console.WriteLine();
 
             return mismatch ? 1 : 0;
+        }
+
+        /// <summary>
+        /// The stats panel's rows, printed a second apart exactly as Controller.StatsContent
+        /// builds them, plus every network adapter on the machine and whether it is counted.
+        ///
+        /// The figures are meant to be read against Task Manager running alongside. CPU
+        /// will track it but can sit lower under load - see SystemStats.CpuPercent - and the
+        /// network figure is bytes where Task Manager's is bits. What only this command can
+        /// show is the adapter list: a download reported at double its real speed means an
+        /// adapter is counted that should not be, and the reason column says which rule let
+        /// it through.
+        ///
+        /// Also prints what each sample cost, because the app takes one on every reconcile
+        /// tick for as long as it runs.
+        /// </summary>
+        static int CmdStats(string[] args)
+        {
+            int count;
+            if (args.Length < 2 || !int.TryParse(args[1], out count) || count < 1) count = 5;
+
+            Console.WriteLine("Network adapters:");
+            Console.WriteLine();
+            foreach (System.Net.NetworkInformation.NetworkInterface ni in
+                     System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+            {
+                string reason = SystemStats.SkipReason(ni);
+                Console.WriteLine(string.Format("  {0,-9} {1,-28} {2}",
+                    reason == null ? "counted" : "skipped",
+                    Clip(ni.Name, 28),
+                    reason == null ? ni.Description : reason + " - " + ni.Description));
+            }
+            Console.WriteLine();
+
+            // What the pinned panel asks before showing itself - see
+            // SwitcherStrip.StatsCovered. Run this with a fullscreen video in front, after a
+            // few seconds' sleep, to see the panel's answer change.
+            int quns;
+            var qwatch = System.Diagnostics.Stopwatch.StartNew();
+            int hr = Native.SHQueryUserNotificationState(out quns);
+            qwatch.Stop();
+            Console.WriteLine(string.Format("Shell notification state: {0}  ({1:0.00} ms){2}",
+                hr == 0 ? QunsName(quns) : "query failed, 0x" + hr.ToString("X8"),
+                qwatch.Elapsed.TotalMilliseconds,
+                hr == 0 && quns >= Native.QUNS_NOT_PRESENT && quns <= Native.QUNS_PRESENTATION_MODE
+                    ? "  - a pinned stats panel would stay hidden" : ""));
+            Console.WriteLine();
+
+            var stats = new SystemStats();
+            var watch = new System.Diagnostics.Stopwatch();
+
+            // The first reading has nothing to subtract from; this is the "measuring" panel
+            // the controller's early sample exists to keep anyone from seeing.
+            watch.Start();
+            stats.Sample();
+            watch.Stop();
+            PrintStats(stats, 0, watch.Elapsed.TotalMilliseconds);
+
+            for (int i = 1; i <= count; i++)
+            {
+                System.Threading.Thread.Sleep(SwitcherStrip.StatsRefreshMs);
+
+                watch.Reset();
+                watch.Start();
+                stats.Sample();
+                watch.Stop();
+                PrintStats(stats, i, watch.Elapsed.TotalMilliseconds);
+            }
+
+            return 0;
+        }
+
+        static void PrintStats(SystemStats stats, int sample, double costMs)
+        {
+            TooltipContent content = Controller.StatsContent(stats, false);
+
+            Console.WriteLine(string.Format("  sample {0}  ({1:0.0} ms)", sample, costMs));
+            foreach (string line in content.Lines)
+            {
+                // The panel lines these up on tab stops; a console just gets padding.
+                string[] cells = line.Split('\t');
+                var sb = new StringBuilder("    ");
+                for (int c = 0; c < cells.Length; c++)
+                    sb.Append(c < cells.Length - 1 ? cells[c].PadRight(c == 0 ? 10 : 18) : cells[c]);
+                Console.WriteLine(sb.ToString());
+            }
+            Console.WriteLine();
+        }
+
+        static string QunsName(int state)
+        {
+            switch (state)
+            {
+                case 1: return "not present (locked or screensaver)";
+                case 2: return "busy (fullscreen app)";
+                case 3: return "fullscreen Direct3D";
+                case 4: return "presentation mode";
+                case 5: return "accepts notifications";
+                case 6: return "quiet time";
+                case 7: return "Windows Store app";
+                default: return "unknown (" + state + ")";
+            }
+        }
+
+        static string Clip(string text, int max)
+        {
+            if (text == null) return "";
+            return text.Length <= max ? text : text.Substring(0, max - 3) + "...";
+        }
+
+        /// <summary>The stats tile's width as the app would build it: zero when it is turned off.</summary>
+        static int StatsWidth(Config cfg, TaskbarHost host)
+        {
+            return cfg.StatsTile ? host.Scale(cfg.StatsWidth) : 0;
         }
 
         static int CmdSwitch(VirtualDesktopApi api, string[] args)
@@ -587,7 +703,7 @@ namespace DesktopSwitcher
             var cfg = Config.Load();
             for (int n = 2; n <= 5; n++)
             {
-                int width = n * host.Scale(cfg.ButtonWidth) + host.Scale(cfg.PlusWidth);
+                int width = SwitcherStrip.MeasureWidth(n, host.Scale(cfg.ButtonWidth), host.Scale(cfg.PlusWidth), StatsWidth(cfg, host));
                 System.Drawing.Rectangle bounds;
                 if (host.TryComputeBounds(width, host.Scale(cfg.Margin), out bounds))
                     Console.WriteLine(string.Format(
@@ -607,7 +723,7 @@ namespace DesktopSwitcher
             if (count < 1) count = 1;
 
             System.Drawing.Color sampled;
-            int probeWidth = count * host.Scale(cfg.ButtonWidth) + host.Scale(cfg.PlusWidth);
+            int probeWidth = SwitcherStrip.MeasureWidth(count, host.Scale(cfg.ButtonWidth), host.Scale(cfg.PlusWidth), StatsWidth(cfg, host));
             Console.WriteLine("  probing left of a " + count + "-desktop strip (" + probeWidth + "px)");
 
             if (host.TrySampleBackground(probeWidth, host.Scale(cfg.Margin), out sampled))
@@ -637,7 +753,7 @@ namespace DesktopSwitcher
             }
 
             var cfg = Config.Load();
-            int width = 4 * host.Scale(cfg.ButtonWidth) + host.Scale(cfg.PlusWidth);
+            int width = SwitcherStrip.MeasureWidth(4, host.Scale(cfg.ButtonWidth), host.Scale(cfg.PlusWidth), StatsWidth(cfg, host));
 
             System.Drawing.Rectangle bounds;
             if (!host.TryComputeBounds(width, host.Scale(cfg.Margin), out bounds))
@@ -746,6 +862,7 @@ namespace DesktopSwitcher
             Config cfg = Config.Load();
             int buttonWidth = host.Scale(cfg.ButtonWidth);
             int plusWidth = host.Scale(cfg.PlusWidth);
+            int statsWidth = StatsWidth(cfg, host);
             int margin = host.Scale(cfg.Margin);
             int barHeight = host.Scale(3);
 
@@ -753,7 +870,7 @@ namespace DesktopSwitcher
             if (background.IsEmpty)
             {
                 System.Drawing.Color sampled;
-                int probe = SwitcherStrip.MeasureWidth(2, buttonWidth, plusWidth);
+                int probe = SwitcherStrip.MeasureWidth(2, buttonWidth, plusWidth, statsWidth);
                 if (!host.TrySampleBackground(probe, margin, out sampled))
                     sampled = System.Drawing.Color.FromArgb(0x1F, 0x1F, 0x1F);
                 background = sampled;
@@ -773,12 +890,12 @@ namespace DesktopSwitcher
                 var service = new DesktopService(api, pump);
                 var foreground = new ForegroundTracker();
 
-                int initialWidth = SwitcherStrip.MeasureWidth(2, buttonWidth, plusWidth);
+                int initialWidth = SwitcherStrip.MeasureWidth(2, buttonWidth, plusWidth, statsWidth);
                 System.Drawing.Rectangle bounds;
                 host.TryComputeBounds(initialWidth, margin, out bounds);
 
                 var strip = new SwitcherStrip(host.TrayWindow, bounds,
-                                              buttonWidth, plusWidth, barHeight,
+                                              buttonWidth, plusWidth, statsWidth, barHeight,
                                               background, cfg.HighlightColor,
                                               (uint)cfg.TooltipDelayMs, cfg.TooltipWidth,
                                               cfg.AnimationMs, host.DpiScale);
@@ -789,6 +906,7 @@ namespace DesktopSwitcher
                 strip.TooltipProvider = delegate(int index)
                 {
                     IList<Desktop> list = service.Desktops;
+                    if (index == strip.StatsIndex) return Controller.StatsHint();
                     if (index >= list.Count)
                         return new TooltipContent("New desktop", new List<string> { "Win+Ctrl+D" });
                     if (index < 0) return null;
@@ -845,6 +963,20 @@ namespace DesktopSwitcher
                     strip.MenuClosed();
                 };
 
+                // The stats tile, through the controller's own formatter so what --strip
+                // draws is what the app draws. Sampled on the same tick the app uses.
+                var stats = new SystemStats();
+                stats.Sample();
+                strip.StatsProvider = delegate(bool kept)
+                {
+                    stats.Sample();
+                    return Controller.StatsContent(stats, kept);
+                };
+                strip.StatsPinChanged += delegate(bool pinned, bool kept)
+                {
+                    Console.WriteLine("  stats   -> " + (kept ? "kept open" : pinned ? "open" : "closed"));
+                };
+
                 foreground.Ignore(strip.Handle);
 
                 // Echoes Controller.RefreshOccupancy: the same inventory instance the
@@ -863,7 +995,12 @@ namespace DesktopSwitcher
 
                 var ticker = new System.Windows.Forms.Timer();
                 ticker.Interval = cfg.ReconcileMs;
-                ticker.Tick += delegate { service.Tick(); refreshOccupancy(null, EventArgs.Empty); };
+                ticker.Tick += delegate
+                {
+                    service.Tick();
+                    refreshOccupancy(null, EventArgs.Empty);
+                    if (cfg.StatsTile && !strip.StatsShowing) stats.Sample();
+                };
                 ticker.Start();
 
                 // Faster than the reconcile tick: focus changes need catching promptly
@@ -1154,18 +1291,25 @@ namespace DesktopSwitcher
         {
             buttonWidth = SlideScale(cfg.ButtonWidth, scale);
             int plusWidth = SlideScale(cfg.PlusWidth, scale);
+            int statsWidth = cfg.StatsTile ? SlideScale(cfg.StatsWidth, scale) : 0;
             int margin = SlideScale(cfg.Margin, scale);
 
-            int width = SwitcherStrip.MeasureWidth(desktops, buttonWidth, plusWidth);
+            int width = SwitcherStrip.MeasureWidth(desktops, buttonWidth, plusWidth, statsWidth);
             int left = trayLeft - margin - width;
 
-            var anchors = new Rectangle[desktops + 1];
+            var anchors = new Rectangle[desktops + (statsWidth > 0 ? 2 : 1)];
             for (int i = 0; i < desktops; i++)
                 anchors[i] = new Rectangle(left + i * buttonWidth, work.Bottom,
                                            buttonWidth, 1);
 
-            anchors[desktops] = new Rectangle(left + desktops * buttonWidth, work.Bottom,
-                                              plusWidth, 1);
+            int plusLeft = left + desktops * buttonWidth;
+            anchors[desktops] = new Rectangle(plusLeft, work.Bottom, plusWidth, 1);
+
+            // The stats tile is the button nearest the clock, so it is the one most likely
+            // to clamp onto the same x as '+' - worth having in the distinctness check.
+            if (statsWidth > 0)
+                anchors[desktops + 1] = new Rectangle(plusLeft + plusWidth, work.Bottom,
+                                                      statsWidth, 1);
             return anchors;
         }
 
@@ -1180,8 +1324,9 @@ namespace DesktopSwitcher
             int panelWidth = SlideScale(cfg.TooltipWidth, scale);
             int gap = SlideScale(4, scale);
 
+            const int desktops = 3;
             int buttonWidth;
-            Rectangle[] anchors = SlideAnchors(cfg, scale, work, 1597, 3, out buttonWidth);
+            Rectangle[] anchors = SlideAnchors(cfg, scale, work, 1597, desktops, out buttonWidth);
             var size = new Size(panelWidth, 120);
 
             Console.WriteLine("1. every button places the panel somewhere different");
@@ -1203,7 +1348,7 @@ namespace DesktopSwitcher
                 int moved = i == 0 ? 0 : origin.X - previous;
 
                 Console.WriteLine(string.Format("     {0,6}    {1,6}   {2,6}   {3,6}   {4,5}",
-                    i < anchors.Length - 1 ? (i + 1).ToString() : "+",
+                    i < desktops ? (i + 1).ToString() : i == desktops ? "+" : "stats",
                     centre, origin.X, origin.X + size.Width, i == 0 ? "-" : moved.ToString()));
 
                 if (i > 0 && moved == 0)

@@ -25,6 +25,7 @@ namespace DesktopSwitcher
         readonly VirtualDesktopApi _api = new VirtualDesktopApi();
         readonly TaskbarHost _host = new TaskbarHost();
         readonly ForegroundTracker _foreground = new ForegroundTracker();
+        readonly SystemStats _stats = new SystemStats();
 
         DesktopService _service;
         WindowInventory _inventory;
@@ -43,9 +44,11 @@ namespace DesktopSwitcher
         Timer _settleTimer;      // debounced rebuild after a theme, accent, or display change
 
         uint _taskbarCreatedMessage;
-        int _buttonWidth, _plusWidth, _margin, _barHeight;
+        int _buttonWidth, _plusWidth, _statsWidth, _margin, _barHeight;
         Color _background;
         bool _started;
+        bool _statsPinned;            // outlives the strip, which a rebuild throws away
+        bool _statsKept;              // likewise: opened by "Keep open", not by a click
         bool _sessionNotifications;   // whether the unlock message is being delivered
         string _settleReason = "";    // what queued the pending rebuild, for the log
         int _pendingCount = -1;
@@ -131,7 +134,16 @@ namespace DesktopSwitcher
 
             RebuildStrip();
 
-            _reconcileTimer = StartTimer(_config.ReconcileMs, delegate { _service.Tick(); RefreshOccupancy(); });
+            // The baseline the first reconcile tick will measure against, so a hover in the
+            // first two seconds after login already has a rate to show.
+            SampleStats();
+
+            _reconcileTimer = StartTimer(_config.ReconcileMs, delegate
+            {
+                _service.Tick();
+                RefreshOccupancy();
+                SampleStats();
+            });
             _watchdogTimer = StartTimer(1000, delegate { Watchdog(); });
             _focusTimer = StartTimer(300, delegate { _foreground.Sample(); });
 
@@ -184,6 +196,7 @@ namespace DesktopSwitcher
         {
             _buttonWidth = _host.Scale(_config.ButtonWidth);
             _plusWidth = _host.Scale(_config.PlusWidth);
+            _statsWidth = _config.StatsTile ? _host.Scale(_config.StatsWidth) : 0;
             _margin = _host.Scale(_config.Margin);
             _barHeight = _host.Scale(3);
 
@@ -194,7 +207,7 @@ namespace DesktopSwitcher
             }
 
             Color sampled;
-            int probe = SwitcherStrip.MeasureWidth(desktopCount, _buttonWidth, _plusWidth);
+            int probe = SwitcherStrip.MeasureWidth(desktopCount, _buttonWidth, _plusWidth, _statsWidth);
 
             if (_host.TrySampleBackground(probe, _margin, out sampled))
                 _background = sampled;
@@ -230,7 +243,7 @@ namespace DesktopSwitcher
             // the one beside it was never ours.
             ComputeMetrics(count);
 
-            int width = SwitcherStrip.MeasureWidth(count, _buttonWidth, _plusWidth);
+            int width = SwitcherStrip.MeasureWidth(count, _buttonWidth, _plusWidth, _statsWidth);
 
             Rectangle bounds;
             if (!_host.TryComputeBounds(width, _margin, out bounds))
@@ -256,7 +269,7 @@ namespace DesktopSwitcher
             try
             {
                 _strip = new SwitcherStrip(_host.TrayWindow, bounds,
-                                           _buttonWidth, _plusWidth, _barHeight,
+                                           _buttonWidth, _plusWidth, _statsWidth, _barHeight,
                                            _background, _config.HighlightColor,
                                            (uint)_config.TooltipDelayMs, _config.TooltipWidth,
                                            _config.AnimationMs, _host.DpiScale);
@@ -274,6 +287,12 @@ namespace DesktopSwitcher
             _strip.RemoveRequested += delegate(Guid id) { RequestRemove(id); };
             _strip.MoveWindowRequested += OnMoveWindowRequested;
             _strip.TooltipProvider = BuildTooltip;
+            _strip.StatsProvider = BuildStats;
+            _strip.StatsPinChanged += delegate(bool pinned, bool kept)
+            {
+                _statsPinned = pinned;
+                _statsKept = kept;
+            };
 
             // Left unsubscribed when the menu is off, which is what puts right click back to
             // sending the active window: the strip falls through when nothing is listening.
@@ -288,6 +307,16 @@ namespace DesktopSwitcher
             _strip.SetDesktops(_service.Desktops);
             _host.Reassert(_strip.Handle, _strip.Width, _margin);
             RefreshOccupancy();
+
+            // After Reassert, so the panel anchors to where the tile actually is. A pinned
+            // panel survives a rebuild - an unlock or a theme change is not the user putting
+            // it away - unless the tile itself was just turned off in config, which drops the
+            // pin with it rather than leaving one to spring back if the tile is turned on.
+            if (_statsPinned)
+            {
+                if (_statsWidth > 0) _strip.SetStatsPinned(true, _statsKept);
+                else _statsPinned = _statsKept = false;
+            }
 
             Log.Write("controller: strip rebuilt");
         }
@@ -308,6 +337,26 @@ namespace DesktopSwitcher
             if (_service.Count < 2) return;
 
             _strip.SetOccupancy(_inventory.OccupiedDesktops(_service.Count));
+        }
+
+        /// <summary>
+        /// Keeps a recent CPU and network reading on hand, so the stats panel can show real
+        /// figures the moment it opens. Both are rates and need a previous reading to
+        /// measure from; without this the first panel of every hover could only say it was
+        /// measuring. On the reconcile tick because that is already running - the sample
+        /// costs well under a millisecond, against the occupancy sweep beside it - and
+        /// skipped entirely with the tile turned off.
+        ///
+        /// Also skipped while the panel is open, because the panel then samples once a
+        /// second on its own. Two samplers on unrelated clocks made each rate cover anywhere
+        /// from 0.6s to 1.4s, depending on where the reconcile tick happened to land, and the
+        /// CPU figure jumped with it. See SwitcherStrip.StatsShowing.
+        /// </summary>
+        void SampleStats()
+        {
+            if (!_config.StatsTile) return;
+            if (_strip != null && _strip.StatsShowing) return;
+            _stats.Sample();
         }
 
         void DisposeStrip()
@@ -418,6 +467,31 @@ namespace DesktopSwitcher
         {
             IList<Desktop> desktops = _service.Desktops;
             var menu = new ContextMenuStrip();
+
+            // Before the '+' case, which would otherwise claim it: the tile's index is also
+            // past the last desktop.
+            if (index == _strip.StatsIndex)
+            {
+                // The one way to a panel that stays put. A left click opens it as a popup,
+                // which any click elsewhere closes; this opens it - or turns an open popup -
+                // into one that only the tile or this item again will close. Unticking
+                // closes it rather than dropping back to a popup: "do not keep it open" is
+                // most naturally read as "close it".
+                var keep = new ToolStripMenuItem("Keep open");
+                keep.Checked = _statsKept;
+                keep.Click += delegate
+                {
+                    if (_strip == null) return;
+                    if (_statsKept) _strip.SetStatsPinned(false);
+                    else _strip.SetStatsPinned(true, true);
+                };
+                menu.Items.Add(keep);
+
+                // Where to go when the panel's three figures raise a question it cannot
+                // answer, which is usually "what is using it".
+                AddItem(menu, "Task Manager", true, delegate { OpenTaskManager(); });
+                return menu;
+            }
 
             if (index >= desktops.Count)
             {
@@ -684,6 +758,10 @@ namespace DesktopSwitcher
 
             IList<Desktop> desktops = _service.Desktops;
 
+            // Before '+', whose test would otherwise claim it. Only the hint: the figures
+            // are shown by a click, never by a hover.
+            if (_strip != null && index == _strip.StatsIndex) return StatsHint();
+
             if (index >= desktops.Count)
                 return new TooltipContent("New desktop", new List<string> { "Win+Ctrl+D" });
 
@@ -754,6 +832,105 @@ namespace DesktopSwitcher
             if (window.Title.Length == 0 || window.Title == window.App) return window.App;
 
             return window.App + Sep + window.Title;
+        }
+
+        // --- stats panel ------------------------------------------------------
+
+        /// <summary>
+        /// The stats tile's panel. Takes a fresh reading first - SystemStats skips it when
+        /// the last was too recent to measure a rate over - so each once-a-second refresh
+        /// shows the second that just went by. Not gated on the tooltips setting: the tile
+        /// has no purpose but this panel, and turning the tile off is its own setting.
+        /// </summary>
+        TooltipContent BuildStats(bool kept)
+        {
+            _stats.Sample();
+            return StatsContent(_stats, kept);
+        }
+
+        /// <summary>
+        /// The stats tile's hover tooltip: what it is and what clicking does, in the same
+        /// shape as '+' gives "New desktop" and its shortcut. Public for the --strip harness.
+        /// </summary>
+        public static TooltipContent StatsHint()
+        {
+            return new TooltipContent("System", new List<string> { "Click for CPU, memory and network" });
+        }
+
+        /// <summary>
+        /// The rows, tab-separated into columns the panel lines up. Public and static so
+        /// --stats and the --strip harness print and draw exactly what the real panel does.
+        /// </summary>
+        public static TooltipContent StatsContent(SystemStats stats, bool kept)
+        {
+            var lines = new List<string>();
+
+            lines.Add("CPU\t" + Percent(stats.CpuPercent));
+
+            lines.Add("Memory\t" + (stats.HasMemory
+                ? Gigabytes(stats.MemoryUsed) + " / " + Gigabytes(stats.MemoryTotal) + " GB\t"
+                  + stats.MemoryLoad + "%"
+                : Unknown));
+
+            lines.Add("Network\t" + Down + Rate(stats.DownBytesPerSecond)
+                      + "\t" + Up + Rate(stats.UpBytesPerSecond));
+
+            // Says so the same way a desktop's panel says "(current)". Only when kept: a
+            // popup behaves the way a popup is expected to, but a panel that sits through
+            // clicks elsewhere would otherwise look stuck.
+            return new TooltipContent(kept ? "System   (kept open)" : "System", lines);
+        }
+
+        /// <summary>
+        /// A figure that has no second reading to measure from yet. An ellipsis rather than
+        /// 0, which would be a claim: "no traffic" and "not measured" are different answers.
+        /// Escaped to keep the source ASCII, like Bullet.
+        /// </summary>
+        const string Unknown = "\u2026";
+
+        // Arrows rather than "down"/"up": they fit a column the width of a short number and
+        // read at a glance. Escaped for the same reason as Bullet.
+        const string Down = "\u2193 ";
+        const string Up = "\u2191 ";
+
+        static string Percent(float value)
+        {
+            if (value < 0) return Unknown;
+            return ((int)Math.Round(value)) + "%";
+        }
+
+        static string Gigabytes(ulong bytes)
+        {
+            return (bytes / (1024.0 * 1024 * 1024)).ToString("0.0");
+        }
+
+        /// <summary>
+        /// Bytes a second, not bits: what a browser shows a download at, which is the
+        /// number this is most often compared to. Task Manager uses bits, so its figure is
+        /// eight times this one. One decimal only below 10 MB/s, where it is a real digit.
+        /// </summary>
+        static string Rate(double bytesPerSecond)
+        {
+            if (bytesPerSecond < 0) return Unknown;
+
+            const double KB = 1024, MB = 1024 * 1024;
+            if (bytesPerSecond < MB) return (bytesPerSecond / KB).ToString("0") + " KB/s";
+            if (bytesPerSecond < 10 * MB) return (bytesPerSecond / MB).ToString("0.0") + " MB/s";
+            return (bytesPerSecond / MB).ToString("0") + " MB/s";
+        }
+
+        static void OpenTaskManager()
+        {
+            // Through the shell, which honours taskmgr's auto-elevate manifest. The one
+            // failure worth expecting is the user declining a UAC prompt.
+            try
+            {
+                System.Diagnostics.Process.Start("taskmgr.exe");
+            }
+            catch (Exception ex)
+            {
+                Log.Write("controller: could not open Task Manager - " + ex.Message);
+            }
         }
 
         // --- service events ---------------------------------------------------
