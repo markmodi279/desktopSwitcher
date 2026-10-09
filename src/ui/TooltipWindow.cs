@@ -62,6 +62,14 @@ namespace DesktopSwitcher
         /// <summary>A second big line under Figure, for a tile with no ring. Null for none.</summary>
         public string Figure2;
 
+        /// <summary>
+        /// For a tile with no ring: the widest the part of a figure after its first space can
+        /// get, e.g. "8888 KB/s". Set, the figures are drawn as one fixed-width block - the
+        /// lead, up to the first space, pinned left and the rest right-aligned - so a rate
+        /// changing width moves only its digits, not its arrow or its unit. Null centres each
+        /// line on its own.
+        /// </summary>
+        public string FigureTemplate;
 
         /// <summary>Small print under the visual: a peak, a total.</summary>
         public string Detail;
@@ -804,6 +812,14 @@ namespace DesktopSwitcher
         /// <summary>
         /// A tile without a gauge: its one or two figures, centred in the same box a ring
         /// would fill, so the detail line and chart below land level with the other tiles'.
+        ///
+        /// With a FigureTemplate the lines are a block rather than centred one by one. Each
+        /// line centred on its own was the first version, and it moved every second: going
+        /// from "0 KB/s" to "1023 KB/s" shifted the whole line sideways, and with the two
+        /// lines different widths the arrows no longer stood one above the other. The block
+        /// is as wide as the template makes the widest line, centred once, with each line's
+        /// lead pinned to its left edge and the rest right-aligned to its right - so the
+        /// arrows hold a column, the units hold a column, and only the digits change.
         /// </summary>
         void DrawFigures(Graphics g, StatsTile tile, Rectangle box)
         {
@@ -814,14 +830,63 @@ namespace DesktopSwitcher
             using (var ink = new SolidBrush(Palette.PrimaryText(_background)))
             using (var format = new StringFormat())
             {
-                format.Alignment = StringAlignment.Center;
                 format.Trimming = StringTrimming.EllipsisCharacter;
                 format.FormatFlags = StringFormatFlags.NoWrap;
 
-                g.DrawString(tile.Figure ?? "", _figureFont, ink, new RectangleF(box.X, y, box.Width, line), format);
-                if (tile.Figure2 != null)
-                    g.DrawString(tile.Figure2, _figureFont, ink, new RectangleF(box.X, y + line, box.Width, line), format);
+                if (tile.FigureTemplate == null)
+                {
+                    format.Alignment = StringAlignment.Center;
+                    g.DrawString(tile.Figure ?? "", _figureFont, ink, new RectangleF(box.X, y, box.Width, line), format);
+                    if (tile.Figure2 != null)
+                        g.DrawString(tile.Figure2, _figureFont, ink, new RectangleF(box.X, y + line, box.Width, line), format);
+                    return;
+                }
+
+                // The block's width: the widest lead, a space, and the template. Measured with
+                // the typographic format, which leaves out the padding GDI+ adds by default -
+                // that padding is per string, so it would otherwise be counted once per part.
+                string lead1, rest1, lead2, rest2;
+                Split(tile.Figure, out lead1, out rest1);
+                Split(tile.Figure2, out lead2, out rest2);
+
+                float leadWidth = Math.Max(FigureWidth(g, lead1), FigureWidth(g, lead2));
+                float block = leadWidth + FigureWidth(g, " " + tile.FigureTemplate);
+                block = Math.Min(block, box.Width);
+                float left = box.X + (box.Width - block) / 2f;
+
+                DrawFigureLine(g, ink, lead1, rest1, left, y, block, line);
+                if (tile.Figure2 != null) DrawFigureLine(g, ink, lead2, rest2, left, y + line, block, line);
             }
+        }
+
+        void DrawFigureLine(Graphics g, Brush ink, string lead, string rest,
+                            float left, float y, float width, int line)
+        {
+            using (var format = (StringFormat)StringFormat.GenericTypographic.Clone())
+            {
+                format.FormatFlags |= StringFormatFlags.NoWrap;
+                format.LineAlignment = StringAlignment.Near;
+
+                g.DrawString(lead, _figureFont, ink, new PointF(left, y), format);
+
+                format.Alignment = StringAlignment.Far;
+                g.DrawString(rest, _figureFont, ink, new RectangleF(left, y, width, line), format);
+            }
+        }
+
+        /// <summary>A figure's lead, up to its first space, and the rest after it.</summary>
+        static void Split(string figure, out string lead, out string rest)
+        {
+            figure = figure ?? "";
+            int space = figure.IndexOf(' ');
+            lead = space < 0 ? "" : figure.Substring(0, space);
+            rest = space < 0 ? figure : figure.Substring(space + 1);
+        }
+
+        float FigureWidth(Graphics g, string text)
+        {
+            if (string.IsNullOrEmpty(text)) return 0f;
+            return g.MeasureString(text, _figureFont, PointF.Empty, StringFormat.GenericTypographic).Width;
         }
 
         /// <summary>

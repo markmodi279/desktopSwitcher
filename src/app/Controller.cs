@@ -927,6 +927,11 @@ namespace DesktopSwitcher
             network.Label = "Network";
             network.Figure = Down + Rate(stats.DownBytesPerSecond);
             network.Figure2 = Up + Rate(stats.UpBytesPerSecond);
+
+            // The widest Rate can produce short of 10 GB/s: four digits and a unit - up to
+            // 1023 KB/s, and from 1000 MB/s. Digits in Segoe UI are all one width, so 8s
+            // stand for any of them.
+            network.FigureTemplate = "8888 KB/s";
             network.Detail = "peak " + Rate(Math.Max(Peak(history, DownOf), Peak(history, UpOf)));
             network.Primary = Series(history, now, DownOf, scale);
             network.Secondary = Series(history, now, UpOf, scale);
