@@ -135,7 +135,9 @@ namespace DesktopSwitcher
             RebuildStrip();
 
             // The baseline the first reconcile tick will measure against, so a hover in the
-            // first two seconds after login already has a rate to show.
+            // first two seconds after login already has a rate to show. The CPU measure is
+            // set first, because the baseline is per measure.
+            _stats.UseUtility = _config.StatsCpuUtility;
             SampleStats();
 
             _reconcileTimer = StartTimer(_config.ReconcileMs, delegate
@@ -1302,6 +1304,10 @@ namespace DesktopSwitcher
             Log.Init(Config.LogPath, _config.Diagnostics);
 
             if (_reconcileTimer != null) _reconcileTimer.Interval = _config.ReconcileMs;
+
+            // Not a strip setting either: the sampler outlives every strip. A change shows
+            // after two readings, the same wait the first figure after login has.
+            _stats.UseUtility = _config.StatsCpuUtility;
 
             // The tray glyph is drawn from highlightColor, and it is the one visible thing
             // a rebuilt strip does not cover - left alone, a changed accent would show up

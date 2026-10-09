@@ -86,8 +86,18 @@ namespace DesktopSwitcher
         // since-boot count to one delta and report gigabytes a second for a frame.
         Dictionary<string, long[]> _net;
 
-        float _cpu = -1f;
+        float _cpuTime = -1f;           // % Processor Time, from GetSystemTimes - always taken
+        float _cpuUtility = -1f;        // % Processor Utility, from PDH - only when asked for
         double _down = -1, _up = -1;
+
+        // The PDH query behind _cpuUtility. Opened on the first reading after UseUtility is
+        // set, not in the constructor, so a machine that never asks for utility never loads
+        // pdh.dll at all. _pdhFailed stops a query that would not open from being retried
+        // on every tick; turning UseUtility off and on again is the retry.
+        bool _useUtility;
+        IntPtr _pdhQuery, _pdhCounter;
+        bool _pdhFailed;
+        double _pdhOpenMs = -1;
 
         bool _memOk;
         uint _memLoad;
@@ -100,14 +110,61 @@ namespace DesktopSwitcher
         readonly List<StatsPoint> _history = new List<StatsPoint>();
 
         /// <summary>
-        /// Busy share of all processors, 0..100, between the last two readings.
-        ///
-        /// This is "% Processor Time". Task Manager on Windows 10 shows "% Processor
-        /// Utility" instead, which scales by the clock against base frequency, so on a
-        /// turbo-boosting machine under load Task Manager can read noticeably higher. Both
-        /// are correct answers to slightly different questions.
+        /// Busy share of all processors, 0..100, between the last two readings, by whichever
+        /// measure UseUtility picks - see CpuTimePercent and CpuUtilityPercent for the two.
         /// </summary>
-        public float CpuPercent { get { return _cpu; } }
+        public float CpuPercent { get { return UtilityActive ? _cpuUtility : _cpuTime; } }
+
+        /// <summary>
+        /// "% Processor Time": the share of each interval the processors were not idle.
+        /// The plain measure, and the only one that needs nothing but kernel32.
+        /// </summary>
+        public float CpuTimePercent { get { return _cpuTime; } }
+
+        /// <summary>
+        /// "% Processor Utility": busy time scaled by how fast the processors actually ran
+        /// against their base clock, capped at 100. What Task Manager shows on Windows 10.
+        ///
+        /// The two disagree in both directions, and by more than the names suggest. Idle, a
+        /// laptop's cores sit well under base clock, so utility reads lower - measured at 3%
+        /// against 8% time on the development machine. Under load they boost above it and
+        /// utility reads higher. -1 when UseUtility is off, or PDH could not be opened.
+        /// </summary>
+        public float CpuUtilityPercent { get { return _cpuUtility; } }
+
+        /// <summary>
+        /// Whether CpuPercent is utility rather than time. Settable at any time - the config
+        /// reload sets it - and a change starts the new measure from scratch: utility, like
+        /// time, needs two readings before it says anything.
+        /// </summary>
+        public bool UseUtility
+        {
+            get { return _useUtility; }
+            set
+            {
+                if (value == _useUtility) return;
+                _useUtility = value;
+                _pdhFailed = false;
+                if (!value) ClosePdh();
+            }
+        }
+
+        /// <summary>Utility asked for and available. False falls back to time, silently but logged.</summary>
+        bool UtilityActive { get { return _useUtility && _pdhCounter != IntPtr.Zero; } }
+
+        /// <summary>Which measure CpuPercent is, in words, for --stats.</summary>
+        public string CpuSource
+        {
+            get
+            {
+                if (!_useUtility) return "% Processor Time (GetSystemTimes)";
+                if (UtilityActive) return "% Processor Utility (PDH)";
+                return "% Processor Time - utility asked for, but PDH would not open";
+            }
+        }
+
+        /// <summary>What opening the PDH query cost, in ms; -1 before it is opened. For --stats.</summary>
+        public double PdhOpenMs { get { return _pdhOpenMs; } }
 
         public double DownBytesPerSecond { get { return _down; } }
         public double UpBytesPerSecond { get { return _up; } }
@@ -166,6 +223,7 @@ namespace DesktopSwitcher
             if (_primed && elapsed >= 0 && elapsed < MinIntervalMs) return;
 
             SampleCpu();
+            SampleUtility();
             SampleMemory();
             SampleNetwork(elapsed);
 
@@ -182,9 +240,10 @@ namespace DesktopSwitcher
         /// </summary>
         void Record(int now)
         {
-            if (_cpu < 0) return;
+            float cpu = CpuPercent;
+            if (cpu < 0) return;
 
-            _history.Add(new StatsPoint(now, _cpu, _memOk ? (float)_memLoad : -1f, _down, _up));
+            _history.Add(new StatsPoint(now, cpu, _memOk ? (float)_memLoad : -1f, _down, _up));
 
             // Keeps the newest point that is past the window - the one the line enters from
             // - and drops everything older. A negative age is TickCount having wrapped
@@ -210,7 +269,7 @@ namespace DesktopSwitcher
                 long busy = total - (idle - _idle);
 
                 if (total > 0)
-                    _cpu = Math.Max(0f, Math.Min(100f, 100f * busy / total));
+                    _cpuTime = Math.Max(0f, Math.Min(100f, 100f * busy / total));
             }
 
             _cpuOk = ok;
@@ -219,6 +278,83 @@ namespace DesktopSwitcher
             _idle = idle;
             _kernel = kernel;
             _user = user;
+        }
+
+        /// <summary>
+        /// One PDH collection, and the utility over the interval since the last. Collected on
+        /// the same Sample call as everything else, so the interval is the same one
+        /// GetSystemTimes measures over and the two figures are comparable reading for
+        /// reading. The first collection after opening yields nothing, as with time.
+        /// </summary>
+        void SampleUtility()
+        {
+            if (!_useUtility) return;
+            if (_pdhCounter == IntPtr.Zero && !OpenPdh()) return;
+
+            if (Native.PdhCollectQueryData(_pdhQuery) != 0) return;
+
+            uint type;
+            Native.PDH_FMT_COUNTERVALUE value;
+            uint status = Native.PdhGetFormattedCounterValue(_pdhCounter, Native.PDH_FMT_DOUBLE,
+                                                             out type, out value);
+
+            // Not an error the first time - a rate counter has nothing to say after one
+            // collection - and not worth a log line any other time: a reading that will not
+            // format keeps the last one, as every figure here does.
+            if (status != 0) return;
+            if (value.CStatus != Native.PDH_CSTATUS_VALID_DATA
+                && value.CStatus != Native.PDH_CSTATUS_NEW_DATA) return;
+
+            _cpuUtility = (float)Math.Max(0.0, Math.Min(100.0, value.doubleValue));
+        }
+
+        /// <summary>
+        /// Opens the query for "% Processor Utility" over all processors. "Processor
+        /// Information" rather than "Processor": only the newer set has utility, and it is
+        /// the set Task Manager reads. The English path, so it opens on any display language.
+        /// </summary>
+        bool OpenPdh()
+        {
+            if (_pdhFailed) return false;
+
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            IntPtr query = IntPtr.Zero;
+            try
+            {
+                uint status = Native.PdhOpenQuery(null, IntPtr.Zero, out query);
+                if (status != 0) throw new InvalidOperationException("PdhOpenQuery 0x" + status.ToString("X8"));
+
+                IntPtr counter;
+                status = Native.PdhAddEnglishCounter(query,
+                    @"\Processor Information(_Total)\% Processor Utility", IntPtr.Zero, out counter);
+                if (status != 0) throw new InvalidOperationException("PdhAddEnglishCounter 0x" + status.ToString("X8"));
+
+                _pdhQuery = query;
+                _pdhCounter = counter;
+                _cpuUtility = -1f;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // A DllNotFoundException lands here as well as a bad status. Either way the
+                // time figure carries on, which is what this app showed before utility existed.
+                if (query != IntPtr.Zero) Native.PdhCloseQuery(query);
+                _pdhFailed = true;
+                Log.Write("stats: no processor utility, using processor time - " + ex.Message);
+                return false;
+            }
+            finally
+            {
+                _pdhOpenMs = watch.Elapsed.TotalMilliseconds;
+            }
+        }
+
+        void ClosePdh()
+        {
+            if (_pdhQuery != IntPtr.Zero) Native.PdhCloseQuery(_pdhQuery);
+            _pdhQuery = IntPtr.Zero;
+            _pdhCounter = IntPtr.Zero;
+            _cpuUtility = -1f;
         }
 
         void SampleMemory()

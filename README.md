@@ -97,12 +97,28 @@ or clicking anywhere else, closes it. To have it stay through clicks elsewhere, 
 the tile and tick **Keep open**; it then closes only from the tile or by unticking. It steps aside while the taskbar is out of sight —
 auto-hidden, or behind a fullscreen video or game — and comes back with it.
 
-The figures are close to Task Manager's but not identical. CPU is "% Processor Time", which
-can read lower than Task Manager under load on a turbo-boosting CPU. Network is in bytes per
-second, the unit a browser shows downloads in; Task Manager shows bits, so its number is eight
-times larger. Virtual adapters — WSL, Hyper-V, VMware, VirtualBox — are left out of the
-network total, because their traffic also passes through the real adapter and would be
-counted twice. `--stats` lists which adapters are counted.
+How the figures compare with Task Manager, measured side by side:
+
+- **CPU** is "% Processor Utility" by default, the figure Task Manager shows, and tracks it to
+  within about a point. Set `statsCpu = time` for "% Processor Time" instead: the plain share
+  of time not idle, which ignores clock speed. On a laptop at idle that reads two to three
+  times higher than Task Manager, since the cores are running well under their base clock,
+  and under boost it reads lower. `--stats` prints both.
+- **Memory** matches Task Manager's percentage exactly, and "used" is within about 0.1 GB of
+  its "In use"; ours also counts the small amount of modified memory waiting to be written.
+  Sizes are GiB labelled GB, as Task Manager labels them.
+- **Network** reads the same adapter counters Task Manager graphs, and over a speed test
+  agreed with them to within 1%. It is in bytes per second, the unit a browser shows
+  downloads in; Task Manager shows bits, so its number is eight times larger. It also
+  counts the protocol overhead on the wire, so it reads 2-5% above what a download or speed
+  test reports for the data itself. Virtual adapters — WSL, Hyper-V, VMware, VirtualBox —
+  are left out, because their traffic also passes through the real adapter and would be
+  counted twice; `--stats` lists which adapters are counted.
+
+Each figure is an average over the interval since the last reading: a second while the panel
+is open, two seconds otherwise. So the tile's bars, and the charts' history from before the
+panel opened, smooth out spikes shorter than that, and "peak" is the highest of those
+averages rather than the highest instant.
 
 A desktop's name — set from the menu, or in Task View (`Win+Tab`, right-click a desktop,
 **Rename**) — is what the panel is titled with. Renaming from the menu shows up
@@ -134,6 +150,7 @@ your display automatically.
 | `occupancyDots` | `true` | dot beside a number that has windows on it; `false` stops the sweep entirely |
 | `systemStats` | `true` | the system tile after `+` and its CPU / memory / network panel; `false` removes the tile and stops the sampling |
 | `statsWidth` | `38` | width of the system tile at 96 DPI |
+| `statsCpu` | `utility` | CPU measure: `utility` matches Task Manager, `time` is the plain share of time not idle |
 | `statsBarWidth` | `6` | width of each of the tile's two bars at 96 DPI |
 | `statsBarGap` | `3` | space between the two bars at 96 DPI |
 | `statsBarHeight` | `20` | height of the bars at 96 DPI; capped to what the taskbar has room for |

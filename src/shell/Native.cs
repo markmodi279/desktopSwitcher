@@ -410,6 +410,60 @@ namespace DesktopSwitcher
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX status);
 
+        // PDH, for the one figure the kernel32 reads above cannot give: "% Processor
+        // Utility", which is what Task Manager shows for CPU on Windows 10. Straight to
+        // pdh.dll rather than through PerformanceCounter, for the two reasons in the note
+        // above: PdhAddEnglishCounter takes the English path on any display language, and
+        // a single counter on a query of our own loads only the provider behind it. What
+        // that costs on first use is printed by --stats.
+        //
+        // Every call returns a PDH status, 0 for success - not a BOOL, and not an HRESULT
+        // to be thrown.
+
+        [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+        public static extern uint PdhOpenQuery(string dataSource, IntPtr userData, out IntPtr query);
+
+        [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+        public static extern uint PdhAddEnglishCounter(IntPtr query, string path, IntPtr userData,
+                                                       out IntPtr counter);
+
+        [DllImport("pdh.dll")]
+        public static extern uint PdhCollectQueryData(IntPtr query);
+
+        [DllImport("pdh.dll")]
+        public static extern uint PdhGetFormattedCounterValue(IntPtr counter, uint format,
+                                                              out uint type,
+                                                              out PDH_FMT_COUNTERVALUE value);
+
+        [DllImport("pdh.dll")]
+        public static extern uint PdhCloseQuery(IntPtr query);
+
+        /// <summary>
+        /// PDH's formatted value: a status, then a union of long, double and string pointer.
+        /// The union is 8-byte aligned, so it starts at 8, not 4 - Explicit rather than
+        /// Sequential so that is written down instead of left to the marshaller.
+        /// </summary>
+        [StructLayout(LayoutKind.Explicit)]
+        public struct PDH_FMT_COUNTERVALUE
+        {
+            [FieldOffset(0)] public uint CStatus;
+            [FieldOffset(8)] public double doubleValue;
+        }
+
+        /// <summary>
+        /// Format as a double. Percentages over 100 are capped at 100 - PDH's default, and
+        /// what Task Manager does with a boosting CPU's utility, which can pass 100.
+        /// </summary>
+        public const uint PDH_FMT_DOUBLE = 0x00000200;
+
+        /// <summary>
+        /// A value's CStatus when it is good. Anything else - and in particular the
+        /// invalid-data status a rate counter returns after only one collection, when there
+        /// is nothing yet to measure from - means the value is not to be used.
+        /// </summary>
+        public const uint PDH_CSTATUS_VALID_DATA = 0x00000000;
+        public const uint PDH_CSTATUS_NEW_DATA = 0x00000001;
+
         // --- is the taskbar on screen ------------------------------------------
 
         // The pinned stats panel is a top-level topmost window, so unlike the strip - a

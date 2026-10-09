@@ -267,14 +267,22 @@ namespace DesktopSwitcher
                     ? "  - a pinned stats panel would stay hidden" : ""));
             Console.WriteLine();
 
+            // The config's CPU measure, as the app would use it. Processor time is taken
+            // either way, so with utility on both are printed and can be read side by side.
             var stats = new SystemStats();
+            stats.UseUtility = Config.Load().StatsCpuUtility;
             var watch = new System.Diagnostics.Stopwatch();
 
             // The first reading has nothing to subtract from; this is the "measuring" panel
-            // the controller's early sample exists to keep anyone from seeing.
+            // the controller's early sample exists to keep anyone from seeing. With utility
+            // on it also opens the PDH query, whose cost is printed on its own below: it is
+            // paid once, at login, on the UI thread.
             watch.Start();
             stats.Sample();
             watch.Stop();
+            Console.WriteLine("CPU measure: " + stats.CpuSource
+                + (stats.PdhOpenMs >= 0 ? string.Format("  (query opened in {0:0.0} ms)", stats.PdhOpenMs) : ""));
+            Console.WriteLine();
             PrintStats(stats, 0, watch.Elapsed.TotalMilliseconds);
 
             for (int i = 1; i <= count; i++)
@@ -307,6 +315,11 @@ namespace DesktopSwitcher
                     "chart " + (tile.Primary != null ? tile.Primary.Count : 0)));
             }
 
+            // Both CPU measures for the same interval: the tile above shows whichever the
+            // config picks. Read against Task Manager, which shows utility.
+            Console.WriteLine(string.Format("    cpu       time {0}  utility {1}",
+                CpuFigure(stats.CpuTimePercent), CpuFigure(stats.CpuUtilityPercent)));
+
             // What the charts are drawn from: how much history there is, the span it
             // covers, and what the network chart's top stands for. The span should grow a
             // second per sample and the point count by one, until HistoryMs caps both.
@@ -315,6 +328,11 @@ namespace DesktopSwitcher
             Console.WriteLine(string.Format("    graphs    {0} point(s) over {1:0.0}s, network top {2:0} KB/s",
                 history.Count, span / 1000.0, Controller.NetworkScale(history) / 1024));
             Console.WriteLine();
+        }
+
+        static string CpuFigure(float percent)
+        {
+            return percent < 0 ? "-" : percent.ToString("0.0") + "%";
         }
 
         static string QunsName(int state)
@@ -978,6 +996,7 @@ namespace DesktopSwitcher
                 // The stats tile, through the controller's own formatter so what --strip
                 // draws is what the app draws. Sampled on the same tick the app uses.
                 var stats = new SystemStats();
+                stats.UseUtility = cfg.StatsCpuUtility;
                 stats.Sample();
 
                 // Echoes Controller.PushStatsLevels, so the tile's meters move here too.

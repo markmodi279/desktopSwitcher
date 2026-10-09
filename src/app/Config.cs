@@ -54,6 +54,15 @@ namespace DesktopSwitcher
         public int StatsWidth = 38;
 
         /// <summary>
+        /// Which CPU figure the tile and panel show. "utility" - % Processor Utility, what
+        /// Task Manager shows - scales busy time by the clock speed against base, so it reads
+        /// lower than "time" at idle on a laptop and higher under boost. "time" - % Processor
+        /// Time - is the plain share of time not idle. Utility falls back to time if the
+        /// counter cannot be opened.
+        /// </summary>
+        public bool StatsCpuUtility = true;
+
+        /// <summary>
         /// The tile's two meters, CPU and memory, at 96 DPI like every other size here: how
         /// wide each bar is, the space between them, and how tall they stand. Clamped at draw
         /// time to fit the tile and the taskbar, so an oversized value shrinks to fit rather
@@ -178,6 +187,7 @@ namespace DesktopSwitcher
                 case "occupancydots":    OccupancyDots   = ParseBool(val, OccupancyDots);        break;
                 case "systemstats":      StatsTile       = ParseBool(val, StatsTile);            break;
                 case "statswidth":       StatsWidth      = ParseInt(val, StatsWidth, 12, 128);   break;
+                case "statscpu":         StatsCpuUtility = ParseCpu(val, StatsCpuUtility);       break;
                 case "statsbarwidth":    StatsBarWidth   = ParseInt(val, StatsBarWidth, 1, 32);  break;
                 case "statsbargap":      StatsBarGap     = ParseInt(val, StatsBarGap, 0, 32);    break;
                 case "statsbarheight":   StatsBarHeight  = ParseInt(val, StatsBarHeight, 4, 64); break;
@@ -263,6 +273,7 @@ namespace DesktopSwitcher
             sb.AppendLine("occupancyDots = "   + (OccupancyDots ? "true" : "false"));
             sb.AppendLine("systemStats = "     + (StatsTile ? "true" : "false"));
             sb.AppendLine("statsWidth = "      + StatsWidth);
+            sb.AppendLine("statsCpu = "        + (StatsCpuUtility ? "utility" : "time"));
             sb.AppendLine("statsBarWidth = "   + StatsBarWidth);
             sb.AppendLine("statsBarGap = "     + StatsBarGap);
             sb.AppendLine("statsBarHeight = "  + StatsBarHeight);
@@ -299,6 +310,18 @@ namespace DesktopSwitcher
             if (v < min) return min;
             if (v > max) return max;
             return v;
+        }
+
+        /// <summary>"utility" or "time" for statsCpu, true for utility. Anything else keeps the fallback.</summary>
+        static bool ParseCpu(string s, bool fallback)
+        {
+            if (string.IsNullOrEmpty(s)) return fallback;
+            switch (s.Trim().ToLowerInvariant())
+            {
+                case "utility": return true;
+                case "time":    return false;
+                default:        return fallback;
+            }
         }
 
         static bool ParseBool(string s, bool fallback)
