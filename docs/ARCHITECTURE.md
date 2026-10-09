@@ -297,6 +297,14 @@ retargets, so the frame timer eases the bars like every other value on the strip
 has no meter because it has no top: any fixed scale would sit full on a fast link or flat on
 a slow one.
 
+`statsTileStyle = gauge` swaps the two meters for a half-ring gauge with one needle on CPU
+alone, for a tile that should read as an icon. It is drawing only - the needle rides the
+same eased `_cpuLevel` the CPU bar does, so it sweeps rather than jumps with no animation
+code of its own. `statsTileStyle = chip` goes further and draws a processor chip that says
+nothing until the heavier of CPU and memory crosses `statsWarnPercent`; its colour rides
+the same eased levels, so it shifts to amber rather than flicking. Both icons are sized by
+`statsIconSize`, not the bars' height.
+
 **The stats panel is tiles, drawn from history `SystemStats` already keeps.** Every reading
 taken is appended to `History` and aged out after a minute, so the charts have data the
 moment the panel opens - two seconds apart from the reconcile tick, one second apart once

@@ -292,7 +292,8 @@ namespace DesktopSwitcher
             _strip.StatsProvider = BuildStats;
             _strip.SetStatsMeter(_host.Scale(_config.StatsBarWidth), _host.Scale(_config.StatsBarGap),
                                  _host.Scale(_config.StatsBarHeight), _config.StatsBarLabels, _config.StatsBarRounded,
-                                 _config.StatsWarnPercent, _config.StatsAlertPercent);
+                                 _config.StatsWarnPercent, _config.StatsAlertPercent, _config.StatsStyle,
+                                 _host.Scale(_config.StatsIconSize));
             _strip.StatsPinChanged += delegate(bool pinned, bool kept)
             {
                 _statsPinned = pinned;
@@ -780,7 +781,7 @@ namespace DesktopSwitcher
 
             // Before '+', whose test would otherwise claim it. Only the hint: the figures
             // are shown by a click, never by a hover.
-            if (_strip != null && index == _strip.StatsIndex) return StatsHint();
+            if (_strip != null && index == _strip.StatsIndex) return StatsHint(_config.StatsStyle);
 
             if (index >= desktops.Count)
                 return new TooltipContent("New desktop", new List<string> { "Win+Ctrl+D" });
@@ -873,13 +874,23 @@ namespace DesktopSwitcher
         /// The stats tile's hover tooltip: what the two meters are and what clicking does, in
         /// the same shape as '+' gives "New desktop" and its shortcut. The meters' letters are
         /// one character each, so this spells them out - and says what amber and red mean,
-        /// which nothing on the strip can. Public for the --strip harness.
+        /// which nothing on the strip can. The gauge and the chip have no letters, so for
+        /// them the first line says what drives the mark instead. Public for the --strip
+        /// harness.
         /// </summary>
-        public static TooltipContent StatsHint()
+        public static TooltipContent StatsHint(StatsTileStyle style)
         {
+            string first;
+            switch (style)
+            {
+                case StatsTileStyle.Gauge: first = "The needle is CPU - amber and red mean heavy load"; break;
+                case StatsTileStyle.Chip:  first = "Amber and red mean heavy CPU or memory load"; break;
+                default:                   first = "C is CPU, M is memory - amber and red mean heavy load"; break;
+            }
+
             return new TooltipContent("System", new List<string>
             {
-                "C is CPU, M is memory - amber and red mean heavy load",
+                first,
                 "Click for CPU, memory and network",
             });
         }

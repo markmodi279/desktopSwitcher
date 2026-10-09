@@ -928,7 +928,8 @@ namespace DesktopSwitcher
                                               cfg.AnimationMs, host.DpiScale);
                 strip.SetStatsMeter(host.Scale(cfg.StatsBarWidth), host.Scale(cfg.StatsBarGap),
                                     host.Scale(cfg.StatsBarHeight), cfg.StatsBarLabels, cfg.StatsBarRounded,
-                                    cfg.StatsWarnPercent, cfg.StatsAlertPercent);
+                                    cfg.StatsWarnPercent, cfg.StatsAlertPercent, cfg.StatsStyle,
+                                    host.Scale(cfg.StatsIconSize));
 
                 // Hover panels, so --strip exercises them too. A compact echo of
                 // Controller.BuildTooltip - enough to check placement, delay and content.
@@ -936,7 +937,7 @@ namespace DesktopSwitcher
                 strip.TooltipProvider = delegate(int index)
                 {
                     IList<Desktop> list = service.Desktops;
-                    if (index == strip.StatsIndex) return Controller.StatsHint();
+                    if (index == strip.StatsIndex) return Controller.StatsHint(cfg.StatsStyle);
                     if (index >= list.Count)
                         return new TooltipContent("New desktop", new List<string> { "Win+Ctrl+D" });
                     if (index < 0) return null;

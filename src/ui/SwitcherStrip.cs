@@ -8,6 +8,17 @@ using System.Windows.Forms;
 namespace DesktopSwitcher
 {
     /// <summary>
+    /// What the stats tile draws in its cell - statsTileStyle. Here rather than in Config
+    /// because the strip is what draws it; Config names it, as it names a Color.
+    /// </summary>
+    enum StatsTileStyle
+    {
+        Meters,   // two bars, CPU and memory
+        Gauge,    // a half-ring gauge, needle on CPU
+        Chip,     // a static chip glyph, tinted by the heavier of CPU and memory
+    }
+
+    /// <summary>
     /// The numbered button strip that lives in the taskbar.
     ///
     /// A NativeWindow rather than a Form, because a Form cannot become a child of
@@ -146,8 +157,10 @@ namespace DesktopSwitcher
         // Meter geometry in physical pixels, from SetStatsMeter. Zero until it is called,
         // which falls back to sizes derived from the font - see DrawStatsButton.
         int _meterWidth, _meterGap, _meterHeight;
+        int _iconSize;                 // the gauge's or chip's height, physical; 0 falls back to _meterHeight
         bool _meterLabels = true;
         bool _meterRounded;
+        StatsTileStyle _tileStyle;                        // the bars, the gauge or the chip
         float _meterWarn = 0.75f, _meterAlert = 0.90f;   // levels the fill turns amber, then red
         Font _labelFont;                                  // the "C" and "M" under the meters
 
@@ -481,11 +494,15 @@ namespace DesktopSwitcher
         /// constructor takes is. A setter rather than more constructor arguments because it
         /// is appearance only and the strip draws sensibly without it; the controller sets
         /// it straight after construction, from statsBarWidth, statsBarGap, statsBarHeight,
-        /// statsBarLabels, statsBarRounded and the two thresholds, which are percent.
+        /// statsBarLabels, statsBarRounded, the two thresholds, which are percent, and
+        /// statsTileStyle as <paramref name="style"/>, with statsIconSize as
+        /// <paramref name="iconSize"/> for the two styles that are not bars.
         /// </summary>
         public void SetStatsMeter(int barWidth, int gap, int height, bool labels, bool rounded,
-                                  int warnPercent, int alertPercent)
+                                  int warnPercent, int alertPercent, StatsTileStyle style, int iconSize)
         {
+            _tileStyle = style;
+            _iconSize = Math.Max(1, iconSize);
             _meterWidth = Math.Max(1, barWidth);
             _meterGap = Math.Max(0, gap);
             _meterHeight = Math.Max(1, height);
@@ -814,6 +831,25 @@ namespace DesktopSwitcher
             // Font-derived sizes when SetStatsMeter was never called, so a strip built
             // without one still draws a sensible pair.
             int height = _meterHeight > 0 ? _meterHeight : (int)Math.Round(Math.Max(8f, _font.Size * 0.85f));
+
+            float strength = 0.65f + 0.35f * Math.Min(1f, visual.Hover);
+
+            // Faint enough to read as the empty part of the bar, strong enough that an idle
+            // machine - a CPU meter near zero - still shows two meters, not a blank cell.
+            Color trackInk = Color.FromArgb(70, _highlight);
+
+            if (_tileStyle == StatsTileStyle.Gauge)
+            {
+                DrawGauge(g, textBounds, _iconSize > 0 ? _iconSize : height, trackInk, strength);
+                return;
+            }
+
+            if (_tileStyle == StatsTileStyle.Chip)
+            {
+                DrawChip(g, textBounds, _iconSize > 0 ? _iconSize : height, visual, strength);
+                return;
+            }
+
             int width = _meterWidth > 0 ? _meterWidth : Math.Max(3, (int)Math.Round(3 * _dpiScale));
             int gap = _meterWidth > 0 ? _meterGap : Math.Max(2, (int)Math.Round(2 * _dpiScale));
 
@@ -837,12 +873,6 @@ namespace DesktopSwitcher
             // digits' line with labels on and exactly on it with them off.
             int left = textBounds.X + (textBounds.Width - (width * 2 + gap)) / 2;
             int top = textBounds.Y + (textBounds.Height - (height + under)) / 2;
-
-            float strength = 0.65f + 0.35f * Math.Min(1f, visual.Hover);
-
-            // Faint enough to read as the empty part of the bar, strong enough that an idle
-            // machine - a CPU meter near zero - still shows two meters, not a blank cell.
-            Color trackInk = Color.FromArgb(70, _highlight);
 
             var cpu = new Rectangle(left, top, width, height);
             var memory = new Rectangle(left + width + gap, top, width, height);
@@ -897,6 +927,166 @@ namespace DesktopSwitcher
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// statsTileStyle = gauge: a half-ring track and a needle from a hub at its centre,
+        /// pointing at the CPU level - left is idle, straight up is half, right is flat out.
+        /// CPU alone because it is the reading that moves; memory sits still for minutes and
+        /// a needle that never moves says nothing. The panel still has both.
+        ///
+        /// The needle rides _cpuLevel, which the frame timer already eases, so it sweeps to a
+        /// new reading rather than jumping - the one thing that makes it read as a gauge
+        /// rather than a clock hand. Only the needle and hub take the load colour; the track
+        /// stays the faint highlight, the same split as the meters' fill and track.
+        ///
+        /// Sized from statsIconSize, then fitted to the cell as the meters are: a pixel of
+        /// air top and bottom, two either side. The hub sits below the arc's centre line by
+        /// its own radius, so that is counted in the height too, or the dot would land on
+        /// the underline.
+        /// </summary>
+        void DrawGauge(Graphics g, Rectangle textBounds, int height, Color trackInk, float strength)
+        {
+            float stroke = Math.Max(2f, (float)Math.Round(2 * _dpiScale));
+            float hub = stroke;   // radius of the dot the needle turns on
+
+            float tall = Math.Min(height, Math.Max(4, textBounds.Height - 2));
+            float room = Math.Max(4, textBounds.Width - 4);
+            float radius = Math.Max(3f, Math.Min(tall - stroke / 2 - hub, (room - stroke) / 2));
+
+            float cx = textBounds.X + textBounds.Width / 2f;
+            float group = stroke / 2 + radius + hub;
+            float cy = textBounds.Y + (textBounds.Height - group) / 2f + stroke / 2 + radius;
+
+            float level = Math.Max(0f, Math.Min(1f, _cpuLevel));
+
+            // Round caps on the track, the needle and nothing else - square ends on an arc
+            // this small read as notches.
+            using (var track = new Pen(trackInk, stroke))
+            {
+                track.StartCap = LineCap.Round;
+                track.EndCap = LineCap.Round;
+                g.DrawArc(track, cx - radius, cy - radius, radius * 2, radius * 2, 180, 180);
+            }
+
+            // No needle before the first reading, as the meters draw no fill: the hub alone,
+            // in track ink, is "not measured yet". A reading of exactly zero looks the same,
+            // which the meters share too - Level cannot tell them apart - and a busy-enough
+            // machine to run this never sits at a true 0% for long.
+            if (level <= 0.001f)
+            {
+                using (var dot = new SolidBrush(trackInk))
+                    g.FillEllipse(dot, cx - hub, cy - hub, hub * 2, hub * 2);
+                return;
+            }
+
+            Color ink = Color.FromArgb((int)(255 * strength),
+                                       Palette.Load(_highlight, level, _meterWarn, _meterAlert));
+
+            // GDI+ angles run clockwise from +x with y down, so 180 is left, 270 is up and 360
+            // is right - exactly the arc DrawArc drew. The tip stops a stroke short of the
+            // track's inner edge so the two never merge into one blob at a glance.
+            double angle = Math.PI * (1.0 + level);
+            float length = Math.Max(1f, radius - stroke);
+            float tipX = cx + (float)Math.Cos(angle) * length;
+            float tipY = cy + (float)Math.Sin(angle) * length;
+
+            using (var needle = new Pen(ink, Math.Max(1f, stroke * 0.75f)))
+            using (var dot = new SolidBrush(ink))
+            {
+                needle.StartCap = LineCap.Round;
+                needle.EndCap = LineCap.Round;
+                g.DrawLine(needle, cx, cy, tipX, tipY);
+                g.FillEllipse(dot, cx - hub, cy - hub, hub * 2, hub * 2);
+            }
+        }
+
+        /// <summary>
+        /// statsTileStyle = chip: a processor chip - a rounded body, pins along all four
+        /// sides, a die in the middle. A mark rather than a reading, for a tile that should
+        /// read as "system" and nothing more until something is wrong.
+        ///
+        /// At rest the body and pins are in the text ramp, muted and brought up on hover the
+        /// way the meters' letters are, and only the die carries the accent - an accent-ink
+        /// outline beside white digits read as a second highlighted button. Under load the
+        /// whole glyph goes amber and then red through Palette.Load, whose short blend at
+        /// each threshold keeps it from flicking as an eased level sits on the line.
+        ///
+        /// Tinted by the heavier of CPU and memory, not CPU alone as the gauge is: a chip
+        /// stands for the machine, and a machine out of memory is in as much trouble as one
+        /// out of processor. The cost is that a box that lives above statsWarnPercent memory
+        /// shows amber at rest - raise the threshold rather than lose the warning.
+        ///
+        /// Square, sized from statsIconSize and fitted to the cell like the other two styles.
+        /// Two pins a side below about 12px of body, where three merge into a fringe.
+        /// </summary>
+        void DrawChip(Graphics g, Rectangle textBounds, int height, ButtonVisual visual, float strength)
+        {
+            float stroke = Math.Max(1f, (float)Math.Round(1.5 * _dpiScale));
+            float pin = Math.Max(2f, (float)Math.Round(2.5 * _dpiScale));
+
+            float side = Math.Min(height, Math.Min(textBounds.Height - 2, textBounds.Width - 4));
+            side = Math.Max(8f, side);
+
+            // The body's outline is a pen centred on the rectangle, so the rectangle is the
+            // outer square less the pins and half a stroke each side.
+            float x0 = textBounds.X + (textBounds.Width - side) / 2f;
+            float y0 = textBounds.Y + (textBounds.Height - side) / 2f;
+            var body = new RectangleF(x0 + pin + stroke / 2, y0 + pin + stroke / 2,
+                                      side - 2 * pin - stroke, side - 2 * pin - stroke);
+
+            float level = Math.Max(_cpuLevel, _memLevel);
+            level = Math.Max(0f, Math.Min(1f, level));
+
+            Color text = Palette.Blend(Palette.MutedText(_background),
+                                       Palette.SecondaryText(_background), Math.Min(1f, visual.Hover));
+            Color bodyInk = Palette.Load(text, level, _meterWarn, _meterAlert);
+            Color dieInk = Color.FromArgb((int)(255 * strength),
+                                          Palette.Load(_highlight, level, _meterWarn, _meterAlert));
+
+            int pins = body.Width >= 12 ? 3 : 2;
+
+            using (var pen = new Pen(bodyInk, stroke))
+            using (var path = RoundedRect(body, Math.Max(1f, stroke * 1.5f)))
+            {
+                g.DrawPath(pen, path);
+
+                // Flat caps so a pin ends where it is measured to, not half a stroke past -
+                // past would put the top row on the cell's edge on a short taskbar.
+                for (int i = 1; i <= pins; i++)
+                {
+                    float along = (float)i / (pins + 1);
+                    float px = body.X + body.Width * along;
+                    float py = body.Y + body.Height * along;
+                    float outer = stroke / 2;
+
+                    g.DrawLine(pen, px, body.Y - outer, px, body.Y - outer - pin);
+                    g.DrawLine(pen, px, body.Bottom + outer, px, body.Bottom + outer + pin);
+                    g.DrawLine(pen, body.X - outer, py, body.X - outer - pin, py);
+                    g.DrawLine(pen, body.Right + outer, py, body.Right + outer + pin, py);
+                }
+            }
+
+            // The die: a third of the body, centred, at least two pixels so it survives the
+            // smallest taskbar.
+            float die = Math.Max(2f, body.Width / 3f);
+            using (var fill = new SolidBrush(dieInk))
+            {
+                g.FillRectangle(fill, body.X + (body.Width - die) / 2f,
+                                body.Y + (body.Height - die) / 2f, die, die);
+            }
+        }
+
+        static GraphicsPath RoundedRect(RectangleF r, float radius)
+        {
+            var path = new GraphicsPath();
+            float d = Math.Min(radius * 2, Math.Min(r.Width, r.Height));
+            path.AddArc(r.X, r.Y, d, d, 180, 90);
+            path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
         }
 
         void DrawMeterLabel(Graphics g, string text, Color ink, Rectangle meter, int top, int height)

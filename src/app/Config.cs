@@ -63,6 +63,26 @@ namespace DesktopSwitcher
         public bool StatsCpuUtility = true;
 
         /// <summary>
+        /// What the tile itself draws. "meters" - the default - is the two bars, CPU and
+        /// memory. "gauge" is a single half-ring speedometer whose needle follows CPU alone:
+        /// one glyph rather than two readings, for a tile that should read as an icon.
+        /// "chip" is an icon outright - a processor chip that only says something when it
+        /// turns amber or red. The statsBar* settings below shape the meters only; the gauge
+        /// and the chip are sized by statsIconSize instead.
+        /// </summary>
+        public StatsTileStyle StatsStyle = StatsTileStyle.Meters;
+
+        /// <summary>
+        /// How tall the gauge or the chip stands, at 96 DPI - its own key rather than
+        /// statsBarHeight, which the icons borrowed at first, so sizing the icon does not
+        /// mean editing a setting named for bars that are not on screen. Capped at draw time
+        /// to the cell like the meters: the taskbar's height, less the underline, and the
+        /// tile's width - so past a point a bigger icon needs statsWidth raised too. The
+        /// gauge is twice as wide as it is tall and meets the width cap first.
+        /// </summary>
+        public int StatsIconSize = 20;
+
+        /// <summary>
         /// The tile's two meters, CPU and memory, at 96 DPI like every other size here: how
         /// wide each bar is, the space between them, and how tall they stand. Clamped at draw
         /// time to fit the tile and the taskbar, so an oversized value shrinks to fit rather
@@ -188,6 +208,8 @@ namespace DesktopSwitcher
                 case "systemstats":      StatsTile       = ParseBool(val, StatsTile);            break;
                 case "statswidth":       StatsWidth      = ParseInt(val, StatsWidth, 12, 128);   break;
                 case "statscpu":         StatsCpuUtility = ParseCpu(val, StatsCpuUtility);       break;
+                case "statstilestyle":   StatsStyle      = ParseStyle(val, StatsStyle);          break;
+                case "statsiconsize":    StatsIconSize   = ParseInt(val, StatsIconSize, 8, 64);  break;
                 case "statsbarwidth":    StatsBarWidth   = ParseInt(val, StatsBarWidth, 1, 32);  break;
                 case "statsbargap":      StatsBarGap     = ParseInt(val, StatsBarGap, 0, 32);    break;
                 case "statsbarheight":   StatsBarHeight  = ParseInt(val, StatsBarHeight, 4, 64); break;
@@ -274,6 +296,8 @@ namespace DesktopSwitcher
             sb.AppendLine("systemStats = "     + (StatsTile ? "true" : "false"));
             sb.AppendLine("statsWidth = "      + StatsWidth);
             sb.AppendLine("statsCpu = "        + (StatsCpuUtility ? "utility" : "time"));
+            sb.AppendLine("statsTileStyle = "  + StatsStyle.ToString().ToLowerInvariant());
+            sb.AppendLine("statsIconSize = "   + StatsIconSize);
             sb.AppendLine("statsBarWidth = "   + StatsBarWidth);
             sb.AppendLine("statsBarGap = "     + StatsBarGap);
             sb.AppendLine("statsBarHeight = "  + StatsBarHeight);
@@ -321,6 +345,19 @@ namespace DesktopSwitcher
                 case "utility": return true;
                 case "time":    return false;
                 default:        return fallback;
+            }
+        }
+
+        /// <summary>"meters", "gauge" or "chip" for statsTileStyle. Anything else keeps the fallback.</summary>
+        static StatsTileStyle ParseStyle(string s, StatsTileStyle fallback)
+        {
+            if (string.IsNullOrEmpty(s)) return fallback;
+            switch (s.Trim().ToLowerInvariant())
+            {
+                case "meters": return StatsTileStyle.Meters;
+                case "gauge":  return StatsTileStyle.Gauge;
+                case "chip":   return StatsTileStyle.Chip;
+                default:       return fallback;
             }
         }
 
