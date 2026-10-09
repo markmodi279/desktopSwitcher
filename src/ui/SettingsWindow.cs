@@ -434,13 +434,23 @@ namespace DesktopSwitcher
 
         // --- layout -------------------------------------------------------------
 
+        /// <summary>
+        /// Whether a row belongs on the selected tab. Asked of the row's section rather than
+        /// of row.Visible, because Visible reports whether the control is actually showing -
+        /// which, before the window is first on screen, is nothing. Arrange used to skip every
+        /// row on that basis, so the window opened with an empty page that only filled in
+        /// once a tab change laid it out again.
+        /// </summary>
+        bool OnTab(SettingRow row)
+        {
+            return row.Setting.Section == _sections[_tabs.SelectedIndex];
+        }
+
         void ShowTab(bool resetScroll)
         {
-            string section = _sections[_tabs.SelectedIndex];
-
             _page.SuspendLayout();
             foreach (SettingRow row in _rows)
-                row.Visible = row.Setting.Section == section;
+                row.Visible = OnTab(row);
             if (resetScroll) _page.AutoScrollPosition = Point.Empty;
             _page.ResumeLayout(false);
 
@@ -464,7 +474,7 @@ namespace DesktopSwitcher
 
                 foreach (SettingRow row in _rows)
                 {
-                    if (!row.Visible) continue;
+                    if (!OnTab(row)) continue;
                     int h = row.Arrange(width);
                     row.Location = new Point(0, y + scroll);
                     y += h;
@@ -485,7 +495,7 @@ namespace DesktopSwitcher
         int RowWidth()
         {
             foreach (SettingRow row in _rows)
-                if (row.Visible) return row.Width;
+                if (OnTab(row)) return row.Width;
             return _page.ClientSize.Width;
         }
 
