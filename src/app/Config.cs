@@ -63,6 +63,22 @@ namespace DesktopSwitcher
         public int StatsBarGap = 3;
         public int StatsBarHeight = 20;
 
+        /// <summary>A small "C" and "M" under the bars, naming them. Off gives the bars the height back.</summary>
+        public bool StatsBarLabels = true;
+
+        /// <summary>
+        /// Round ends on the bars, echoing the panel's ring gauges. Off - the default - draws
+        /// plain rectangles, which were tried rounded and preferred square.
+        /// </summary>
+        public bool StatsBarRounded = false;
+
+        /// <summary>
+        /// Load, in percent, at which a bar turns amber and then red - the same for CPU and
+        /// memory. Below the first it is the highlight colour.
+        /// </summary>
+        public int StatsWarnPercent = 75;
+        public int StatsAlertPercent = 90;
+
         // --- tooltips ---------------------------------------------------------
         public bool Tooltips = true;
         /// <summary>Hover delay before the panel appears. 400ms is the Windows default.</summary>
@@ -165,6 +181,10 @@ namespace DesktopSwitcher
                 case "statsbarwidth":    StatsBarWidth   = ParseInt(val, StatsBarWidth, 1, 32);  break;
                 case "statsbargap":      StatsBarGap     = ParseInt(val, StatsBarGap, 0, 32);    break;
                 case "statsbarheight":   StatsBarHeight  = ParseInt(val, StatsBarHeight, 4, 64); break;
+                case "statsbarlabels":   StatsBarLabels  = ParseBool(val, StatsBarLabels);       break;
+                case "statsbarrounded":  StatsBarRounded = ParseBool(val, StatsBarRounded);      break;
+                case "statswarnpercent": StatsWarnPercent = ParseInt(val, StatsWarnPercent, 1, 100); break;
+                case "statsalertpercent": StatsAlertPercent = ParseInt(val, StatsAlertPercent, 1, 100); break;
                 case "tooltips":         Tooltips        = ParseBool(val, Tooltips);             break;
                 case "tooltipdelayms":   TooltipDelayMs  = ParseInt(val, TooltipDelayMs, 0, 5000); break;
                 case "tooltipmaxwindows": TooltipMaxWindows = ParseInt(val, TooltipMaxWindows, 1, 40); break;
@@ -246,6 +266,10 @@ namespace DesktopSwitcher
             sb.AppendLine("statsBarWidth = "   + StatsBarWidth);
             sb.AppendLine("statsBarGap = "     + StatsBarGap);
             sb.AppendLine("statsBarHeight = "  + StatsBarHeight);
+            sb.AppendLine("statsBarLabels = "  + (StatsBarLabels ? "true" : "false"));
+            sb.AppendLine("statsBarRounded = " + (StatsBarRounded ? "true" : "false"));
+            sb.AppendLine("statsWarnPercent = " + StatsWarnPercent);
+            sb.AppendLine("statsAlertPercent = " + StatsAlertPercent);
             sb.AppendLine("tooltips = "        + (Tooltips ? "true" : "false"));
             sb.AppendLine("tooltipDelayMs = "  + TooltipDelayMs);
             sb.AppendLine("tooltipMaxWindows = " + TooltipMaxWindows);

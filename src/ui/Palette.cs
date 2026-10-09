@@ -96,6 +96,40 @@ namespace DesktopSwitcher
             return Grey(Clamp(rest + (int)((full - rest) * emphasis)));
         }
 
+        // Windows' own yellow and red, from its accent palette - the colours the system
+        // already uses for "attention" and "problem", so they mean the same thing here
+        // without any explaining. Both hold up on a dark and on a light taskbar, which is
+        // why they are fixed rather than derived from the background like the greys.
+        static readonly Color Warning = Color.FromArgb(0xFF, 0xB9, 0x00);
+        static readonly Color Alert = Color.FromArgb(0xE8, 0x11, 0x23);
+
+        /// <summary>
+        /// The colour of a load meter at <paramref name="level"/>, 0..1: the accent up to
+        /// <paramref name="warn"/>, amber from there, red from <paramref name="alert"/>.
+        ///
+        /// Each change is a short blend starting at its threshold rather than a switch at
+        /// it, because the level arrives eased and a reading can sit right on the line: a
+        /// hard switch would flick between two colours from one second to the next, and
+        /// the frame it crossed would read as a glitch. Five points is short enough that
+        /// "above 75% is amber" stays true to the eye.
+        /// </summary>
+        public static Color Load(Color accent, float level, float warn, float alert)
+        {
+            const float Blend5 = 0.05f;
+
+            if (level >= alert) return Blend(Warning, Alert, (level - alert) / Blend5);
+            if (level >= warn) return Blend(accent, Warning, (level - warn) / Blend5);
+            return accent;
+        }
+
+        /// <summary>From <paramref name="a"/> to <paramref name="b"/> by t, 0..1.</summary>
+        public static Color Blend(Color a, Color b, float t)
+        {
+            if (t <= 0f) return a;
+            if (t >= 1f) return b;
+            return Color.FromArgb(Mix(a.R, b.R, t), Mix(a.G, b.G, t), Mix(a.B, b.B, t));
+        }
+
         static Color Tone(Color background, int[] pair)
         {
             return Grey(pair[IsLight(background) ? 1 : 0]);

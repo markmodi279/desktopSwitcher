@@ -289,7 +289,8 @@ namespace DesktopSwitcher
             _strip.TooltipProvider = BuildTooltip;
             _strip.StatsProvider = BuildStats;
             _strip.SetStatsMeter(_host.Scale(_config.StatsBarWidth), _host.Scale(_config.StatsBarGap),
-                                 _host.Scale(_config.StatsBarHeight));
+                                 _host.Scale(_config.StatsBarHeight), _config.StatsBarLabels, _config.StatsBarRounded,
+                                 _config.StatsWarnPercent, _config.StatsAlertPercent);
             _strip.StatsPinChanged += delegate(bool pinned, bool kept)
             {
                 _statsPinned = pinned;
@@ -868,15 +869,15 @@ namespace DesktopSwitcher
 
         /// <summary>
         /// The stats tile's hover tooltip: what the two meters are and what clicking does, in
-        /// the same shape as '+' gives "New desktop" and its shortcut. The meters carry no
-        /// labels - there is no room for any - so this is where they are named. Public for
-        /// the --strip harness.
+        /// the same shape as '+' gives "New desktop" and its shortcut. The meters' letters are
+        /// one character each, so this spells them out - and says what amber and red mean,
+        /// which nothing on the strip can. Public for the --strip harness.
         /// </summary>
         public static TooltipContent StatsHint()
         {
             return new TooltipContent("System", new List<string>
             {
-                "Left bar CPU, right bar memory",
+                "C is CPU, M is memory - amber and red mean heavy load",
                 "Click for CPU, memory and network",
             });
         }

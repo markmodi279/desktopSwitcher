@@ -78,8 +78,9 @@ the same thing the hover panel tells you, without having to hover. It follows th
 themselves, refreshed every couple of seconds, so a window opened or closed elsewhere
 catches up shortly rather than only at the next hover.
 
-The two small bars after `+`, in your highlight colour, are the system tile: CPU on the left,
-memory on the right, each filling from the bottom. They follow the machine every couple of
+The two small bars after `+`, marked **C** and **M**, are the system tile: CPU on the left,
+memory on the right, each filling from the bottom in your highlight colour. Past 75% a bar
+turns amber, past 90% red, so a machine under heavy load shows it at a glance. They follow the machine every couple of
 seconds - every second while the panel is open - so a glance says whether it is busy.
 Hovering the tile only names it; click it for the panel, refreshed every second: three
 tiles, CPU, memory and network. CPU and memory each show a ring gauge with the percentage in
@@ -136,6 +137,10 @@ your display automatically.
 | `statsBarWidth` | `6` | width of each of the tile's two bars at 96 DPI |
 | `statsBarGap` | `3` | space between the two bars at 96 DPI |
 | `statsBarHeight` | `20` | height of the bars at 96 DPI; capped to what the taskbar has room for |
+| `statsBarLabels` | `true` | the small C and M under the bars; `false` gives the bars that height back |
+| `statsBarRounded` | `false` | round ends on the bars, like the panel's gauges; `false` draws plain rectangles |
+| `statsWarnPercent` | `75` | load at which a bar turns amber |
+| `statsAlertPercent` | `90` | load at which a bar turns red |
 | `tooltips` | `true` | hover panel showing each desktop's windows |
 | `tooltipDelayMs` | `400` | hover delay before the panel appears |
 | `tooltipMaxWindows` | `8` | titles listed before the rest collapse into `+N more` |

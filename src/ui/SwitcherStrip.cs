@@ -146,6 +146,10 @@ namespace DesktopSwitcher
         // Meter geometry in physical pixels, from SetStatsMeter. Zero until it is called,
         // which falls back to sizes derived from the font - see DrawStatsButton.
         int _meterWidth, _meterGap, _meterHeight;
+        bool _meterLabels = true;
+        bool _meterRounded;
+        float _meterWarn = 0.75f, _meterAlert = 0.90f;   // levels the fill turns amber, then red
+        Font _labelFont;                                  // the "C" and "M" under the meters
 
         Timer _frameTimer;            // runs only while something is actually moving
         int _lastFrame;                // Environment.TickCount at the last stepped frame
@@ -476,14 +480,22 @@ namespace DesktopSwitcher
         /// The meters' size in physical pixels - already DPI-scaled, the way every width the
         /// constructor takes is. A setter rather than more constructor arguments because it
         /// is appearance only and the strip draws sensibly without it; the controller sets
-        /// it straight after construction, from statsBarWidth, statsBarGap and
-        /// statsBarHeight.
+        /// it straight after construction, from statsBarWidth, statsBarGap, statsBarHeight,
+        /// statsBarLabels, statsBarRounded and the two thresholds, which are percent.
         /// </summary>
-        public void SetStatsMeter(int barWidth, int gap, int height)
+        public void SetStatsMeter(int barWidth, int gap, int height, bool labels, bool rounded,
+                                  int warnPercent, int alertPercent)
         {
             _meterWidth = Math.Max(1, barWidth);
             _meterGap = Math.Max(0, gap);
             _meterHeight = Math.Max(1, height);
+            _meterLabels = labels;
+            _meterRounded = rounded;
+
+            // An alert set below the warning would make amber unreachable; it is read as
+            // "straight to red" instead, which is what the setting most plausibly meant.
+            _meterWarn = Math.Max(1, Math.Min(100, warnPercent)) / 100f;
+            _meterAlert = Math.Max(_meterWarn, Math.Min(100, alertPercent) / 100f);
             Invalidate();
         }
 
@@ -754,7 +766,17 @@ namespace DesktopSwitcher
 
         /// <summary>
         /// The stats tile: two small upright meters, CPU on the left and memory on the
-        /// right, each a dim track with a fill rising from the bottom.
+        /// right, each a dim rounded track with a fill rising from the bottom, and a small
+        /// "C" and "M" under them.
+        ///
+        /// The second version of the meters. The first were plain rectangles, unlabelled
+        /// and always the accent colour: they read as decoration as much as data, and a
+        /// machine pinned at 100% looked no different at a distance from one at 60%. Now
+        /// the ends can be rounded to match the panel's ring gauges - statsBarRounded, off by
+        /// default, since square was preferred once both had been seen - the letters say which bar
+        /// is which without a hover, and the fill turns amber and then red past the
+        /// statsWarnPercent and statsAlertPercent thresholds - see Palette.Load - so a heavy
+        /// load is visible from across the room, which is the one thing a glance is for.
         ///
         /// It used to be a mark - a dot between two pairs of arcs, "(( . ))" - which said
         /// nothing until clicked, and read as a wireless or broadcast icon besides, so the
@@ -795,43 +817,122 @@ namespace DesktopSwitcher
             int width = _meterWidth > 0 ? _meterWidth : Math.Max(3, (int)Math.Round(3 * _dpiScale));
             int gap = _meterWidth > 0 ? _meterGap : Math.Max(2, (int)Math.Round(2 * _dpiScale));
 
+            // The letters' line: the label font's size rather than its line height, since
+            // a capital set with the typographic format has no leading to account for, and
+            // two pixels between it and the bars. Zero without labels.
+            int labelGap = Math.Max(1, (int)Math.Round(2 * _dpiScale));
+            int labelHeight = _meterLabels ? (int)Math.Ceiling(_labelFont.Size) : 0;
+            int under = _meterLabels ? labelGap + labelHeight : 0;
+
             // Fitted to the cell: a pixel of breathing room above and below, and at least
-            // two either side, so no setting can draw into '+' or onto the underline. The gap
-            // shrinks first, but never to nothing - a gapless pair reads as one bar - and
-            // the bars narrow after it.
-            height = Math.Min(height, Math.Max(1, textBounds.Height - 2));
+            // two either side, so no setting can draw into '+' or onto the underline. The
+            // labels keep their room and the bars give it up. The gap shrinks first, but
+            // never to nothing - a gapless pair reads as one bar - and the bars narrow after.
+            height = Math.Min(height, Math.Max(1, textBounds.Height - 2 - under));
             int room = Math.Max(3, textBounds.Width - 4);
             if (width * 2 + gap > room) gap = Math.Min(gap, Math.Max(1, room / 5));
             if (width * 2 + gap > room) width = Math.Max(1, (room - gap) / 2);
 
+            // Bars and letters centred as one group, so the bars sit a little above the
+            // digits' line with labels on and exactly on it with them off.
             int left = textBounds.X + (textBounds.Width - (width * 2 + gap)) / 2;
-            int top = textBounds.Y + (textBounds.Height - height) / 2;
+            int top = textBounds.Y + (textBounds.Height - (height + under)) / 2;
 
             float strength = 0.65f + 0.35f * Math.Min(1f, visual.Hover);
-            Color ink = Color.FromArgb((int)(255 * strength), _highlight);
 
             // Faint enough to read as the empty part of the bar, strong enough that an idle
             // machine - a CPU meter near zero - still shows two meters, not a blank cell.
             Color trackInk = Color.FromArgb(70, _highlight);
 
+            var cpu = new Rectangle(left, top, width, height);
+            var memory = new Rectangle(left + width + gap, top, width, height);
+
             using (var track = new SolidBrush(trackInk))
-            using (var fill = new SolidBrush(ink))
             {
-                DrawMeter(g, track, fill, new Rectangle(left, top, width, height), _cpuLevel);
-                DrawMeter(g, track, fill, new Rectangle(left + width + gap, top, width, height), _memLevel);
+                DrawMeter(g, track, cpu, _cpuLevel, strength);
+                DrawMeter(g, track, memory, _memLevel, strength);
+            }
+
+            if (!_meterLabels) return;
+
+            // Muted at rest, brought up with the bars on hover - the same "this one is live"
+            // cue, in the text ramp because they are text.
+            Color ink = Palette.Blend(Palette.MutedText(_background),
+                                      Palette.SecondaryText(_background), Math.Min(1f, visual.Hover));
+            int labelTop = top + height + labelGap;
+            DrawMeterLabel(g, "C", ink, cpu, labelTop, labelHeight);
+            DrawMeterLabel(g, "M", ink, memory, labelTop, labelHeight);
+        }
+
+        /// <summary>
+        /// One meter: a track - square, or with round ends under statsBarRounded - and the
+        /// fill rising inside it in the load's colour. The fill is clipped to the track's own
+        /// shape, so a rounded foot follows the track's and the top stays flat either way -
+        /// the flat edge is the reading, and rounding it would make 50% look like 47%.
+        /// </summary>
+        void DrawMeter(Graphics g, Brush track, Rectangle meter, float level, float strength)
+        {
+            using (var shape = Capsule(meter))
+            {
+                g.FillPath(track, shape);
+
+                if (level <= 0.001f) return;
+
+                Color ink = Palette.Load(_highlight, level, _meterWarn, _meterAlert);
+                using (var fill = new SolidBrush(Color.FromArgb((int)(255 * strength), ink)))
+                {
+                    Region previous = g.Clip;
+                    g.SetClip(shape, CombineMode.Intersect);
+                    try
+                    {
+                        // At least a pixel once there is any reading at all, so 1% is
+                        // distinguishable from "not measured yet", which draws the track alone.
+                        float filled = Math.Max(1f, meter.Height * level);
+                        g.FillRectangle(fill, meter.X, meter.Bottom - filled, meter.Width, filled);
+                    }
+                    finally
+                    {
+                        g.Clip = previous;
+                        previous.Dispose();
+                    }
+                }
             }
         }
 
-        static void DrawMeter(Graphics g, Brush track, Brush fill, Rectangle meter, float level)
+        void DrawMeterLabel(Graphics g, string text, Color ink, Rectangle meter, int top, int height)
         {
-            g.FillRectangle(track, meter);
+            using (var brush = new SolidBrush(ink))
+            using (var format = (StringFormat)StringFormat.GenericTypographic.Clone())
+            {
+                // Centred on the bar, not confined to it: a bar a few pixels wide is narrower
+                // than an "M", and a box that narrow would clip the letter.
+                format.Alignment = StringAlignment.Center;
+                format.FormatFlags |= StringFormatFlags.NoWrap | StringFormatFlags.NoClip;
+                float centre = meter.X + meter.Width / 2f;
+                g.DrawString(text, _labelFont, brush,
+                             new RectangleF(centre - height * 2, top, height * 4, height), format);
+            }
+        }
 
-            if (level <= 0.001f) return;
+        /// <summary>
+        /// A meter's outline: an upright rectangle, or with statsBarRounded a capsule whose
+        /// top and bottom are semicircles as wide as it is. A path either way, so the fill
+        /// is clipped to it the same way whichever shape is set.
+        /// </summary>
+        GraphicsPath Capsule(Rectangle r)
+        {
+            var path = new GraphicsPath();
+            int d = Math.Min(r.Width, r.Height);
+            if (!_meterRounded || d < 2)
+            {
+                path.AddRectangle(r);
+                return path;
+            }
 
-            // At least a pixel once there is any reading at all, so 1% is distinguishable
-            // from "not measured yet", which draws the track alone.
-            float filled = Math.Max(1f, meter.Height * level);
-            g.FillRectangle(fill, meter.X, meter.Bottom - filled, meter.Width, filled);
+            path.AddArc(r.X, r.Y, d, d, 180, 180);
+            path.AddArc(r.X, r.Bottom - d, d, d, 0, 180);
+            path.CloseFigure();
+            return path;
         }
 
         /// <summary>
@@ -885,6 +986,12 @@ namespace DesktopSwitcher
 
             if (_font != null) _font.Dispose();
             _font = new Font("Segoe UI", size, FontStyle.Regular, GraphicsUnit.Pixel);
+
+            // The meters' letters, made and replaced with the main font so the two always
+            // agree on the DPI they were sized for. Small enough to sit under a 20px bar in a
+            // 40px taskbar; semibold so a letter that small still has some weight to it.
+            if (_labelFont != null) _labelFont.Dispose();
+            _labelFont = new Font("Segoe UI Semibold", Math.Max(7f, size * 0.70f), FontStyle.Regular, GraphicsUnit.Pixel);
         }
 
         // --- input ------------------------------------------------------------
@@ -1635,6 +1742,7 @@ namespace DesktopSwitcher
 
             if (_buffer != null) { _buffer.Dispose(); _buffer = null; }
             if (_font != null) { _font.Dispose(); _font = null; }
+            if (_labelFont != null) { _labelFont.Dispose(); _labelFont = null; }
         }
     }
 }
