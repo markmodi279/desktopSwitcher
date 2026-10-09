@@ -135,7 +135,19 @@ namespace DesktopSwitcher
         float _barX, _barWidth, _barLevel;
         float _barXTarget, _barWidthTarget, _barLevelTarget;
 
-        Timer _frameTimer;             // runs only while something is actually moving
+        // The stats tile's two meters, CPU and memory, 0..1. Strip-level rather than in
+        // ButtonVisual because they belong to one button only, and eased like everything
+        // else on the strip so a reading arriving does not snap the bar to its new height.
+        // Zero until the first push, which draws an empty track - "not measured yet" - rather
+        // than a full one.
+        float _cpuLevel, _memLevel;
+        float _cpuLevelTarget, _memLevelTarget;
+
+        // Meter geometry in physical pixels, from SetStatsMeter. Zero until it is called,
+        // which falls back to sizes derived from the font - see DrawStatsButton.
+        int _meterWidth, _meterGap, _meterHeight;
+
+        Timer _frameTimer;            // runs only while something is actually moving
         int _lastFrame;                // Environment.TickCount at the last stepped frame
 
         int _hoverIndex = -1;          // == _desktops.Count means '+', one past it the stats tile
@@ -436,6 +448,51 @@ namespace DesktopSwitcher
             Invalidate();
         }
 
+        /// <summary>
+        /// The readings the stats tile's meters show, in percent; negative means not known
+        /// yet and draws an empty track. Pushed by the controller each time it samples - the
+        /// reconcile tick, or once a second while the panel is open - so the tile is never
+        /// further behind than the panel would be.
+        ///
+        /// Retargets rather than sets, and the frame timer carries the bar there, so a jump
+        /// from 10% to 60% reads as the bar rising rather than a cell flickering. Invalidate
+        /// alongside Animate for the animationMs = 0 case, as in SetOccupancy.
+        /// </summary>
+        public void SetStatsLevels(float cpuPercent, float memoryPercent)
+        {
+            if (StatsIndex < 0) return;
+
+            float cpu = Level(cpuPercent);
+            float memory = Level(memoryPercent);
+            if (cpu == _cpuLevelTarget && memory == _memLevelTarget) return;
+
+            _cpuLevelTarget = cpu;
+            _memLevelTarget = memory;
+            Animate();
+            Invalidate();
+        }
+
+        /// <summary>
+        /// The meters' size in physical pixels - already DPI-scaled, the way every width the
+        /// constructor takes is. A setter rather than more constructor arguments because it
+        /// is appearance only and the strip draws sensibly without it; the controller sets
+        /// it straight after construction, from statsBarWidth, statsBarGap and
+        /// statsBarHeight.
+        /// </summary>
+        public void SetStatsMeter(int barWidth, int gap, int height)
+        {
+            _meterWidth = Math.Max(1, barWidth);
+            _meterGap = Math.Max(0, gap);
+            _meterHeight = Math.Max(1, height);
+            Invalidate();
+        }
+
+        static float Level(float percent)
+        {
+            if (percent <= 0f || float.IsNaN(percent)) return 0f;
+            return Math.Min(1f, percent / 100f);
+        }
+
         // --- animation --------------------------------------------------------
 
         /// <summary>
@@ -518,6 +575,11 @@ namespace DesktopSwitcher
             moved |= Motion.Ease(ref _barWidth, _barWidthTarget, rate, Motion.PixelEpsilon);
             moved |= Motion.Ease(ref _barLevel, _barLevelTarget, rate, Motion.ToneEpsilon);
 
+            // Levels, not tones, but on the same 0..1 scale - and a meter a few pixels tall
+            // has no visible step finer than ToneEpsilon either.
+            moved |= Motion.Ease(ref _cpuLevel, _cpuLevelTarget, rate, Motion.ToneEpsilon);
+            moved |= Motion.Ease(ref _memLevel, _memLevelTarget, rate, Motion.ToneEpsilon);
+
             return moved;
         }
 
@@ -533,7 +595,8 @@ namespace DesktopSwitcher
             if (_tooltip != null && !_tooltip.Settled) return false;
 
             return _barX == _barXTarget && _barWidth == _barWidthTarget
-                && _barLevel == _barLevelTarget;
+                && _barLevel == _barLevelTarget
+                && _cpuLevel == _cpuLevelTarget && _memLevel == _memLevelTarget;
         }
 
         /// <summary>
@@ -690,24 +753,35 @@ namespace DesktopSwitcher
         }
 
         /// <summary>
-        /// The stats tile: a dot with two arcs either side, "(( . ))" - a broadcast mark
-        /// with the mast taken out.
+        /// The stats tile: two small upright meters, CPU on the left and memory on the
+        /// right, each a dim track with a fill rising from the bottom.
         ///
-        /// The mast was the first version on the table and was dropped on purpose: a mast
-        /// with arcs is the network icon, and Windows draws its own a hundred pixels to the
-        /// right in the tray. Dot and arcs alone keep the look and lose the resemblance.
-        /// It replaced a three-bar chart drawn in the grey text ramp.
+        /// It used to be a mark - a dot between two pairs of arcs, "(( . ))" - which said
+        /// nothing until clicked, and read as a wireless or broadcast icon besides, so the
+        /// tile looked like a second network indicator next to the one in the tray. The
+        /// meters are the answer to both: the tile is now a reading in its own right, and
+        /// "is the machine busy" no longer costs a click. The panel is still where the
+        /// figures are; the meters are only the glance.
         ///
-        /// In the accent colour rather than the text ramp - the one mark on the strip that is
-        /// not a number gets the one colour that is not grey. Muted at rest and full strength
-        /// when hovered or pinned, which carries the same "this one is live" cue the ramp
-        /// gives the numbers. Full accent at rest competed with the current-desktop underline,
-        /// which is the only other thing on the strip in that colour.
+        /// Two and not three: CPU and memory are percentages and fill a bar honestly.
+        /// Network has no top - a bar for it would need a scale picked out of the air, and
+        /// whatever was picked would sit pinned full on a fast link or flat on a slow one.
         ///
-        /// Drawn rather than a character: no Segoe UI glyph has this shape, and the symbol
-        /// fonts that do would fall back to colour emoji or ignore the accent entirely.
-        /// Sized off the font, not the cell, so it is as tall as a digit beside it and centred
-        /// on the same line - textBounds is the same nudged-up rectangle the numbers centre in.
+        /// In the accent colour rather than the text ramp - the one thing on the strip that
+        /// is not a number gets the one colour that is not grey. The fill is muted at rest
+        /// and full strength when hovered or pinned, the same "this one is live" cue the ramp
+        /// gives the numbers; full accent at rest competed with the current-desktop
+        /// underline, the only other thing on the strip in that colour. Alpha rather than a
+        /// blend toward the background, so it keeps its hue on a light taskbar as on a dark
+        /// one.
+        ///
+        /// Sized by config - statsBarWidth, statsBarGap, statsBarHeight - and centred in
+        /// textBounds, the same nudged-up rectangle the numbers centre in, so the meters sit
+        /// on the digits' line. The first version sized them off the font, digit-tall and
+        /// three pixels wide, and they read as too slight beside the numbers; how heavy
+        /// they should be is taste, so it is a setting. Track edges are snapped to whole
+        /// pixels so the meters stay crisp; only the fill's top is fractional, which is what
+        /// lets an eased level glide instead of stepping a pixel at a time.
         /// </summary>
         void DrawStatsButton(Graphics g, Rectangle bounds, ButtonVisual visual)
         {
@@ -715,39 +789,49 @@ namespace DesktopSwitcher
 
             var textBounds = new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height - _barHeight);
 
-            float cx = textBounds.X + textBounds.Width / 2f;
-            float cy = textBounds.Y + textBounds.Height / 2f;
+            // Font-derived sizes when SetStatsMeter was never called, so a strip built
+            // without one still draws a sensible pair.
+            int height = _meterHeight > 0 ? _meterHeight : (int)Math.Round(Math.Max(8f, _font.Size * 0.85f));
+            int width = _meterWidth > 0 ? _meterWidth : Math.Max(3, (int)Math.Round(3 * _dpiScale));
+            int gap = _meterWidth > 0 ? _meterGap : Math.Max(2, (int)Math.Round(2 * _dpiScale));
 
-            // Outer arc as tall as a digit is, near enough; the inner one and the dot are
-            // proportions of it so the mark scales as one shape with DPI.
-            float glyph = Math.Max(8f, _font.Size * 0.85f);
-            float outer = glyph * 0.55f;
-            float inner = glyph * 0.32f;
-            float dot = Math.Max(1.5f, glyph * 0.12f);
-            float stroke = Math.Max(1.25f, (float)(_dpiScale * 1.3));
+            // Fitted to the cell: a pixel of breathing room above and below, and at least
+            // two either side, so no setting can draw into '+' or onto the underline. The gap
+            // shrinks first, but never to nothing - a gapless pair reads as one bar - and
+            // the bars narrow after it.
+            height = Math.Min(height, Math.Max(1, textBounds.Height - 2));
+            int room = Math.Max(3, textBounds.Width - 4);
+            if (width * 2 + gap > room) gap = Math.Min(gap, Math.Max(1, room / 5));
+            if (width * 2 + gap > room) width = Math.Max(1, (room - gap) / 2);
 
-            // 65% at rest, 100% hovered or pinned. Alpha rather than a blend toward the
-            // background so it holds the same hue on a light taskbar as on a dark one.
+            int left = textBounds.X + (textBounds.Width - (width * 2 + gap)) / 2;
+            int top = textBounds.Y + (textBounds.Height - height) / 2;
+
             float strength = 0.65f + 0.35f * Math.Min(1f, visual.Hover);
             Color ink = Color.FromArgb((int)(255 * strength), _highlight);
 
-            using (var pen = new Pen(ink, stroke))
-            using (var brush = new SolidBrush(ink))
+            // Faint enough to read as the empty part of the bar, strong enough that an idle
+            // machine - a CPU meter near zero - still shows two meters, not a blank cell.
+            Color trackInk = Color.FromArgb(70, _highlight);
+
+            using (var track = new SolidBrush(trackInk))
+            using (var fill = new SolidBrush(ink))
             {
-                // Round caps, or the arc ends are square stubs that read as a broken circle.
-                pen.StartCap = LineCap.Round;
-                pen.EndCap = LineCap.Round;
-
-                g.FillEllipse(brush, cx - dot, cy - dot, dot * 2, dot * 2);
-
-                // 90 degrees each, centred on the horizontal: wide enough to read as arcs,
-                // short enough that the pairs never close into rings.
-                foreach (float r in new float[] { inner, outer })
-                {
-                    g.DrawArc(pen, cx - r, cy - r, r * 2, r * 2, -45f, 90f);   // right
-                    g.DrawArc(pen, cx - r, cy - r, r * 2, r * 2, 135f, 90f);   // left
-                }
+                DrawMeter(g, track, fill, new Rectangle(left, top, width, height), _cpuLevel);
+                DrawMeter(g, track, fill, new Rectangle(left + width + gap, top, width, height), _memLevel);
             }
+        }
+
+        static void DrawMeter(Graphics g, Brush track, Brush fill, Rectangle meter, float level)
+        {
+            g.FillRectangle(track, meter);
+
+            if (level <= 0.001f) return;
+
+            // At least a pixel once there is any reading at all, so 1% is distinguishable
+            // from "not measured yet", which draws the track alone.
+            float filled = Math.Max(1f, meter.Height * level);
+            g.FillRectangle(fill, meter.X, meter.Bottom - filled, meter.Width, filled);
         }
 
         /// <summary>

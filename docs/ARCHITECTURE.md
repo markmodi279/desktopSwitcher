@@ -290,6 +290,13 @@ its last button, so the tile does not move on screen when the count changes. The
 in `Controller` as well as the strip, because the strip is thrown away on every rebuild and
 an unlock is not the user closing the panel.
 
+**The tile is a reading too.** It draws two meters, CPU and memory, instead of a mark.
+`Controller.PushStatsLevels` hands them the latest reading wherever one is taken — the
+reconcile tick, or the open panel's once-a-second refresh — and `SetStatsLevels` only
+retargets, so the frame timer eases the bars like every other value on the strip. Network
+has no meter because it has no top: any fixed scale would sit full on a fast link or flat on
+a slow one.
+
 **A pinned panel closes on a click elsewhere, and hides with the taskbar.** Both follow from
 the panel being a top-level topmost window rather than the taskbar's child. Nothing the app
 owns hears a click on another window, so `ClickWatcher` installs a low-level mouse hook while

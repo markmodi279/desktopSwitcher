@@ -288,6 +288,8 @@ namespace DesktopSwitcher
             _strip.MoveWindowRequested += OnMoveWindowRequested;
             _strip.TooltipProvider = BuildTooltip;
             _strip.StatsProvider = BuildStats;
+            _strip.SetStatsMeter(_host.Scale(_config.StatsBarWidth), _host.Scale(_config.StatsBarGap),
+                                 _host.Scale(_config.StatsBarHeight));
             _strip.StatsPinChanged += delegate(bool pinned, bool kept)
             {
                 _statsPinned = pinned;
@@ -307,6 +309,7 @@ namespace DesktopSwitcher
             _strip.SetDesktops(_service.Desktops);
             _host.Reassert(_strip.Handle, _strip.Width, _margin);
             RefreshOccupancy();
+            PushStatsLevels();
 
             // After Reassert, so the panel anchors to where the tile actually is. A pinned
             // panel survives a rebuild - an unlock or a theme change is not the user putting
@@ -351,12 +354,26 @@ namespace DesktopSwitcher
         /// second on its own. Two samplers on unrelated clocks made each rate cover anywhere
         /// from 0.6s to 1.4s, depending on where the reconcile tick happened to land, and the
         /// CPU figure jumped with it. See SwitcherStrip.StatsShowing.
+        ///
+        /// The tile's meters are fed either way: with the panel open this pushes the panel's
+        /// own latest reading again, which the strip ignores as unchanged.
         /// </summary>
         void SampleStats()
         {
             if (!_config.StatsTile) return;
-            if (_strip != null && _strip.StatsShowing) return;
-            _stats.Sample();
+            if (_strip == null || !_strip.StatsShowing) _stats.Sample();
+            PushStatsLevels();
+        }
+
+        /// <summary>
+        /// The latest CPU and memory reading, to the tile's meters. Called wherever a reading
+        /// is taken, and after a rebuild so a new strip does not sit with empty meters until
+        /// the next tick.
+        /// </summary>
+        void PushStatsLevels()
+        {
+            if (_strip == null || !_config.StatsTile) return;
+            _strip.SetStatsLevels(_stats.CpuPercent, _stats.HasMemory ? (float)_stats.MemoryLoad : -1f);
         }
 
         void DisposeStrip()
@@ -845,16 +862,23 @@ namespace DesktopSwitcher
         TooltipContent BuildStats(bool kept)
         {
             _stats.Sample();
+            PushStatsLevels();
             return StatsContent(_stats, kept);
         }
 
         /// <summary>
-        /// The stats tile's hover tooltip: what it is and what clicking does, in the same
-        /// shape as '+' gives "New desktop" and its shortcut. Public for the --strip harness.
+        /// The stats tile's hover tooltip: what the two meters are and what clicking does, in
+        /// the same shape as '+' gives "New desktop" and its shortcut. The meters carry no
+        /// labels - there is no room for any - so this is where they are named. Public for
+        /// the --strip harness.
         /// </summary>
         public static TooltipContent StatsHint()
         {
-            return new TooltipContent("System", new List<string> { "Click for CPU, memory and network" });
+            return new TooltipContent("System", new List<string>
+            {
+                "Left bar CPU, right bar memory",
+                "Click for CPU, memory and network",
+            });
         }
 
         /// <summary>

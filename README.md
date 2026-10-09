@@ -78,11 +78,14 @@ the same thing the hover panel tells you, without having to hover. It follows th
 themselves, refreshed every couple of seconds, so a window opened or closed elsewhere
 catches up shortly rather than only at the next hover.
 
-The small `(( • ))` mark after `+`, in your highlight colour, is the system tile. Hovering
-it only names it; click it for CPU, memory in use, and network throughput down and up,
-refreshed every second. The panel stays open once clicked: it still follows the pointer to
-describe other buttons, but goes back to the stats rather than disappearing when the pointer
-leaves. The mark brightens and its cell stays lit while the panel is open. Clicking it again,
+The two small bars after `+`, in your highlight colour, are the system tile: CPU on the left,
+memory on the right, each filling from the bottom. They follow the machine every couple of
+seconds - every second while the panel is open - so a glance says whether it is busy.
+Hovering the tile only names it; click it for the figures: CPU, memory in use, and network
+throughput down and up, refreshed every second. The panel stays open once clicked: it still
+follows the pointer to describe other buttons, but goes back to the stats rather than
+disappearing when the pointer leaves. The bars brighten and the cell stays lit while the
+panel is open. Clicking it again,
 or clicking anywhere else, closes it. To have it stay through clicks elsewhere, right-click
 the tile and tick **Keep open**; it then closes only from the tile or by unticking. It steps aside while the taskbar is out of sight —
 auto-hidden, or behind a fullscreen video or game — and comes back with it.
@@ -122,8 +125,11 @@ your display automatically.
 | `reconcileMs` | `2000` | safety-net poll interval |
 | `contextMenu` | `true` | right-click menu; `false` puts right click back to sending the window |
 | `occupancyDots` | `true` | dot beside a number that has windows on it; `false` stops the sweep entirely |
-| `systemStats` | `true` | the signal tile after `+` and its CPU / memory / network panel; `false` removes the tile and stops the sampling |
-| `statsWidth` | `26` | width of the signal tile at 96 DPI |
+| `systemStats` | `true` | the system tile after `+` and its CPU / memory / network panel; `false` removes the tile and stops the sampling |
+| `statsWidth` | `38` | width of the system tile at 96 DPI |
+| `statsBarWidth` | `6` | width of each of the tile's two bars at 96 DPI |
+| `statsBarGap` | `3` | space between the two bars at 96 DPI |
+| `statsBarHeight` | `20` | height of the bars at 96 DPI; capped to what the taskbar has room for |
 | `tooltips` | `true` | hover panel showing each desktop's windows |
 | `tooltipDelayMs` | `400` | hover delay before the panel appears |
 | `tooltipMaxWindows` | `8` | titles listed before the rest collapse into `+N more` |

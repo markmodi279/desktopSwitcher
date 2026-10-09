@@ -51,7 +51,17 @@ namespace DesktopSwitcher
         /// tile and the sampling behind it, so it costs nothing.
         /// </summary>
         public bool StatsTile = true;
-        public int StatsWidth = 26;
+        public int StatsWidth = 38;
+
+        /// <summary>
+        /// The tile's two meters, CPU and memory, at 96 DPI like every other size here: how
+        /// wide each bar is, the space between them, and how tall they stand. Clamped at draw
+        /// time to fit the tile and the taskbar, so an oversized value shrinks to fit rather
+        /// than spilling into '+' or under the underline.
+        /// </summary>
+        public int StatsBarWidth = 6;
+        public int StatsBarGap = 3;
+        public int StatsBarHeight = 20;
 
         // --- tooltips ---------------------------------------------------------
         public bool Tooltips = true;
@@ -152,6 +162,9 @@ namespace DesktopSwitcher
                 case "occupancydots":    OccupancyDots   = ParseBool(val, OccupancyDots);        break;
                 case "systemstats":      StatsTile       = ParseBool(val, StatsTile);            break;
                 case "statswidth":       StatsWidth      = ParseInt(val, StatsWidth, 12, 128);   break;
+                case "statsbarwidth":    StatsBarWidth   = ParseInt(val, StatsBarWidth, 1, 32);  break;
+                case "statsbargap":      StatsBarGap     = ParseInt(val, StatsBarGap, 0, 32);    break;
+                case "statsbarheight":   StatsBarHeight  = ParseInt(val, StatsBarHeight, 4, 64); break;
                 case "tooltips":         Tooltips        = ParseBool(val, Tooltips);             break;
                 case "tooltipdelayms":   TooltipDelayMs  = ParseInt(val, TooltipDelayMs, 0, 5000); break;
                 case "tooltipmaxwindows": TooltipMaxWindows = ParseInt(val, TooltipMaxWindows, 1, 40); break;
@@ -230,6 +243,9 @@ namespace DesktopSwitcher
             sb.AppendLine("occupancyDots = "   + (OccupancyDots ? "true" : "false"));
             sb.AppendLine("systemStats = "     + (StatsTile ? "true" : "false"));
             sb.AppendLine("statsWidth = "      + StatsWidth);
+            sb.AppendLine("statsBarWidth = "   + StatsBarWidth);
+            sb.AppendLine("statsBarGap = "     + StatsBarGap);
+            sb.AppendLine("statsBarHeight = "  + StatsBarHeight);
             sb.AppendLine("tooltips = "        + (Tooltips ? "true" : "false"));
             sb.AppendLine("tooltipDelayMs = "  + TooltipDelayMs);
             sb.AppendLine("tooltipMaxWindows = " + TooltipMaxWindows);

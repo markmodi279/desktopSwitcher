@@ -899,6 +899,8 @@ namespace DesktopSwitcher
                                               background, cfg.HighlightColor,
                                               (uint)cfg.TooltipDelayMs, cfg.TooltipWidth,
                                               cfg.AnimationMs, host.DpiScale);
+                strip.SetStatsMeter(host.Scale(cfg.StatsBarWidth), host.Scale(cfg.StatsBarGap),
+                                    host.Scale(cfg.StatsBarHeight));
 
                 // Hover panels, so --strip exercises them too. A compact echo of
                 // Controller.BuildTooltip - enough to check placement, delay and content.
@@ -967,9 +969,17 @@ namespace DesktopSwitcher
                 // draws is what the app draws. Sampled on the same tick the app uses.
                 var stats = new SystemStats();
                 stats.Sample();
+
+                // Echoes Controller.PushStatsLevels, so the tile's meters move here too.
+                EventHandler pushLevels = delegate
+                {
+                    strip.SetStatsLevels(stats.CpuPercent, stats.HasMemory ? (float)stats.MemoryLoad : -1f);
+                };
+
                 strip.StatsProvider = delegate(bool kept)
                 {
                     stats.Sample();
+                    pushLevels(null, EventArgs.Empty);
                     return Controller.StatsContent(stats, kept);
                 };
                 strip.StatsPinChanged += delegate(bool pinned, bool kept)
@@ -992,6 +1002,7 @@ namespace DesktopSwitcher
                 service.Start();
                 relayout(null, EventArgs.Empty);
                 refreshOccupancy(null, EventArgs.Empty);
+                if (cfg.StatsTile) pushLevels(null, EventArgs.Empty);
 
                 var ticker = new System.Windows.Forms.Timer();
                 ticker.Interval = cfg.ReconcileMs;
@@ -1000,6 +1011,7 @@ namespace DesktopSwitcher
                     service.Tick();
                     refreshOccupancy(null, EventArgs.Empty);
                     if (cfg.StatsTile && !strip.StatsShowing) stats.Sample();
+                    if (cfg.StatsTile) pushLevels(null, EventArgs.Empty);
                 };
                 ticker.Start();
 
