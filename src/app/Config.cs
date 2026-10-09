@@ -348,7 +348,7 @@ namespace DesktopSwitcher
         /// commented layout, and gets rewritten into it at startup the same way a file
         /// missing a key does - see Outdated.
         /// </summary>
-        const string FormatMarker = "# format 2";
+        const string FormatMarker = "# format 3";
 
         readonly Dictionary<string, string> _unknown = new Dictionary<string, string>();
 
@@ -519,6 +519,14 @@ namespace DesktopSwitcher
             sb.AppendLine("# read keeps its default. The app rewrites this file whenever a setting");
             sb.AppendLine("# changes, so comments of your own are not kept.");
 
+            // The lines a person actually edits stand out from the explanation around them:
+            // the comments are indented, the settings sit hard against the left edge, and
+            // every '=' lines up in one column. A plain text file has no bold, and this is
+            // the nearest thing to it that survives Notepad.
+            int keyWidth = 0;
+            foreach (Setting s in All) keyWidth = Math.Max(keyWidth, s.Key.Length);
+            foreach (string key in _unknown.Keys) keyWidth = Math.Max(keyWidth, key.Length);
+
             string section = null;
             foreach (Setting s in All)
             {
@@ -533,12 +541,12 @@ namespace DesktopSwitcher
                 }
 
                 sb.AppendLine();
-                foreach (string line in Wrap(s.Help, 76))
-                    sb.AppendLine("# " + line);
-                sb.AppendLine("# [" + s.Describe(Factory) + "]");
+                foreach (string line in Wrap(s.Help, 72))
+                    sb.AppendLine(CommentIndent + "# " + line);
+                sb.AppendLine(CommentIndent + "# [" + s.Describe(Factory) + "]");
 
                 string value = s.Format(this);
-                sb.AppendLine(value.Length > 0 ? s.Key + " = " + value : s.Key + " =");
+                sb.AppendLine(s.Key.PadRight(keyWidth) + (value.Length > 0 ? " = " + value : " ="));
             }
 
             if (_unknown.Count > 0)
@@ -550,11 +558,13 @@ namespace DesktopSwitcher
                 sb.AppendLine("# " + new string('=', 76));
                 sb.AppendLine();
                 foreach (var kv in _unknown)
-                    sb.AppendLine(kv.Key + " = " + kv.Value);
+                    sb.AppendLine(kv.Key.PadRight(keyWidth) + " = " + kv.Value);
             }
 
             return sb.ToString();
         }
+
+        const string CommentIndent = "    ";
 
         static IEnumerable<string> Wrap(string text, int width)
         {
