@@ -307,7 +307,12 @@ alone, for a tile that should read as an icon. It is drawing only - the needle r
 same eased `_cpuLevel` the CPU bar does, so it sweeps rather than jumps with no animation
 code of its own. `statsTileStyle = chip` goes further and draws a processor chip that says
 nothing until the heavier of CPU and memory crosses `statsWarnPercent`; its colour rides
-the same eased levels, so it shifts to amber rather than flicking. Both icons are sized by
+the same eased levels, so it shifts to amber rather than flicking. `monitor` and `fan` are
+the same idea in other shapes, sharing the chip's inks through `IconInks`. The fan can
+spin with `statsFanSpin`, on a timer of its own at about 30 fps that repaints only the tile:
+folding it into the frame timer would keep every ease on the strip stepping forever, since
+a spinning fan never arrives. `rings` is the panel's ring gauges in miniature, CPU outside and memory inside,
+on the same eased levels as the bars. Every style but the meters is sized by
 `statsIconSize`, not the bars' height.
 
 **The stats panel is tiles, drawn from history `SystemStats` already keeps.** Every reading

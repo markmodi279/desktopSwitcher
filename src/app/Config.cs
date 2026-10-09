@@ -71,18 +71,21 @@ namespace DesktopSwitcher
         /// memory. "gauge" is a single half-ring speedometer whose needle follows CPU alone:
         /// one glyph rather than two readings, for a tile that should read as an icon.
         /// "chip" is an icon outright - a processor chip that only says something when it
-        /// turns amber or red. The statsBar* settings below shape the meters only; the gauge
-        /// and the chip are sized by statsIconSize instead.
+        /// turns amber or red; "monitor" and "fan" are the same idea in other shapes. "rings"
+        /// is the panel's ring gauges in miniature, CPU outside and memory inside. The
+        /// statsBar* settings below shape the meters only; every other style is sized by
+        /// statsIconSize instead.
         /// </summary>
         public StatsTileStyle StatsStyle = StatsTileStyle.Meters;
 
         /// <summary>
-        /// How tall the gauge or the chip stands, at 96 DPI - its own key rather than
+        /// How tall the icon stands, whichever style it is, at 96 DPI - its own key rather than
         /// statsBarHeight, which the icons borrowed at first, so sizing the icon does not
         /// mean editing a setting named for bars that are not on screen. Capped at draw time
         /// to the cell like the meters: the taskbar's height, less the underline, and the
         /// tile's width - so past a point a bigger icon needs statsWidth raised too. The
-        /// gauge is twice as wide as it is tall and meets the width cap first.
+        /// gauge is twice as wide as it is tall and the monitor six to five, so those two
+        /// meet the width cap first.
         /// </summary>
         public int StatsIconSize = 20;
 
@@ -104,6 +107,22 @@ namespace DesktopSwitcher
         /// plain rectangles, which were tried rounded and preferred square.
         /// </summary>
         public bool StatsBarRounded = false;
+
+        /// <summary>
+        /// Keeps the fan icon turning - slowly at idle, faster as CPU rises - for
+        /// statsTileStyle = fan only. Off by default: the strip otherwise does no work at all
+        /// while nothing changes, and this costs a small repaint about thirty times a second
+        /// for as long as it is on. Nothing spins with animationMs = 0 either way.
+        /// </summary>
+        public bool StatsFanSpin = false;
+
+        /// <summary>
+        /// How fast the fan turns under statsFanSpin, as a percentage of the built-in pace -
+        /// an eighth of a turn a second at idle, one at 100% CPU. Both ends scale together, so
+        /// load still shows as a speed-up at any setting. A percentage rather than degrees a
+        /// second because nobody has an intuition for degrees a second.
+        /// </summary>
+        public int StatsFanSpeed = 100;
 
         /// <summary>
         /// Load, in percent, at which a bar turns amber and then red - the same for CPU and
@@ -232,15 +251,26 @@ namespace DesktopSwitcher
                 + "the plain share of time not idle, and reads higher at idle on a laptop.")
                 .When(c => c.StatsTile),
             Choice(StatsSection, "statsTileStyle", "Tile style",
-                new[] { "meters", "gauge", "chip" }, new[] { "Meters", "Gauge", "Chip" },
+                new[] { "meters", "gauge", "chip", "rings", "monitor", "fan" },
+                new[] { "Meters", "Gauge", "Chip", "Rings", "Monitor", "Fan" },
                 c => (int)c.StatsStyle, (c, v) => c.StatsStyle = (StatsTileStyle)v,
-                "Meters is two bars, CPU and memory. Gauge is a needle following CPU. Chip is "
-                + "an icon that only changes colour under load.")
+                "Meters is two bars, CPU and memory. Gauge is a needle following CPU. Rings "
+                + "is CPU outside and memory inside. Chip, Monitor and Fan are icons that only "
+                + "change colour under load.")
                 .When(c => c.StatsTile),
             Int(StatsSection, "statsIconSize", "Icon size", 8, 64, "px",
                 c => c.StatsIconSize, (c, v) => c.StatsIconSize = v,
-                "Height of the gauge or the chip. Shrunk to fit the tile and the taskbar.")
+                "Height of the icon. Shrunk to fit the tile and the taskbar.")
                 .When(c => c.StatsTile && c.StatsStyle != StatsTileStyle.Meters),
+            Bool(StatsSection, "statsFanSpin", "Spin fan",
+                c => c.StatsFanSpin, (c, v) => c.StatsFanSpin = v,
+                "Keeps the fan turning, faster as CPU rises. Costs a small repaint about thirty "
+                + "times a second.")
+                .When(c => c.StatsTile && c.StatsStyle == StatsTileStyle.Fan),
+            Int(StatsSection, "statsFanSpeed", "Fan speed", 10, 400, "%",
+                c => c.StatsFanSpeed, (c, v) => c.StatsFanSpeed = v,
+                "How fast the fan turns, against the built-in pace. It still speeds up as CPU rises.")
+                .When(c => c.StatsTile && c.StatsStyle == StatsTileStyle.Fan && c.StatsFanSpin),
             Int(StatsSection, "statsBarWidth", "Bar width", 1, 32, "px",
                 c => c.StatsBarWidth, (c, v) => c.StatsBarWidth = v,
                 "Width of each meter bar.")

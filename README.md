@@ -166,8 +166,10 @@ colour again.
 | `systemStats` | `true` | the system tile after `+` and its CPU / memory / network panel; `false` removes the tile and stops the sampling |
 | `statsWidth` | `38` | width of the system tile at 96 DPI |
 | `statsCpu` | `utility` | CPU measure: `utility` matches Task Manager, `time` is the plain share of time not idle |
-| `statsTileStyle` | `meters` | what the tile draws: `meters` is the CPU and memory bars, `gauge` a half-ring gauge whose needle follows CPU, `chip` a processor-chip icon that turns amber and red when CPU or memory is under heavy load; the bar settings below do not apply to the gauge or chip |
-| `statsIconSize` | `20` | height of the gauge or chip at 96 DPI; capped to the taskbar's height and the tile's width, so a much bigger icon needs `statsWidth` raised too |
+| `statsTileStyle` | `meters` | what the tile draws: `meters` is the CPU and memory bars, `gauge` a half-ring gauge whose needle follows CPU, `rings` two concentric rings, CPU outside and memory inside, `chip`, `monitor` and `fan` icons that turn amber and red when CPU or memory is under heavy load; the bar settings below apply to `meters` only |
+| `statsIconSize` | `20` | height of the icon, for every style but `meters`, at 96 DPI; capped to the taskbar's height and the tile's width, so a much bigger icon needs `statsWidth` raised too |
+| `statsFanSpin` | `false` | keeps the `fan` icon turning, faster as CPU rises; costs a small repaint about thirty times a second |
+| `statsFanSpeed` | `100` | how fast the spinning fan turns, in percent of the built-in pace (an eighth of a turn a second at idle, one at full CPU); 10 to 400 |
 | `statsBarWidth` | `6` | width of each of the tile's two bars at 96 DPI |
 | `statsBarGap` | `3` | space between the two bars at 96 DPI |
 | `statsBarHeight` | `20` | height of the bars at 96 DPI; capped to what the taskbar has room for |

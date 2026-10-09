@@ -102,7 +102,9 @@ namespace DesktopSwitcher
 
             _theme = new SettingsTheme(_scale, background, _working.HighlightColor);
             BackColor = _theme.Surface;
-            MinimumSize = new Size(_theme.S(480), _theme.S(380));
+            // Wide enough for the widest editor - the six-way tile style - beside its help
+            // text's 120px floor and the row's padding; at 480 the two overlapped.
+            MinimumSize = new Size(_theme.S(540), _theme.S(380));
 
             _page = new Panel();
             _page.Dock = DockStyle.Fill;

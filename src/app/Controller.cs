@@ -303,7 +303,8 @@ namespace DesktopSwitcher
             _strip.SetStatsMeter(_host.Scale(_config.StatsBarWidth), _host.Scale(_config.StatsBarGap),
                                  _host.Scale(_config.StatsBarHeight), _config.StatsBarLabels, _config.StatsBarRounded,
                                  _config.StatsWarnPercent, _config.StatsAlertPercent, _config.StatsStyle,
-                                 _host.Scale(_config.StatsIconSize));
+                                 _host.Scale(_config.StatsIconSize), _config.StatsFanSpin,
+                                 _config.StatsFanSpeed);
             _strip.StatsPinChanged += delegate(bool pinned, bool kept)
             {
                 _statsPinned = pinned;
@@ -889,8 +890,8 @@ namespace DesktopSwitcher
         /// The stats tile's hover tooltip: what the two meters are and what clicking does, in
         /// the same shape as '+' gives "New desktop" and its shortcut. The meters' letters are
         /// one character each, so this spells them out - and says what amber and red mean,
-        /// which nothing on the strip can. The gauge and the chip have no letters, so for
-        /// them the first line says what drives the mark instead. Public for the --strip
+        /// which nothing on the strip can. The other styles have no letters, so for them
+        /// the first line says what drives the mark instead. Public for the --strip
         /// harness.
         /// </summary>
         public static TooltipContent StatsHint(StatsTileStyle style)
@@ -899,7 +900,10 @@ namespace DesktopSwitcher
             switch (style)
             {
                 case StatsTileStyle.Gauge: first = "The needle is CPU - amber and red mean heavy load"; break;
-                case StatsTileStyle.Chip:  first = "Amber and red mean heavy CPU or memory load"; break;
+                case StatsTileStyle.Rings: first = "Outer ring is CPU, inner is memory - amber and red mean heavy load"; break;
+                case StatsTileStyle.Chip:
+                case StatsTileStyle.Monitor:
+                case StatsTileStyle.Fan:   first = "Amber and red mean heavy CPU or memory load"; break;
                 default:                   first = "C is CPU, M is memory - amber and red mean heavy load"; break;
             }
 

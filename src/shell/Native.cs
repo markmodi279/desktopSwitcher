@@ -259,6 +259,9 @@ namespace DesktopSwitcher
         [DllImport("user32.dll")]
         public static extern bool InvalidateRect(IntPtr hWnd, IntPtr rect, bool erase);
 
+        [DllImport("user32.dll", EntryPoint = "InvalidateRect")]
+        public static extern bool InvalidateRect(IntPtr hWnd, ref RECT rect, bool erase);
+
         /// <summary>
         /// Paints the pending update region now, on this thread, instead of leaving a
         /// WM_PAINT to be found whenever the queue next runs dry.

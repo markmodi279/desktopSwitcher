@@ -16,6 +16,9 @@ namespace DesktopSwitcher
         Meters,   // two bars, CPU and memory
         Gauge,    // a half-ring gauge, needle on CPU
         Chip,     // a static chip glyph, tinted by the heavier of CPU and memory
+        Rings,    // two concentric rings, CPU outside and memory inside
+        Monitor,  // a static monitor glyph, tinted like the chip
+        Fan,      // a static fan glyph, tinted like the chip
     }
 
     /// <summary>
@@ -157,14 +160,22 @@ namespace DesktopSwitcher
         // Meter geometry in physical pixels, from SetStatsMeter. Zero until it is called,
         // which falls back to sizes derived from the font - see DrawStatsButton.
         int _meterWidth, _meterGap, _meterHeight;
-        int _iconSize;                 // the gauge's or chip's height, physical; 0 falls back to _meterHeight
+        int _iconSize;                 // any icon style's height, physical; 0 falls back to _meterHeight
         bool _meterLabels = true;
         bool _meterRounded;
-        StatsTileStyle _tileStyle;                        // the bars, the gauge or the chip
+        StatsTileStyle _tileStyle;                        // the bars or one of the icons
         float _meterWarn = 0.75f, _meterAlert = 0.90f;   // levels the fill turns amber, then red
         Font _labelFont;                                  // the "C" and "M" under the meters
 
         Timer _frameTimer;            // runs only while something is actually moving
+
+        // statsFanSpin: the fan's rotor angle, in degrees within one blade's 120, and its own
+        // timer - see UpdateSpin for why it is not the frame timer.
+        bool _fanSpin;
+        float _fanSpeed = 1f;         // statsFanSpeed, as a multiplier on the two speeds below
+        float _fanAngle;
+        int _fanLast;
+        Timer _spinTimer;
         int _lastFrame;                // Environment.TickCount at the last stepped frame
 
         int _hoverIndex = -1;          // == _desktops.Count means '+', one past it the stats tile
@@ -496,11 +507,16 @@ namespace DesktopSwitcher
         /// it straight after construction, from statsBarWidth, statsBarGap, statsBarHeight,
         /// statsBarLabels, statsBarRounded, the two thresholds, which are percent, and
         /// statsTileStyle as <paramref name="style"/>, with statsIconSize as
-        /// <paramref name="iconSize"/> for the two styles that are not bars.
+        /// <paramref name="iconSize"/> for the styles that are not bars, and statsFanSpin and
+        /// statsFanSpeed as <paramref name="spin"/> and <paramref name="spinPercent"/>, which
+        /// only the fan reads.
         /// </summary>
         public void SetStatsMeter(int barWidth, int gap, int height, bool labels, bool rounded,
-                                  int warnPercent, int alertPercent, StatsTileStyle style, int iconSize)
+                                  int warnPercent, int alertPercent, StatsTileStyle style, int iconSize,
+                                  bool spin, int spinPercent)
         {
+            _fanSpin = spin;
+            _fanSpeed = Math.Max(1, spinPercent) / 100f;
             _tileStyle = style;
             _iconSize = Math.Max(1, iconSize);
             _meterWidth = Math.Max(1, barWidth);
@@ -513,7 +529,81 @@ namespace DesktopSwitcher
             // "straight to red" instead, which is what the setting most plausibly meant.
             _meterWarn = Math.Max(1, Math.Min(100, warnPercent)) / 100f;
             _meterAlert = Math.Max(_meterWarn, Math.Min(100, alertPercent) / 100f);
+            UpdateSpin();
             Invalidate();
+        }
+
+        // Degrees a second at idle and the extra at flat out, at statsFanSpeed = 100.
+        // Scaled together by that setting, so a faster or slower fan keeps the same gap
+        // between idle and busy. An eighth of a turn a second
+        // idle reads as running without drawing the eye - a third was tried first, and at
+        // idle it was the busiest thing on the taskbar. One turn a second at 100% is still
+        // plainly faster, so load is visible, without blurring into a disc at 30 frames.
+        const float FanIdleSpeed = 45f;
+        const float FanLoadSpeed = 315f;
+        const int SpinFrameMs = 33;
+
+        /// <summary>
+        /// Starts or stops the fan's spin to match the settings. Its own timer rather than
+        /// the frame timer, because the frame timer's whole contract is that it stops when
+        /// everything has arrived - and a spinning fan never arrives, so folding it in would
+        /// keep every ease on the strip stepping at 60Hz forever. This one ticks at about
+        /// 30, which a rotor this size cannot be told apart from, touches nothing but the
+        /// angle, and repaints only the tile.
+        ///
+        /// Off with animationMs = 0, the same "nothing moves" that setting means to
+        /// everything else on the strip.
+        /// </summary>
+        void UpdateSpin()
+        {
+            bool want = !_disposed && _fanSpin && _tileStyle == StatsTileStyle.Fan
+                        && _animationMs > 0 && StatsIndex >= 0;
+
+            if (!want)
+            {
+                if (_spinTimer != null) _spinTimer.Stop();
+                return;
+            }
+
+            if (_spinTimer == null)
+            {
+                _spinTimer = new Timer();
+                _spinTimer.Interval = SpinFrameMs;
+                _spinTimer.Tick += OnSpin;
+            }
+
+            if (!_spinTimer.Enabled)
+            {
+                _fanLast = Environment.TickCount;
+                _spinTimer.Start();
+            }
+        }
+
+        void OnSpin(object sender, EventArgs e)
+        {
+            int now = Environment.TickCount;
+            int elapsed = unchecked(now - _fanLast);   // across the TickCount wrap, as OnFrame
+            if (elapsed <= 0) return;
+            _fanLast = now;
+
+            // Speed off the eased CPU level, so a spike spins it up smoothly instead of
+            // jumping a gear. Wrapped at 120 because the rotor has three blades: the angle
+            // never grows without bound, and 120 looks exactly like 0.
+            float speed = _fanSpeed * (FanIdleSpeed + FanLoadSpeed * Math.Max(0f, Math.Min(1f, _cpuLevel)));
+            _fanAngle = (_fanAngle + speed * elapsed / 1000f) % 120f;
+
+            // Hidden with the taskbar - an Explorer restart, a fullscreen game on some
+            // setups - means nothing to repaint. The angle still advances, so it picks up
+            // where it would have been rather than where it stopped.
+            if (Handle == IntPtr.Zero || !Native.IsWindowVisible(Handle)) return;
+
+            Native.RECT client;
+            int index = StatsIndex;
+            if (index < 0 || !Native.GetWindowRect(Handle, out client)) return;
+
+            Rectangle tile = ButtonBounds(index, client.Height);
+            var dirty = new Native.RECT { Left = tile.Left, Top = tile.Top, Right = tile.Right, Bottom = tile.Bottom };
+            Native.InvalidateRect(Handle, ref dirty, false);
         }
 
         static float Level(float percent)
@@ -844,10 +934,13 @@ namespace DesktopSwitcher
                 return;
             }
 
-            if (_tileStyle == StatsTileStyle.Chip)
+            int icon = _iconSize > 0 ? _iconSize : height;
+            switch (_tileStyle)
             {
-                DrawChip(g, textBounds, _iconSize > 0 ? _iconSize : height, visual, strength);
-                return;
+                case StatsTileStyle.Chip:    DrawChip(g, textBounds, icon, visual, strength); return;
+                case StatsTileStyle.Rings:   DrawRings(g, textBounds, icon, trackInk, strength); return;
+                case StatsTileStyle.Monitor: DrawMonitor(g, textBounds, icon, visual, strength); return;
+                case StatsTileStyle.Fan:     DrawFan(g, textBounds, icon, visual, strength); return;
             }
 
             int width = _meterWidth > 0 ? _meterWidth : Math.Max(3, (int)Math.Round(3 * _dpiScale));
@@ -1035,14 +1128,8 @@ namespace DesktopSwitcher
             var body = new RectangleF(x0 + pin + stroke / 2, y0 + pin + stroke / 2,
                                       side - 2 * pin - stroke, side - 2 * pin - stroke);
 
-            float level = Math.Max(_cpuLevel, _memLevel);
-            level = Math.Max(0f, Math.Min(1f, level));
-
-            Color text = Palette.Blend(Palette.MutedText(_background),
-                                       Palette.SecondaryText(_background), Math.Min(1f, visual.Hover));
-            Color bodyInk = Palette.Load(text, level, _meterWarn, _meterAlert);
-            Color dieInk = Color.FromArgb((int)(255 * strength),
-                                          Palette.Load(_highlight, level, _meterWarn, _meterAlert));
+            Color bodyInk, dieInk;
+            IconInks(visual, strength, out bodyInk, out dieInk);
 
             int pins = body.Width >= 12 ? 3 : 2;
 
@@ -1075,6 +1162,223 @@ namespace DesktopSwitcher
                 g.FillRectangle(fill, body.X + (body.Width - die) / 2f,
                                 body.Y + (body.Height - die) / 2f, die, die);
             }
+        }
+
+        /// <summary>
+        /// The two inks every static icon - chip, monitor, fan - is drawn in: the body in the
+        /// text ramp, muted at rest and brought up on hover, and the one accent detail at the
+        /// hover strength, both pushed to amber and red by the heavier of CPU and memory. One
+        /// place, so the three marks cannot drift apart in how they warn.
+        /// </summary>
+        void IconInks(ButtonVisual visual, float strength, out Color body, out Color accent)
+        {
+            float level = Math.Max(_cpuLevel, _memLevel);
+            level = Math.Max(0f, Math.Min(1f, level));
+
+            Color text = Palette.Blend(Palette.MutedText(_background),
+                                       Palette.SecondaryText(_background), Math.Min(1f, visual.Hover));
+            body = Palette.Load(text, level, _meterWarn, _meterAlert);
+            accent = Color.FromArgb((int)(255 * strength),
+                                    Palette.Load(_highlight, level, _meterWarn, _meterAlert));
+        }
+
+        /// <summary>
+        /// statsTileStyle = rings: two concentric rings, CPU on the outside and memory inside,
+        /// each filled clockwise from twelve o'clock - the panel's ring gauges in miniature,
+        /// so the tile and the panel it opens speak the same shape. Both readings in a square,
+        /// where the meters need the width of two bars and a gap.
+        ///
+        /// Tracks and fills split as the meters' do: the faint highlight for the empty ring,
+        /// the load colour at hover strength for the filled part, and each ring takes its own
+        /// colour, so amber on the inside says memory without a hover. The fills ride the
+        /// eased levels, so they sweep round rather than jump.
+        ///
+        /// Sized from statsIconSize and fitted to the cell like the others. Two and a half
+        /// pixels between the rings at 96 DPI: one was tried first, and on the taskbar the
+        /// two tracks ran together into a single thick ring. Below the size where the inner ring
+        /// would have no hole, it is dropped and the outer ring alone shows CPU - one honest
+        /// reading over two that blur into a disc.
+        /// </summary>
+        void DrawRings(Graphics g, Rectangle textBounds, int height, Color trackInk, float strength)
+        {
+            float stroke = Math.Max(2f, (float)Math.Round(2 * _dpiScale));
+            float gap = Math.Max(2f, (float)Math.Round(2.5 * _dpiScale));
+
+            float side = Math.Min(height, Math.Min(textBounds.Height - 2, textBounds.Width - 4));
+            side = Math.Max(8f, side);
+
+            float cx = textBounds.X + textBounds.Width / 2f;
+            float cy = textBounds.Y + textBounds.Height / 2f;
+
+            // Radii to the pen's centre line, since a pen straddles the path it strokes.
+            float outer = side / 2 - stroke / 2;
+            float inner = outer - stroke - gap;
+
+            DrawRing(g, cx, cy, outer, stroke, trackInk, _cpuLevel, strength);
+            if (inner >= stroke) DrawRing(g, cx, cy, inner, stroke, trackInk, _memLevel, strength);
+        }
+
+        void DrawRing(Graphics g, float cx, float cy, float radius, float stroke,
+                      Color trackInk, float level, float strength)
+        {
+            var box = new RectangleF(cx - radius, cy - radius, radius * 2, radius * 2);
+            using (var track = new Pen(trackInk, stroke))
+                g.DrawEllipse(track, box);
+
+            // Nothing past the track before the first reading, as the meters draw no fill.
+            level = Math.Max(0f, Math.Min(1f, level));
+            if (level <= 0.001f) return;
+
+            Color ink = Color.FromArgb((int)(255 * strength),
+                                       Palette.Load(_highlight, level, _meterWarn, _meterAlert));
+
+            // Flat caps: round ones would push a 50% fill visibly past six o'clock on a ring
+            // this small, and the arc's end is the reading. At least a few degrees, so 1% is
+            // distinguishable from "not measured yet".
+            using (var fill = new Pen(ink, stroke))
+                g.DrawArc(fill, box, -90f, Math.Max(6f, 360f * level));
+        }
+
+        /// <summary>
+        /// statsTileStyle = monitor: a screen on a stand, the generic mark for "this PC" - the
+        /// one most likely to read as "system" to someone who has never seen the tile before.
+        /// Static and tinted as the chip is, through IconInks: outline and stand in the text
+        /// ramp, and the accent as a faint glow on the screen with a chart line across it - the
+        /// chip's die, but spread over the panel and held back in alpha, since a solid accent
+        /// screen is the size of a highlighted button and read as one.
+        ///
+        /// Six by five overall, the screen taking the top seven tenths and the stand the
+        /// rest. Four by three was tried first and read as a wide-screen bar beside the
+        /// numbers. Height from statsIconSize; the width is what meets the cell's cap first on a
+        /// narrow tile, and the height comes down with it so the proportions hold.
+        /// </summary>
+        void DrawMonitor(Graphics g, Rectangle textBounds, int height, ButtonVisual visual, float strength)
+        {
+            float stroke = Math.Max(1f, (float)Math.Round(1.5 * _dpiScale));
+
+            float tall = Math.Min(height, textBounds.Height - 2);
+            tall = Math.Min(tall, (textBounds.Width - 4) / 1.2f);
+            tall = Math.Max(8f, tall);
+            float wide = tall * 1.2f;
+
+            float x0 = textBounds.X + (textBounds.Width - wide) / 2f;
+            float y0 = textBounds.Y + (textBounds.Height - tall) / 2f;
+
+            float screenTall = (float)Math.Round(tall * 0.7f);
+            var screen = new RectangleF(x0 + stroke / 2, y0 + stroke / 2, wide - stroke, screenTall - stroke);
+
+            Color bodyInk, glowInk;
+            IconInks(visual, strength, out bodyInk, out glowInk);
+
+            // The glow inside the outline, a stroke clear of it, so the frame stays a frame.
+            var glass = RectangleF.Inflate(screen, -stroke, -stroke);
+            if (glass.Width > 0 && glass.Height > 0)
+                using (var fill = new SolidBrush(Color.FromArgb(glowInk.A * 2 / 5, glowInk)))
+                    g.FillRectangle(fill, glass);
+
+            // A faint chart line across the glass, so the screen says "monitoring" rather than
+            // "a screen". Drawn, not data: the shape is fixed - the colour is what carries the
+            // load, as for the rest of the glyph - and a live trace in a few pixels of height
+            // would only ever read as noise. Skipped on a screen too short to hold a line with
+            // air above and below it.
+            var plot = RectangleF.Inflate(glass, -stroke, -stroke);
+            if (plot.Width >= 6 && plot.Height >= 4)
+            {
+                float[] xs = { 0f, 0.22f, 0.42f, 0.6f, 0.8f, 1f };
+                float[] ys = { 0.75f, 0.45f, 0.62f, 0.2f, 0.5f, 0.35f };
+                var line = new PointF[xs.Length];
+                for (int i = 0; i < xs.Length; i++)
+                    line[i] = new PointF(plot.X + plot.Width * xs[i], plot.Y + plot.Height * ys[i]);
+
+                using (var trace = new Pen(Color.FromArgb(glowInk.A * 3 / 4, glowInk), Math.Max(1f, stroke * 0.75f)))
+                {
+                    trace.LineJoin = LineJoin.Round;
+                    trace.StartCap = LineCap.Round;
+                    trace.EndCap = LineCap.Round;
+                    g.DrawLines(trace, line);
+                }
+            }
+
+            using (var pen = new Pen(bodyInk, stroke))
+            using (var path = RoundedRect(screen, Math.Max(1f, stroke)))
+            {
+                g.DrawPath(pen, path);
+
+                // Neck down the middle, foot across the bottom: flat caps, so the foot stops
+                // where it is measured and the neck does not poke through the frame.
+                float mid = x0 + wide / 2f;
+                float foot = y0 + tall - stroke / 2;
+                float half = Math.Max(stroke, wide * 0.22f);
+                g.DrawLine(pen, mid, screen.Bottom + stroke / 2, mid, foot);
+                g.DrawLine(pen, mid - half, foot, mid + half, foot);
+            }
+        }
+
+        /// <summary>
+        /// statsTileStyle = fan: a three-blade rotor in a ring - "hardware" with a hint of
+        /// "heat", which is what a machine under load makes. Static and tinted as the chip is,
+        /// through IconInks: ring and blades in the text ramp, the hub in the accent, the
+        /// chip's die again.
+        ///
+        /// Still by default. statsFanSpin turns it, faster as CPU rises, on a timer of its
+        /// own - see UpdateSpin. Off by default because the strip otherwise goes quiet the
+        /// moment nothing moves, and a system monitor that costs CPU to sit idle is the wrong
+        /// way round; the spin is cheap, but it is not free.
+        ///
+        /// Each blade is an ellipse set off the radial line, so the three read as swept rather
+        /// than as a propeller drawn with a ruler. Square, sized and fitted like the chip.
+        /// </summary>
+        void DrawFan(Graphics g, Rectangle textBounds, int height, ButtonVisual visual, float strength)
+        {
+            float stroke = Math.Max(1f, (float)Math.Round(1.5 * _dpiScale));
+
+            float side = Math.Min(height, Math.Min(textBounds.Height - 2, textBounds.Width - 4));
+            side = Math.Max(8f, side);
+
+            float cx = textBounds.X + textBounds.Width / 2f;
+            float cy = textBounds.Y + textBounds.Height / 2f;
+            float ring = side / 2 - stroke / 2;
+
+            // Inside the ring with a stroke of air, or the blade tips touch it and the whole
+            // thing reads as a pie cut in three.
+            float reach = ring - stroke * 1.5f;
+            float hub = Math.Max(1f, reach * 0.28f);
+            float bladeLong = Math.Max(1f, reach - hub * 0.5f);
+            float bladeWide = Math.Max(1f, reach * 0.55f);
+
+            Color bodyInk, hubInk;
+            IconInks(visual, strength, out bodyInk, out hubInk);
+
+            using (var pen = new Pen(bodyInk, stroke))
+                g.DrawEllipse(pen, cx - ring, cy - ring, ring * 2, ring * 2);
+
+            GraphicsState saved = g.Save();
+            try
+            {
+                g.TranslateTransform(cx, cy);
+                g.RotateTransform(_fanAngle);
+                using (var blade = new SolidBrush(bodyInk))
+                {
+                    for (int i = 0; i < 3; i++)
+                    {
+                        // Pointing up, nudged right of the centre line by a fifth of its own
+                        // width - the sweep - and starting half a hub out, so it grows from
+                        // under the hub rather than from the centre point.
+                        g.FillEllipse(blade, -bladeWide * 0.3f, -hub * 0.5f - bladeLong,
+                                      bladeWide, bladeLong);
+                        g.RotateTransform(120f);
+                    }
+                }
+            }
+            finally
+            {
+                g.Restore(saved);
+            }
+
+            // The hub last, over the blades' roots, so the three meet in one clean disc
+            // instead of overlapping ellipse ends.
+            using (var dot = new SolidBrush(hubInk))
+                g.FillEllipse(dot, cx - hub, cy - hub, hub * 2, hub * 2);
         }
 
         static GraphicsPath RoundedRect(RectangleF r, float radius)
@@ -1914,6 +2218,7 @@ namespace DesktopSwitcher
             // Before the handle goes, or a frame already queued lands on a destroyed
             // window and invalidates a rectangle that is no longer anybody's.
             if (_frameTimer != null) { _frameTimer.Stop(); _frameTimer.Dispose(); _frameTimer = null; }
+            if (_spinTimer != null) { _spinTimer.Stop(); _spinTimer.Dispose(); _spinTimer = null; }
 
             // Same reason, and one worse: a re-show landing after the tooltip is gone would
             // call ShowTooltip on a disposed panel.

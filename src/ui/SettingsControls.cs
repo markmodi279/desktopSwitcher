@@ -572,8 +572,12 @@ namespace DesktopSwitcher
     }
 
     /// <summary>
-    /// Two or three mutually exclusive options side by side, the selected one filled with
-    /// the accent. Click one, or Left and Right with focus.
+    /// A few mutually exclusive options side by side, the selected one filled with the
+    /// accent. Click one, or Left and Right with focus.
+    ///
+    /// Segments are narrower past three: statsTileStyle has six, and at the two-or-three
+    /// width they made a control wider than the help text beside it, which then wrapped
+    /// into a column a word wide. Six-letter captions still fit the narrower segment.
     /// </summary>
     sealed class Segmented : ThemedControl
     {
@@ -586,7 +590,7 @@ namespace DesktopSwitcher
         public Segmented(SettingsTheme theme, string[] items) : base(theme)
         {
             _items = items;
-            Size = new Size(theme.S(76) * items.Length, theme.S(26));
+            Size = new Size(theme.S(items.Length > 3 ? 58 : 76) * items.Length, theme.S(26));
         }
 
         /// <summary>Setting this from code does not raise SelectedIndexChanged.</summary>

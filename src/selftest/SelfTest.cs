@@ -933,7 +933,8 @@ namespace DesktopSwitcher
                 strip.SetStatsMeter(host.Scale(cfg.StatsBarWidth), host.Scale(cfg.StatsBarGap),
                                     host.Scale(cfg.StatsBarHeight), cfg.StatsBarLabels, cfg.StatsBarRounded,
                                     cfg.StatsWarnPercent, cfg.StatsAlertPercent, cfg.StatsStyle,
-                                    host.Scale(cfg.StatsIconSize));
+                                    host.Scale(cfg.StatsIconSize), cfg.StatsFanSpin,
+                                    cfg.StatsFanSpeed);
 
                 // Hover panels, so --strip exercises them too. A compact echo of
                 // Controller.BuildTooltip - enough to check placement, delay and content.
