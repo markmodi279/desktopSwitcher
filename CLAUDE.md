@@ -114,17 +114,18 @@ shell.
 | `--where <title>` | whether a window is on the current desktop |
 | `--anim [ms]` | steps the strip's easing headlessly and prints each frame; needs no shell at all |
 | `--slide [ms]` | the same for the hover panel's travel between buttons: placement, the pinned bottom edge, the row-block origin, the accent stub |
+| `--config` | every setting with its value, range and default, and that `config.ini` round-trips through the settings table |
 | `--help` | the command list |
 
 **Ask first** — these mutate desktop state or take over the screen: `--switch`, `--create`,
 `--remove`, `--rename`, `--move`, `--soak`, `--watch`, `--service`, `--testwindow`,
-`--strip`.
+`--strip`, `--settings` (opens the Settings window standalone; prints changes, saves nothing).
 
 A clean compile with zero warnings plus `--list`, `--desktops` and `--taskbar` returning
 sane live data is the baseline any change should clear.
 
 Some things can only be checked by eye, and no command covers them: hover panel placement
-and timing, menu appearance, how the highlight animation *looks*, behaviour across an
+and timing, menu appearance, the Settings window's look, how the highlight animation *looks*, behaviour across an
 Explorer restart, and anything on a second monitor. `--anim` and `--slide` cover the arithmetic under
 the animation - that it converges, lands exactly and stops - but nothing about how it
 reads on screen. For the hover panel specifically, `--slide` cannot see trails behind a
@@ -162,6 +163,7 @@ it before the next went on top.
 | **M12** | The hover panel travels too. Its edges are eased rather than an origin and a size, the strip's frame timer drives both, and `--slide` proves the arithmetic. |
 | **M13** | Occupancy dots: a cheap sweep in `WindowInventory` answers "does this desktop have windows" without the cost of the full one, pushed to the strip on the reconcile tick. `--occupancy` proves the cheap sweep against the full one. |
 | **M14** | The stats tile: CPU, memory and network in the hover panel, refreshed live, pinned open by a click. `SystemStats` samples on the reconcile tick so the first panel already has rates; `--stats` checks the figures and the adapter filter. |
+| **M15** | Settings without Notepad: `SettingsWindow`, owner-drawn and themed off the taskbar, applying every change live with Revert and Defaults. `Config.All` became the one table of settings, so `config.ini` is now written grouped and commented, and `ConfigWatcher` applies a hand edit the moment it is saved. `--config` proves the table round-trips; `--settings` opens the window on its own. |
 
 Between M8 and M9, two fixes worth knowing: tooltip rows lead with the owning app resolved
 from the process, and the tooltip width is fixed rather than sized to content so it does not

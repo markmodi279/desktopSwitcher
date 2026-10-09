@@ -125,20 +125,34 @@ A desktop's name — set from the menu, or in Task View (`Win+Tab`, right-click 
 **Rename**) — is what the panel is titled with. Renaming from the menu shows up
 immediately; a rename made in Task View is picked up the next time you switch desktops.
 
-Right-click the tray icon for **Start with Windows**, config and log files,
-**Reload settings**, and **Exit**. There is no other way to quit — the strip has no chrome.
-
-**Reload settings** re-reads `config.ini` and rebuilds the strip, so editing the file does
-not need a restart.
+Right-click the tray icon for **Settings**, **Start with Windows**, the config and log
+files, **Reload settings**, and **Exit**. There is no other way to quit — the strip has no
+chrome. Double-clicking the tray icon opens Settings.
 
 Windows forgets how many desktops you had after a reboot, so the count you were last
 using is saved and restored at login.
 
 ## Configuration
 
-`%APPDATA%\DesktopSwitcher\config.ini`, created on first run. Unknown keys are preserved,
-malformed values fall back to defaults, and sizes are authored for 96 DPI and scaled to
-your display automatically.
+**Settings** on the tray menu has every option on four tabs — Strip, Hover panel, Stats,
+Advanced — with switches, sliders, choices and colour pickers. Each change shows on the
+strip as you make it and is saved straight away. **Revert** goes back to how things were
+when the window opened, **Defaults** to how they started, and **Close** just closes:
+nothing is waiting to be applied. Options that do nothing given the others — the hover
+delay with the hover panel off, the bar sizes when the tile draws a gauge — are greyed out.
+
+Everything lives in `%APPDATA%\DesktopSwitcher\config.ini`, created on first run, and the
+file can be edited by hand. It is grouped into the same sections, and every key has a
+comment above it saying what it does, what values it takes and what its default is.
+Saving the file applies it at once; there is no need to restart or reload. Unknown keys are
+preserved, a number out of range is pulled back into it, a value that cannot be read
+falls back to its default, and sizes are authored for 96 DPI and scaled to your display
+automatically. The app rewrites the file when a setting changes, so comments of your own
+are not kept.
+
+**Reload settings** on the tray menu re-reads the file and rebuilds the strip. With the
+file applied as it is saved, that is now mostly a way to make the strip sample the taskbar
+colour again.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -184,8 +198,8 @@ anything, start with [CLAUDE.md](CLAUDE.md).
 
 ## Troubleshooting
 
-Set `diagnostics = true` in the config, hit **Reload settings**, and open the log from the
-tray menu. It
+Turn on **Diagnostics log** under Settings → Advanced (or set `diagnostics = true` in the
+config) and open the log from the tray menu. It
 records Explorer restarts, strip rebuilds, COM re-acquisition, sink registration, desktop
 changes and any unexpected failure.
 

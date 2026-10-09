@@ -56,6 +56,8 @@ namespace DesktopSwitcher
                     case "--strip":   return CmdStrip(api, args);
                     case "--anim":    return CmdAnim(args);
                     case "--slide":   return CmdSlide(args);
+                    case "--config":  return CmdConfig();
+                    case "--settings": return CmdSettings(args);
                     case "--help":
                     case "-h":
                     case "/?":        Usage(); return 0;
@@ -98,6 +100,8 @@ namespace DesktopSwitcher
             Console.WriteLine("  --strip N              run the real switcher strip for N seconds");
             Console.WriteLine("  --anim [ms]            step the strip's easing headlessly, frame by frame");
             Console.WriteLine("  --slide [ms]           step the hover panel's travel between buttons");
+            Console.WriteLine("  --config               print every setting and check config.ini round-trips");
+            Console.WriteLine("  --settings [light|dark|#RRGGBB]  open the Settings window on its own; saves nothing");
             Console.WriteLine();
         }
 
@@ -1625,6 +1629,196 @@ namespace DesktopSwitcher
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Every setting as the live config.ini has it, then proof that the file format
+        /// holds together: what Render writes, FromText reads back unchanged - for the live
+        /// values, the defaults, and every setting pinned at each end of its range - and
+        /// every key in the table appears in the file exactly once.
+        ///
+        /// Read-only. It renders into memory and never touches the file, so it is safe to
+        /// run against the installed app. What it guards is the one table every settings
+        /// surface now reads: a typo in a key, a Choice whose spellings do not parse back,
+        /// or a range whose ends the parser clamps differently would all show here first.
+        /// </summary>
+        static int CmdConfig()
+        {
+            Config live = Config.Load();
+            Config defaults = new Config();
+
+            Console.WriteLine("Settings from " + Config.FilePath + ":");
+            string section = null;
+            foreach (Setting s in Config.All)
+            {
+                if (s.Section != section)
+                {
+                    section = s.Section;
+                    Console.WriteLine();
+                    Console.WriteLine("  " + section);
+                }
+
+                string value = s.Format(live);
+                if (value.Length == 0) value = "(automatic)";
+                string mark = s.Format(live) == s.Format(defaults) ? " " : "*";
+
+                Console.WriteLine(string.Format("   {0} {1,-18} {2,-12} {3}{4}",
+                    mark, s.Key, value, s.Describe(defaults),
+                    s.AppliesTo(live) ? "" : "  (inactive)"));
+            }
+            Console.WriteLine();
+            Console.WriteLine("  * differs from the default. " + (live.Outdated
+                ? "The file is in an older layout; the app rewrites it at startup."
+                : "The file is in the current layout."));
+            Console.WriteLine();
+
+            int failed = 0;
+            failed += CheckRoundTrip("live values", live);
+            failed += CheckRoundTrip("defaults", defaults);
+            failed += CheckRoundTrip("every setting at its minimum", Extreme(true));
+            failed += CheckRoundTrip("every setting at its maximum", Extreme(false));
+
+            // Each key exactly once, and nothing in the file the table does not know.
+            string text = defaults.Render();
+            var seen = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (string raw in text.Split('\n'))
+            {
+                string line = raw.Trim();
+                if (line.Length == 0 || line[0] == '#') continue;
+                int eq = line.IndexOf('=');
+                if (eq <= 0) continue;
+                string key = line.Substring(0, eq).Trim();
+                int n;
+                seen.TryGetValue(key, out n);
+                seen[key] = n + 1;
+            }
+
+            bool keysOk = seen.Count == Config.All.Length;
+            foreach (Setting s in Config.All)
+            {
+                int n;
+                if (!seen.TryGetValue(s.Key, out n) || n != 1) keysOk = false;
+            }
+            Console.WriteLine((keysOk ? "  PASS  " : "  FAIL  ") + "every key written exactly once ("
+                              + seen.Count + " in the file, " + Config.All.Length + " in the table)");
+            if (!keysOk) failed++;
+
+            bool marked = Config.FromText(text).Outdated == false;
+            Console.WriteLine((marked ? "  PASS  " : "  FAIL  ") + "a freshly written file reads as current");
+            if (!marked) failed++;
+
+            Console.WriteLine();
+            Console.WriteLine(failed == 0 ? "All checks passed." : failed + " check(s) failed.");
+            return failed == 0 ? 0 : 1;
+        }
+
+        /// <summary>
+        /// The Settings window on its own, over a copy of the live config, with no strip
+        /// and no controller behind it. Every change is printed instead of applied, and
+        /// nothing is saved - so the window's look and its controls can be tried without
+        /// touching the running app or its file.
+        ///
+        /// Drawn over the live taskbar's colour by default, as the app would draw it.
+        /// "light" and "dark" force a typical light or dark taskbar, and a #RRGGBB any
+        /// colour, for checking the side of the palette this machine is not on.
+        ///
+        /// Ask first: it opens a window and takes focus.
+        /// </summary>
+        static int CmdSettings(string[] args)
+        {
+            System.Windows.Forms.Application.EnableVisualStyles();
+            System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
+
+            Config cfg = Config.Load();
+            var host = new TaskbarHost();
+            bool located = host.Locate();
+
+            Color background = Color.FromArgb(0x1F, 0x1F, 0x1F);
+            string mode = args.Length > 1 ? args[1].ToLowerInvariant() : "";
+            Color forced;
+
+            if (mode == "light") background = Color.FromArgb(0xEE, 0xEE, 0xEE);
+            else if (mode == "dark") background = Color.FromArgb(0x1F, 0x1F, 0x1F);
+            else if (Setting.TryParseHex(mode, out forced)) background = forced;
+            else if (!cfg.BackgroundColor.IsEmpty) background = cfg.BackgroundColor;
+            else if (located)
+            {
+                Color sampled;
+                int probe = SwitcherStrip.MeasureWidth(2, host.Scale(cfg.ButtonWidth), host.Scale(cfg.PlusWidth),
+                                                       StatsWidth(cfg, host));
+                if (host.TrySampleBackground(probe, host.Scale(cfg.Margin), out sampled)) background = sampled;
+            }
+
+            var screen = located
+                ? System.Windows.Forms.Screen.FromHandle(host.TrayWindow)
+                : System.Windows.Forms.Screen.PrimaryScreen;
+            double scale = located ? host.DpiScale : 1.0;
+
+            Console.WriteLine("Settings window over " + Setting.ToHex(background) + " at scale " + scale
+                              + ". Changes are printed, not applied or saved. Close the window to finish.");
+            Console.WriteLine();
+
+            Config last = cfg.Clone();
+            using (var window = new SettingsWindow(cfg, background, scale, screen.WorkingArea))
+            {
+                window.Changed += delegate(Config next)
+                {
+                    foreach (Setting s in Config.All)
+                        if (s.Format(next) != s.Format(last))
+                            Console.WriteLine("  " + s.Key + ": " + s.Format(last) + " -> " + s.Format(next));
+                    last = next;
+                };
+                window.OpenFileRequested += delegate { Console.WriteLine("  (would open " + Config.FilePath + ")"); };
+
+                System.Windows.Forms.Application.Run(window);
+            }
+
+            Console.WriteLine();
+            Console.WriteLine(last.SameAs(cfg) ? "Closed with no net change." : "Closed. The file was not touched.");
+            return 0;
+        }
+
+        static int CheckRoundTrip(string what, Config cfg)
+        {
+            Config back = Config.FromText(cfg.Render());
+            bool ok = back.SameAs(cfg);
+            Console.WriteLine((ok ? "  PASS  " : "  FAIL  ") + "round trip, " + what);
+
+            if (!ok)
+            {
+                foreach (Setting s in Config.All)
+                    if (s.Format(back) != s.Format(cfg))
+                        Console.WriteLine("          " + s.Key + ": wrote " + s.Format(cfg)
+                                          + ", read back " + s.Format(back));
+            }
+            return ok ? 0 : 1;
+        }
+
+        /// <summary>
+        /// Every setting at one end of what it accepts. Colours go to black or white and
+        /// the automatic background to automatic or white, so both of its spellings are
+        /// exercised. The amber/red rule is applied afterwards the way a load would, since
+        /// a config that breaks it cannot come back from a file unchanged.
+        /// </summary>
+        static Config Extreme(bool low)
+        {
+            var cfg = new Config();
+            foreach (Setting s in Config.All)
+            {
+                switch (s.Kind)
+                {
+                    case SettingKind.Int:
+                    case SettingKind.Choice: s.SetInt(cfg, low ? s.Min : s.Max); break;
+                    case SettingKind.Bool:   s.SetBool(cfg, !low); break;
+                    default:
+                        s.SetColor(cfg, low
+                            ? (s.AllowAuto ? Color.Empty : Color.FromArgb(0, 0, 0))
+                            : Color.FromArgb(255, 255, 255));
+                        break;
+                }
+            }
+            cfg.Normalize(null);
+            return cfg;
         }
 
         // --- helpers ----------------------------------------------------------

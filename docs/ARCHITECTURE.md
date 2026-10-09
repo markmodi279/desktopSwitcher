@@ -88,6 +88,8 @@ commented `do not reorder`. They are not stable across Windows versions; see
 | [Motion.cs](../src/ui/Motion.cs) | The easing every moving thing is stepped by — frame interval, epsilons, and the exponential `Rate`/`Ease` pair. Belongs to neither the strip nor the panel, so the panel does not have to reach back through the class that owns it. |
 | [TooltipWindow.cs](../src/ui/TooltipWindow.cs) | The hover panel. A top-level, click-through window that draws whatever text it is handed. |
 | [MenuTheme.cs](../src/ui/MenuTheme.cs) | Dresses a `ContextMenuStrip` in colours derived from the sampled taskbar colour. |
+| [SettingsWindow.cs](../src/ui/SettingsWindow.cs) | The Settings window. Edits a copy of the config, one row per entry in `Config.All`, and hands a fresh copy to `Changed` after every edit; it never touches the live config. Revert, Defaults, retheme in place, and its own per-monitor DPI handling. |
+| [SettingsControls.cs](../src/ui/SettingsControls.cs) | The window's owner-drawn controls — toggle, slider, number box, segmented choice, colour swatch, sliding tab row, the setting row — and the shared, mutable `SettingsTheme` they all draw from. |
 | [Palette.cs](../src/ui/Palette.cs) | The one place that knows which way "away from the background" is. Lifts a surface off the taskbar colour and picks text tones for it, in whichever direction that colour demands. |
 
 Note what is *not* here: neither the strip nor the tooltip knows what a desktop is called or
@@ -102,7 +104,9 @@ only `Controller` holds all three.
 |---|---|
 | [Controller.cs](../src/app/Controller.cs) | Owns everything. Hidden window, tray icon, timers, watchdog, menu construction, tooltip content, config persistence. |
 | [Program.cs](../src/app/Program.cs) | Entry point. DPI awareness, config load, single-instance mutex, then `Controller` or `SelfTest`. |
-| [Config.cs](../src/app/Config.cs) | The `config.ini` round trip. Unknown keys preserved, malformed values fall back, missing keys trigger a rewrite. |
+| [Config.cs](../src/app/Config.cs) | The `config.ini` round trip, and `All` — the one table of settings that the parser, the commented file, the Settings window and `--config` all read. Unknown keys preserved, malformed values fall back, a missing key or an older file layout triggers a rewrite. |
+| [Setting.cs](../src/app/Setting.cs) | One entry in that table: key, section, label, help text, kind, range, accessors, and the parse/format/describe for its kind. |
+| [ConfigWatcher.cs](../src/app/ConfigWatcher.cs) | Applies a hand edit to `config.ini` as soon as it is saved. Debounces an editor's burst of events, retries a locked file, and ignores the app's own writes by comparing against `Config.LastWritten`. |
 | [Log.cs](../src/app/Log.cs) | Rolling diagnostic log, off by default, thread-safe because notifications are not. |
 | [AssemblyInfo.cs](../src/app/AssemblyInfo.cs) | Name, description and version. Attributes only; `csc` stamps the Win32 version resource from them, which is how an exe with no project file gets a Details tab. |
 
@@ -177,7 +181,7 @@ animation timer did not: a WinForms timer started from a thread with no message 
 which froze the strip's animation and is how this was found. Touching `Handle` in the constructor
 is what makes the marshalling real; do not remove it as dead code.
 
-`Controller` runs six timers, all on the UI thread:
+`Controller` runs seven timers, all on the UI thread:
 
 | Timer | Interval | Job |
 |---|---|---|
@@ -187,6 +191,7 @@ is what makes the marshalling real; do not remove it as dead code.
 | focus | 300 ms | sample the foreground window |
 | save | 2000 ms | debounced config write |
 | theme | 600 ms | debounced rebuild after `WM_SETTINGCHANGE`/`ImmersiveColorSet` |
+| settings | 150 ms | debounced apply of the Settings window's latest change; created when the window first changes something |
 
 `SwitcherStrip` owns three more, and they are the only timers in the tree that are not always
 running. The animation frame timer, 15 ms, is started when a visual target changes and
@@ -363,9 +368,16 @@ The grain of the codebase, if you are extending it:
 - **A new shell operation** — it goes in `VirtualDesktopApi`, wrapped in `Do()`, exposed
   through `DesktopService`, and gets a `--command` in `SelfTest` so it can be checked
   against a live shell.
-- **A new setting** — add the field, the `Apply` case and the `Render` line in `Config`.
-  `Incomplete` reads the expected keys back out of what `Render` writes, so existing config
-  files get rewritten with the new key on next launch; there is no second list to update.
+- **A new setting** — add the field to `Config` and one entry to `Config.All`: key,
+  section, label, help text, range, accessors, and `.When(...)` if it only means something
+  while another setting is on. That is all. Parsing, the commented line in `config.ini`,
+  the row in the Settings window and the `--config` round trip all come from that entry,
+  and `Incomplete` checks the file against the same table, so existing config files get
+  rewritten with the new key on next launch.
+- **Where settings take effect** — `Controller.ApplyConfig` is the only way in, for the
+  tray's reload, a hand edit `ConfigWatcher` noticed, and every change in the Settings
+  window. Something that has to happen when a setting changes goes there or in
+  `RebuildStrip`, which it calls, and then holds for all three.
 - **Anything drawn** — sizes are authored at 96 DPI and passed through `Scale`, and colours
   come from `Palette` rather than being hardcoded or lightened by hand. Nothing outside
   that file may assume the taskbar is dark; three files each assumed it independently, and

@@ -35,6 +35,10 @@ namespace DesktopSwitcher
 
         ContextMenuStrip _buttonMenu;   // the open one, rebuilt per click - contents follow the model
         MenuTheme _menuTheme;
+        ConfigWatcher _configWatcher;   // applies hand edits to config.ini as they are saved
+        SettingsWindow _settings;       // the open one, or null - there is only ever one
+        Config _settingsPending;        // the window's latest change, waiting out the debounce
+        Timer _settingsTimer;           // that debounce
 
         Timer _startupTimer;     // waits for the taskbar to exist at login
         Timer _reconcileTimer;   // model safety net
@@ -161,15 +165,21 @@ namespace DesktopSwitcher
                 _config.Save();
                 Log.Write("controller: wrote initial config");
             }
-            else if (_config.Incomplete)
+            else if (_config.Outdated)
             {
                 // Same reasoning one upgrade later: a file written before a setting existed
                 // leaves it on its default with no line to edit, which is the very state
-                // the first-run write exists to prevent. Every value already in the file
-                // survives, having just been loaded from it.
+                // the first-run write exists to prevent. A file written before the comments
+                // existed is rewritten too, so it explains itself the next time it is
+                // opened. Every value already in the file survives, having just been loaded
+                // from it.
                 _config.Save();
-                Log.Write("controller: config rewritten with settings added since it was written");
+                Log.Write("controller: config rewritten in the current layout");
             }
+
+            // After the writes above, so the directory is certain to exist and the rewrite is
+            // recorded as this process's own rather than seen as a hand edit.
+            _configWatcher = new ConfigWatcher(this, OnConfigFileChanged);
 
             _started = true;
             Log.Write("controller: started");
@@ -324,6 +334,11 @@ namespace DesktopSwitcher
                 if (_statsWidth > 0) _strip.SetStatsPinned(true, _statsKept);
                 else _statsPinned = _statsKept = false;
             }
+
+            // Every rebuild resamples the taskbar colour, so this is where an open Settings
+            // window hears that it changed - a theme switch, or a custom background it just
+            // applied itself.
+            if (_settings != null) _settings.Retheme(_background);
 
             Log.Write("controller: strip rebuilt");
         }
@@ -1325,23 +1340,42 @@ namespace DesktopSwitcher
         // --- config persistence -----------------------------------------------
 
         /// <summary>
-        /// Re-reads config.ini and applies everything that is not the strip's own geometry;
-        /// the caller rebuilds the strip, which is what picks up the sizes, the colours and
-        /// whether the context menu is wired at all.
+        /// Makes <paramref name="next"/> the live config and applies all of it: the things
+        /// that live outside the strip here, then a strip rebuild, which is what picks up
+        /// the sizes, the colours and whether the context menu is wired at all.
         ///
-        /// Editing the file and having to restart is a strange thing to ask of an app whose
-        /// whole pitch is that it installs nothing, and the file is deliberately written
-        /// complete on first run so that every setting is there to be edited. This closes
-        /// the loop those two decisions left open.
+        /// The one way in for every source of settings - the tray's reload item, a hand edit
+        /// ConfigWatcher noticed, and every change made in the Settings window - so none of
+        /// them can apply a different subset from the others. It began as the reload item's
+        /// alone: editing the file and having to restart is a strange thing to ask of an app
+        /// whose whole pitch is that it installs nothing.
+        ///
+        /// lastCount is not a setting and never comes from <paramref name="next"/>. It is
+        /// the desktop count, which only this process knows the current value of - a debounced
+        /// save may still be pending, and a Settings window opened before a desktop was added
+        /// holds an older count. Taking it from either would quietly roll the count back and
+        /// write that out on the next change.
+        ///
+        /// <paramref name="save"/> is for the window, whose changes exist nowhere else yet.
+        /// Something read from the file is only written back when the count had to be
+        /// corrected, so a hand edit is not reformatted under the editor that made it.
         /// </summary>
-        void ReloadConfig()
+        void ApplyConfig(Config next, string reason, bool save)
         {
-            // A debounced save still pending holds a desktop count newer than the file's.
-            // Re-reading first would quietly roll it back to whatever was last written and
-            // then write that back out on the next change.
-            if (_pendingCount >= 1 && _saveTimer != null) SavePending(this, EventArgs.Empty);
+            int written = next.LastCount;
+            if (_pendingCount >= 1)
+            {
+                next.LastCount = _pendingCount;
+                _pendingCount = -1;
+                if (_saveTimer != null) _saveTimer.Stop();
+            }
+            else
+            {
+                next.LastCount = _config.LastCount;
+            }
 
-            _config = Config.Load();
+            _config = next;
+            if (save || _config.LastCount != written) _config.Save();
 
             // Diagnostics is the one setting that takes effect nowhere near the strip.
             Log.Init(Config.LogPath, _config.Diagnostics);
@@ -1360,7 +1394,100 @@ namespace DesktopSwitcher
             if (_tray != null) _tray.Icon = _trayIcon;
             if (previous != null) previous.Dispose();
 
-            Log.Write("controller: settings reloaded from " + Config.FilePath);
+            if (_started) RebuildStrip();
+
+            // From anywhere but the window itself, the window is now showing stale values.
+            if (_settings != null && !save) _settings.ShowConfig(_config);
+
+            Log.Write("controller: settings applied - " + reason);
+        }
+
+        // --- settings window ----------------------------------------------------
+
+        /// <summary>
+        /// Opens the Settings window, or brings the open one forward. One at a time: two
+        /// windows editing two copies would each apply its own, and whichever changed last
+        /// would silently undo the other.
+        /// </summary>
+        void OpenSettings()
+        {
+            if (_settings != null)
+            {
+                if (_settings.WindowState == FormWindowState.Minimized)
+                    _settings.WindowState = FormWindowState.Normal;
+                _settings.Activate();
+                return;
+            }
+
+            // Centred on the taskbar's monitor, at its scale - the one the strip being
+            // configured is on. Before the taskbar has been found, the primary monitor.
+            Screen screen = _host.TrayWindow != IntPtr.Zero ? Screen.FromHandle(_host.TrayWindow) : Screen.PrimaryScreen;
+            double scale = _host.TrayWindow != IntPtr.Zero ? _host.DpiScale : 1.0;
+            Color background = _background.IsEmpty ? Color.FromArgb(0x1F, 0x1F, 0x1F) : _background;
+
+            _settings = new SettingsWindow(_config, background, scale, screen.WorkingArea);
+            _settings.Changed += OnSettingsChanged;
+            _settings.OpenFileRequested += delegate { OpenInShell(Config.FilePath, true); };
+            _settings.FormClosed += delegate
+            {
+                // Whatever was changed in the last moment before closing still applies.
+                FlushSettings();
+                _settings.Dispose();
+                _settings = null;
+            };
+
+            _settings.Show();
+            _settings.Activate();
+            Log.Write("controller: settings window opened");
+        }
+
+        /// <summary>
+        /// The window changed something. Applied after a pause rather than at once: a slider
+        /// drag is a change per pixel, and each apply rebuilds the strip - recreating its
+        /// window and resampling the taskbar. 150ms is short enough that the strip still
+        /// follows the drag, and long enough that it rebuilds a handful of times rather than
+        /// a hundred.
+        /// </summary>
+        void OnSettingsChanged(Config next)
+        {
+            _settingsPending = next;
+
+            if (_settingsTimer == null)
+            {
+                _settingsTimer = new Timer();
+                _settingsTimer.Interval = 150;
+                _settingsTimer.Tick += delegate { FlushSettings(); };
+            }
+            _settingsTimer.Stop();
+            _settingsTimer.Start();
+        }
+
+        void FlushSettings()
+        {
+            if (_settingsTimer != null) _settingsTimer.Stop();
+            if (_settingsPending == null) return;
+
+            Config next = _settingsPending;
+            _settingsPending = null;
+            ApplyConfig(next, "changed in the settings window", true);
+        }
+
+        /// <summary>
+        /// ConfigWatcher's callback: config.ini was saved by something other than this app.
+        ///
+        /// A save that straddled the watcher's quiet period is read twice, and the second
+        /// read has nothing in it that is not already live; so does a save that changed only
+        /// a comment. Applying either would rebuild the strip for nothing - visibly, since a
+        /// rebuild resamples and repaints. The tray's reload item deliberately does not ask
+        /// this question: it is also how a person tells the strip to look at the taskbar
+        /// again.
+        /// </summary>
+        void OnConfigFileChanged(Config next)
+        {
+            next.LastCount = _pendingCount >= 1 ? _pendingCount : _config.LastCount;
+            if (next.SameAs(_config)) return;
+
+            ApplyConfig(next, "config.ini edited", false);
         }
 
         void QueueSave(int count)
@@ -1400,6 +1527,13 @@ namespace DesktopSwitcher
 
             menu.Items.Add(new ToolStripSeparator());
 
+            // First in its group and bold, as the tray's default item: it is also what a
+            // double-click on the icon opens.
+            var settings = new ToolStripMenuItem("Settings...");
+            settings.Font = new Font(settings.Font, FontStyle.Bold);
+            settings.Click += delegate { OpenSettings(); };
+            menu.Items.Add(settings);
+
             var openConfig = new ToolStripMenuItem("Open config file");
             openConfig.Click += delegate { OpenInShell(Config.FilePath, true); };
             menu.Items.Add(openConfig);
@@ -1416,8 +1550,7 @@ namespace DesktopSwitcher
             reload.Click += delegate
             {
                 if (!_started) return;
-                ReloadConfig();
-                RebuildStrip();
+                ApplyConfig(Config.Load(), "reloaded from the tray", false);
             };
             menu.Items.Add(reload);
 
@@ -1431,6 +1564,7 @@ namespace DesktopSwitcher
             _tray.Icon = _trayIcon;
             _tray.Text = "DesktopSwitcher";
             _tray.ContextMenuStrip = menu;
+            _tray.DoubleClick += delegate { OpenSettings(); };
             _tray.Visible = true;
         }
 
@@ -1546,6 +1680,20 @@ namespace DesktopSwitcher
             StopTimer(ref _watchdogTimer);
             StopTimer(ref _focusTimer);
             StopTimer(ref _settleTimer);
+            StopTimer(ref _settingsTimer);
+
+            // A change still waiting out the settings debounce is saved, not applied: the
+            // strip is about to be torn down, and rebuilding it first would be wasted work.
+            if (_settingsPending != null)
+            {
+                _settingsPending.LastCount = _config.LastCount;
+                _config = _settingsPending;
+                _settingsPending = null;
+                _config.Save();
+            }
+            if (_settings != null) { _settings.Close(); _settings = null; }
+
+            if (_configWatcher != null) { _configWatcher.Dispose(); _configWatcher = null; }
 
             if (_saveTimer != null)
             {

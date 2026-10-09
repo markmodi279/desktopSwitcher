@@ -11,6 +11,10 @@ namespace DesktopSwitcher
     /// Flat key=value settings file. Unknown keys are preserved on save so hand-edits
     /// and future keys survive a round trip. Missing or malformed values fall back to
     /// defaults rather than failing.
+    ///
+    /// The fields below are what the rest of the app reads. What each one is called in the
+    /// file, what it accepts and what to tell a person about it is in the All table further
+    /// down, which is the only list of settings there is.
     /// </summary>
     sealed class Config
     {
@@ -143,10 +147,223 @@ namespace DesktopSwitcher
         /// <summary>Color.Empty means "sample the live taskbar colour at runtime".</summary>
         public Color BackgroundColor = Color.Empty;
 
+        // --- the settings table ----------------------------------------------
+
+        // Section names. They are the Settings window's tabs and the file's banners, in
+        // the order they first appear in All.
+        public const string StripSection = "Strip";
+        public const string PanelSection = "Hover panel";
+        public const string StatsSection = "Stats";
+        public const string AdvancedSection = "Advanced";
+        const string StateSection = "Kept by the app";
+
+        /// <summary>
+        /// Every setting, in the order the file lists them and the window shows them. The
+        /// one list: Apply looks keys up in it, Render writes it out, the Settings window
+        /// builds a row from each entry and --config checks it round-trips. A setting added
+        /// here appears in all four without being mentioned anywhere else.
+        ///
+        /// The help text is for the person changing the value, so it says what they will
+        /// see rather than why the code is shaped the way it is - that stays on the fields
+        /// above. Kept ASCII, like every source file here.
+        /// </summary>
+        public static readonly Setting[] All =
+        {
+            // --- strip
+            Int(StripSection, "buttonWidth", "Button width", 16, 128, "px",
+                c => c.ButtonWidth, (c, v) => c.ButtonWidth = v,
+                "Width of each numbered desktop button."),
+            Int(StripSection, "plusWidth", "'+' button width", 12, 128, "px",
+                c => c.PlusWidth, (c, v) => c.PlusWidth = v,
+                "Width of the '+' button that adds a desktop."),
+            Int(StripSection, "margin", "Gap to tray", 0, 200, "px",
+                c => c.Margin, (c, v) => c.Margin = v,
+                "Space between the strip and the notification area on its right."),
+            Int(StripSection, "animationMs", "Animation", 0, 2000, "ms",
+                c => c.AnimationMs, (c, v) => c.AnimationMs = v,
+                "How long the underline takes to slide to a new desktop. 0 turns animation off."),
+            Colour(StripSection, "highlightColor", "Highlight colour", false,
+                c => c.HighlightColor, (c, v) => c.HighlightColor = v,
+                "The underline under the current desktop. The tray icon and the meters use it too."),
+            Colour(StripSection, "backgroundColor", "Background colour", true,
+                c => c.BackgroundColor, (c, v) => c.BackgroundColor = v,
+                "Behind the buttons, and the tone every panel and menu is drawn from. "
+                + "Automatic samples the taskbar's own colour and follows it when it changes."),
+            Bool(StripSection, "occupancyDots", "Occupancy dots",
+                c => c.OccupancyDots, (c, v) => c.OccupancyDots = v,
+                "A dim dot beside a desktop's number when it has windows on it, so the empty "
+                + "ones - the ones safe to remove - show at a glance."),
+            Bool(StripSection, "contextMenu", "Right-click menu",
+                c => c.ContextMenu, (c, v) => c.ContextMenu = v,
+                "Right click a button for a menu of what it can do. Off makes right click send "
+                + "the active window to that desktop; Shift + right click does that either way."),
+
+            // --- hover panel
+            Bool(PanelSection, "tooltips", "Hover panel",
+                c => c.Tooltips, (c, v) => c.Tooltips = v,
+                "Hovering a button lists the windows on that desktop."),
+            Int(PanelSection, "tooltipDelayMs", "Delay", 0, 5000, "ms",
+                c => c.TooltipDelayMs, (c, v) => c.TooltipDelayMs = v,
+                "How long to hover before the panel appears. 400 is the Windows default.")
+                .When(c => c.Tooltips),
+            Int(PanelSection, "tooltipMaxWindows", "Windows listed", 1, 40, "",
+                c => c.TooltipMaxWindows, (c, v) => c.TooltipMaxWindows = v,
+                "Window titles shown before the rest collapse into \"+N more\".")
+                .When(c => c.Tooltips),
+            Int(PanelSection, "tooltipWidth", "Panel width", 160, 1200, "px",
+                c => c.TooltipWidth, (c, v) => c.TooltipWidth = v,
+                "Every panel is this wide, so it does not jump about as the pointer moves "
+                + "along the strip. Longer titles are trimmed to fit.")
+                .When(c => c.Tooltips),
+
+            // --- stats
+            Bool(StatsSection, "systemStats", "Stats tile",
+                c => c.StatsTile, (c, v) => c.StatsTile = v,
+                "A tile after '+' showing CPU, memory and network. Click it to open the "
+                + "panel, click again to close it. Off removes the tile and the sampling behind it."),
+            Int(StatsSection, "statsWidth", "Tile width", 12, 128, "px",
+                c => c.StatsWidth, (c, v) => c.StatsWidth = v,
+                "Width of the stats tile.")
+                .When(c => c.StatsTile),
+            Choice(StatsSection, "statsCpu", "CPU figure",
+                new[] { "utility", "time" }, new[] { "Utility", "Time" },
+                c => c.StatsCpuUtility ? 0 : 1, (c, v) => c.StatsCpuUtility = v == 0,
+                "Utility is what Task Manager shows: busy time scaled by clock speed. Time is "
+                + "the plain share of time not idle, and reads higher at idle on a laptop.")
+                .When(c => c.StatsTile),
+            Choice(StatsSection, "statsTileStyle", "Tile style",
+                new[] { "meters", "gauge", "chip" }, new[] { "Meters", "Gauge", "Chip" },
+                c => (int)c.StatsStyle, (c, v) => c.StatsStyle = (StatsTileStyle)v,
+                "Meters is two bars, CPU and memory. Gauge is a needle following CPU. Chip is "
+                + "an icon that only changes colour under load.")
+                .When(c => c.StatsTile),
+            Int(StatsSection, "statsIconSize", "Icon size", 8, 64, "px",
+                c => c.StatsIconSize, (c, v) => c.StatsIconSize = v,
+                "Height of the gauge or the chip. Shrunk to fit the tile and the taskbar.")
+                .When(c => c.StatsTile && c.StatsStyle != StatsTileStyle.Meters),
+            Int(StatsSection, "statsBarWidth", "Bar width", 1, 32, "px",
+                c => c.StatsBarWidth, (c, v) => c.StatsBarWidth = v,
+                "Width of each meter bar.")
+                .When(c => c.StatsTile && c.StatsStyle == StatsTileStyle.Meters),
+            Int(StatsSection, "statsBarGap", "Bar gap", 0, 32, "px",
+                c => c.StatsBarGap, (c, v) => c.StatsBarGap = v,
+                "Space between the two meter bars.")
+                .When(c => c.StatsTile && c.StatsStyle == StatsTileStyle.Meters),
+            Int(StatsSection, "statsBarHeight", "Bar height", 4, 64, "px",
+                c => c.StatsBarHeight, (c, v) => c.StatsBarHeight = v,
+                "Height of the meter bars. Shrunk to fit the taskbar if it is taller.")
+                .When(c => c.StatsTile && c.StatsStyle == StatsTileStyle.Meters),
+            Bool(StatsSection, "statsBarLabels", "Bar labels",
+                c => c.StatsBarLabels, (c, v) => c.StatsBarLabels = v,
+                "A small C and M under the bars, naming them. Off gives the bars the height back.")
+                .When(c => c.StatsTile && c.StatsStyle == StatsTileStyle.Meters),
+            Bool(StatsSection, "statsBarRounded", "Rounded bars",
+                c => c.StatsBarRounded, (c, v) => c.StatsBarRounded = v,
+                "Round ends on the meter bars rather than square ones.")
+                .When(c => c.StatsTile && c.StatsStyle == StatsTileStyle.Meters),
+            Int(StatsSection, "statsWarnPercent", "Amber at", 1, 100, "%",
+                c => c.StatsWarnPercent, (c, v) => c.StatsWarnPercent = v,
+                "Load at which the tile turns amber, for CPU and memory alike.")
+                .When(c => c.StatsTile),
+            Int(StatsSection, "statsAlertPercent", "Red at", 1, 100, "%",
+                c => c.StatsAlertPercent, (c, v) => c.StatsAlertPercent = v,
+                "Load at which it turns red. Never below the amber level.")
+                .When(c => c.StatsTile),
+
+            // --- advanced
+            Int(AdvancedSection, "reconcileMs", "Check interval", 250, 60000, "ms",
+                c => c.ReconcileMs, (c, v) => c.ReconcileMs = v,
+                "How often the desktop list is double-checked and the occupancy dots and stats "
+                + "refreshed. Shell notifications do the real work; this is the safety net."),
+            Bool(AdvancedSection, "diagnostics", "Diagnostics log",
+                c => c.Diagnostics, (c, v) => c.Diagnostics = v,
+                "Write what the app is doing to log.txt beside this file. For tracking down a problem."),
+
+            // --- state
+            Hide(Int(StateSection, "lastCount", "Desktops at login", 1, 32, "",
+                c => c.LastCount, (c, v) => c.LastCount = v,
+                "How many desktops to put back at login, since Windows forgets them on a "
+                + "reboot. The app keeps this up to date as desktops come and go.")),
+        };
+
+        static readonly Dictionary<string, Setting> ByKey = Index(All);
+
+        /// <summary>Every value at its default, for the file's "default N" lines.</summary>
+        static readonly Config Factory = new Config();
+
+        static Dictionary<string, Setting> Index(Setting[] all)
+        {
+            var map = new Dictionary<string, Setting>(StringComparer.OrdinalIgnoreCase);
+            foreach (Setting s in all) map.Add(s.Key, s);
+            return map;
+        }
+
+        static Setting Int(string section, string key, string label, int min, int max, string unit,
+                           Func<Config, int> get, Action<Config, int> set, string help)
+        {
+            return new Setting { Section = section, Key = key, Label = label, Help = help,
+                                 Kind = SettingKind.Int, Min = min, Max = max, Unit = unit,
+                                 GetInt = get, SetInt = set };
+        }
+
+        static Setting Bool(string section, string key, string label,
+                            Func<Config, bool> get, Action<Config, bool> set, string help)
+        {
+            return new Setting { Section = section, Key = key, Label = label, Help = help,
+                                 Kind = SettingKind.Bool, GetBool = get, SetBool = set };
+        }
+
+        static Setting Choice(string section, string key, string label, string[] choices, string[] captions,
+                              Func<Config, int> get, Action<Config, int> set, string help)
+        {
+            return new Setting { Section = section, Key = key, Label = label, Help = help,
+                                 Kind = SettingKind.Choice, Choices = choices, Captions = captions,
+                                 Min = 0, Max = choices.Length - 1, GetInt = get, SetInt = set };
+        }
+
+        static Setting Colour(string section, string key, string label, bool allowAuto,
+                              Func<Config, Color> get, Action<Config, Color> set, string help)
+        {
+            return new Setting { Section = section, Key = key, Label = label, Help = help,
+                                 Kind = SettingKind.Color, AllowAuto = allowAuto,
+                                 GetColor = get, SetColor = set };
+        }
+
+        static Setting Hide(Setting s)
+        {
+            s.Hidden = true;
+            return s;
+        }
+
+        public static Setting Find(string key)
+        {
+            Setting s;
+            return ByKey.TryGetValue(key, out s) ? s : null;
+        }
+
+        // --- file ---------------------------------------------------------------
+
+        /// <summary>
+        /// The second line of every file this build writes. A file without it predates the
+        /// commented layout, and gets rewritten into it at startup the same way a file
+        /// missing a key does - see Outdated.
+        /// </summary>
+        const string FormatMarker = "# format 2";
+
         readonly Dictionary<string, string> _unknown = new Dictionary<string, string>();
 
         /// <summary>Every key the file mentioned, recognised or not, lowercased.</summary>
         readonly HashSet<string> _present = new HashSet<string>();
+
+        bool _formatCurrent;
+
+        /// <summary>
+        /// The exact text this process last wrote to config.ini. ConfigWatcher compares the
+        /// file against it, which is how the app's own saves - a desktop added, a slider in
+        /// the Settings window - are told apart from a person saving in Notepad, and do not
+        /// bounce back as a reload of what was just applied.
+        /// </summary>
+        public static string LastWritten { get; private set; }
 
         public static string Directory
         {
@@ -163,29 +380,39 @@ namespace DesktopSwitcher
 
         public static Config Load()
         {
-            var cfg = new Config();
             string path = FilePath;
-            if (!File.Exists(path)) return cfg;
+            if (!File.Exists(path)) return new Config();
 
             try
             {
-                foreach (string raw in File.ReadAllLines(path))
-                {
-                    string line = raw.Trim();
-                    if (line.Length == 0 || line[0] == '#' || line[0] == ';') continue;
-
-                    int eq = line.IndexOf('=');
-                    if (eq <= 0) continue;
-
-                    string key = line.Substring(0, eq).Trim();
-                    string val = line.Substring(eq + 1).Trim();
-                    cfg.Apply(key, val);
-                }
+                return FromText(File.ReadAllText(path));
             }
             catch (Exception ex)
             {
                 Log.Write("config: load failed, using defaults - " + ex.Message);
+                return new Config();
             }
+        }
+
+        public static Config FromText(string text)
+        {
+            var cfg = new Config();
+
+            foreach (string raw in text.Split('\n'))
+            {
+                string line = raw.Trim();
+                if (line == FormatMarker) cfg._formatCurrent = true;
+                if (line.Length == 0 || line[0] == '#' || line[0] == ';') continue;
+
+                int eq = line.IndexOf('=');
+                if (eq <= 0) continue;
+
+                string key = line.Substring(0, eq).Trim();
+                string val = line.Substring(eq + 1).Trim();
+                cfg.Apply(key, val);
+            }
+
+            cfg.Normalize(null);
             return cfg;
         }
 
@@ -195,37 +422,25 @@ namespace DesktopSwitcher
 
             // Recognised keys match case-insensitively; unknown keys keep the caller's
             // original spelling so hand-edited files round-trip unchanged.
-            switch (key.ToLowerInvariant())
-            {
-                case "lastcount":        LastCount       = ParseInt(val, LastCount, 1, 32);      break;
-                case "buttonwidth":      ButtonWidth     = ParseInt(val, ButtonWidth, 16, 128);  break;
-                case "pluswidth":        PlusWidth       = ParseInt(val, PlusWidth, 12, 128);    break;
-                case "margin":           Margin          = ParseInt(val, Margin, 0, 200);        break;
-                case "reconcilems":      ReconcileMs     = ParseInt(val, ReconcileMs, 250, 60000); break;
-                case "diagnostics":      Diagnostics     = ParseBool(val, Diagnostics);          break;
-                case "contextmenu":      ContextMenu     = ParseBool(val, ContextMenu);          break;
-                case "occupancydots":    OccupancyDots   = ParseBool(val, OccupancyDots);        break;
-                case "systemstats":      StatsTile       = ParseBool(val, StatsTile);            break;
-                case "statswidth":       StatsWidth      = ParseInt(val, StatsWidth, 12, 128);   break;
-                case "statscpu":         StatsCpuUtility = ParseCpu(val, StatsCpuUtility);       break;
-                case "statstilestyle":   StatsStyle      = ParseStyle(val, StatsStyle);          break;
-                case "statsiconsize":    StatsIconSize   = ParseInt(val, StatsIconSize, 8, 64);  break;
-                case "statsbarwidth":    StatsBarWidth   = ParseInt(val, StatsBarWidth, 1, 32);  break;
-                case "statsbargap":      StatsBarGap     = ParseInt(val, StatsBarGap, 0, 32);    break;
-                case "statsbarheight":   StatsBarHeight  = ParseInt(val, StatsBarHeight, 4, 64); break;
-                case "statsbarlabels":   StatsBarLabels  = ParseBool(val, StatsBarLabels);       break;
-                case "statsbarrounded":  StatsBarRounded = ParseBool(val, StatsBarRounded);      break;
-                case "statswarnpercent": StatsWarnPercent = ParseInt(val, StatsWarnPercent, 1, 100); break;
-                case "statsalertpercent": StatsAlertPercent = ParseInt(val, StatsAlertPercent, 1, 100); break;
-                case "tooltips":         Tooltips        = ParseBool(val, Tooltips);             break;
-                case "tooltipdelayms":   TooltipDelayMs  = ParseInt(val, TooltipDelayMs, 0, 5000); break;
-                case "tooltipmaxwindows": TooltipMaxWindows = ParseInt(val, TooltipMaxWindows, 1, 40); break;
-                case "tooltipwidth":     TooltipWidth    = ParseInt(val, TooltipWidth, 160, 1200); break;
-                case "animationms":      AnimationMs     = ParseInt(val, AnimationMs, 0, 2000);   break;
-                case "highlightcolor":   HighlightColor  = ParseColor(val, HighlightColor);      break;
-                case "backgroundcolor":  BackgroundColor = ParseColor(val, Color.Empty);         break;
-                default:                 _unknown[key]   = val;                                  break;
-            }
+            Setting s = Find(key);
+            if (s != null) s.Parse(this, val);
+            else _unknown[key] = val;
+        }
+
+        /// <summary>
+        /// The one rule that spans two settings: red cannot start below amber, or a bar would
+        /// skip amber altogether. Whichever was just changed wins and the other moves to meet
+        /// it, so dragging either slider past the other pushes it along rather than stopping
+        /// dead. From the file there is no "just changed", and red is the one that moves.
+        /// </summary>
+        public void Normalize(string changedKey)
+        {
+            if (StatsAlertPercent >= StatsWarnPercent) return;
+
+            if (string.Equals(changedKey, "statsAlertPercent", StringComparison.OrdinalIgnoreCase))
+                StatsWarnPercent = StatsAlertPercent;
+            else
+                StatsAlertPercent = StatsWarnPercent;
         }
 
         /// <summary>
@@ -233,32 +448,23 @@ namespace DesktopSwitcher
         /// normally an upgrade, where the file was written before the key existed. Such a
         /// setting is silently on its default with no line to edit, which is exactly the
         /// state the first-run write exists to avoid, so the caller rewrites the file.
-        ///
-        /// The expected keys are read back out of what Save writes, so there is no second
-        /// list to fall out of step with the one above.
         /// </summary>
         public bool Incomplete
         {
             get
             {
-                foreach (string key in KeysOf(Render()))
-                    if (!_present.Contains(key)) return true;
+                foreach (Setting s in All)
+                    if (!_present.Contains(s.Key.ToLowerInvariant())) return true;
 
                 return false;
             }
         }
 
-        static IEnumerable<string> KeysOf(string text)
-        {
-            foreach (string raw in text.Split('\n'))
-            {
-                string line = raw.Trim();
-                if (line.Length == 0 || line[0] == '#' || line[0] == ';') continue;
-
-                int eq = line.IndexOf('=');
-                if (eq > 0) yield return line.Substring(0, eq).Trim().ToLowerInvariant();
-            }
-        }
+        /// <summary>
+        /// Incomplete, or written before the file carried its own explanations. Either way
+        /// the caller rewrites it; every value survives, having just been read from it.
+        /// </summary>
+        public bool Outdated { get { return Incomplete || !_formatCurrent; } }
 
         public void Save()
         {
@@ -267,7 +473,9 @@ namespace DesktopSwitcher
                 if (!System.IO.Directory.Exists(Directory))
                     System.IO.Directory.CreateDirectory(Directory);
 
-                File.WriteAllText(FilePath, Render());
+                string text = Render();
+                File.WriteAllText(FilePath, text);
+                LastWritten = text;
             }
             catch (Exception ex)
             {
@@ -277,46 +485,58 @@ namespace DesktopSwitcher
 
         /// <summary>
         /// The complete file: every setting this build has, whether or not the file on
-        /// disk mentioned it, followed by anything it did that this build does not know.
+        /// disk mentioned it, each under a comment saying what it does and what it takes,
+        /// followed by anything the file had that this build does not know.
+        ///
+        /// The comments are regenerated, never read back. That is the cost of a file the
+        /// app also writes: a person's own comments do not survive the next save, and the
+        /// header says so rather than letting them find out.
         /// </summary>
-        string Render()
+        public string Render()
         {
             var sb = new StringBuilder();
-            sb.AppendLine("# DesktopSwitcher configuration");
-            sb.AppendLine("# Colours are #RRGGBB. Leave backgroundColor blank to sample the taskbar.");
-            sb.AppendLine();
-            sb.AppendLine("lastCount = "       + LastCount);
-            sb.AppendLine("buttonWidth = "     + ButtonWidth);
-            sb.AppendLine("plusWidth = "       + PlusWidth);
-            sb.AppendLine("margin = "          + Margin);
-            sb.AppendLine("reconcileMs = "     + ReconcileMs);
-            sb.AppendLine("diagnostics = "     + (Diagnostics ? "true" : "false"));
-            sb.AppendLine("contextMenu = "     + (ContextMenu ? "true" : "false"));
-            sb.AppendLine("occupancyDots = "   + (OccupancyDots ? "true" : "false"));
-            sb.AppendLine("systemStats = "     + (StatsTile ? "true" : "false"));
-            sb.AppendLine("statsWidth = "      + StatsWidth);
-            sb.AppendLine("statsCpu = "        + (StatsCpuUtility ? "utility" : "time"));
-            sb.AppendLine("statsTileStyle = "  + StatsStyle.ToString().ToLowerInvariant());
-            sb.AppendLine("statsIconSize = "   + StatsIconSize);
-            sb.AppendLine("statsBarWidth = "   + StatsBarWidth);
-            sb.AppendLine("statsBarGap = "     + StatsBarGap);
-            sb.AppendLine("statsBarHeight = "  + StatsBarHeight);
-            sb.AppendLine("statsBarLabels = "  + (StatsBarLabels ? "true" : "false"));
-            sb.AppendLine("statsBarRounded = " + (StatsBarRounded ? "true" : "false"));
-            sb.AppendLine("statsWarnPercent = " + StatsWarnPercent);
-            sb.AppendLine("statsAlertPercent = " + StatsAlertPercent);
-            sb.AppendLine("tooltips = "        + (Tooltips ? "true" : "false"));
-            sb.AppendLine("tooltipDelayMs = "  + TooltipDelayMs);
-            sb.AppendLine("tooltipMaxWindows = " + TooltipMaxWindows);
-            sb.AppendLine("tooltipWidth = "    + TooltipWidth);
-            sb.AppendLine("animationMs = "     + AnimationMs);
-            sb.AppendLine("highlightColor = "  + ToHex(HighlightColor));
-            sb.AppendLine("backgroundColor = " + (BackgroundColor.IsEmpty ? "" : ToHex(BackgroundColor)));
+            sb.AppendLine("# DesktopSwitcher settings");
+            sb.AppendLine(FormatMarker);
+            sb.AppendLine("#");
+            sb.AppendLine("# Saving this file applies it straight away - no restart, no reload.");
+            sb.AppendLine("# The same settings are under Settings on the tray icon's menu, which");
+            sb.AppendLine("# shows each change on the strip as you make it.");
+            sb.AppendLine("#");
+            sb.AppendLine("# Sizes are in pixels at 100% display scaling and grow with it.");
+            sb.AppendLine("# A number out of range is pulled back into it; a value that cannot be");
+            sb.AppendLine("# read keeps its default. The app rewrites this file whenever a setting");
+            sb.AppendLine("# changes, so comments of your own are not kept.");
+
+            string section = null;
+            foreach (Setting s in All)
+            {
+                if (s.Section != section)
+                {
+                    section = s.Section;
+                    sb.AppendLine();
+                    sb.AppendLine();
+                    sb.AppendLine("# " + new string('=', 76));
+                    sb.AppendLine("#   " + section);
+                    sb.AppendLine("# " + new string('=', 76));
+                }
+
+                sb.AppendLine();
+                foreach (string line in Wrap(s.Help, 76))
+                    sb.AppendLine("# " + line);
+                sb.AppendLine("# [" + s.Describe(Factory) + "]");
+
+                string value = s.Format(this);
+                sb.AppendLine(value.Length > 0 ? s.Key + " = " + value : s.Key + " =");
+            }
 
             if (_unknown.Count > 0)
             {
                 sb.AppendLine();
-                sb.AppendLine("# preserved from an earlier or hand-edited file");
+                sb.AppendLine();
+                sb.AppendLine("# " + new string('=', 76));
+                sb.AppendLine("#   Not recognised by this version - kept as they were");
+                sb.AppendLine("# " + new string('=', 76));
+                sb.AppendLine();
                 foreach (var kv in _unknown)
                     sb.AppendLine(kv.Key + " = " + kv.Value);
             }
@@ -324,71 +544,66 @@ namespace DesktopSwitcher
             return sb.ToString();
         }
 
-        // --- parsing helpers ---------------------------------------------------
-
-        static int ParseInt(string s, int fallback, int min, int max)
+        static IEnumerable<string> Wrap(string text, int width)
         {
-            int v;
-            if (!int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out v))
-                return fallback;
-            if (v < min) return min;
-            if (v > max) return max;
-            return v;
-        }
-
-        /// <summary>"utility" or "time" for statsCpu, true for utility. Anything else keeps the fallback.</summary>
-        static bool ParseCpu(string s, bool fallback)
-        {
-            if (string.IsNullOrEmpty(s)) return fallback;
-            switch (s.Trim().ToLowerInvariant())
+            var line = new StringBuilder();
+            foreach (string word in text.Split(' '))
             {
-                case "utility": return true;
-                case "time":    return false;
-                default:        return fallback;
+                if (line.Length > 0 && line.Length + 1 + word.Length > width)
+                {
+                    yield return line.ToString();
+                    line.Length = 0;
+                }
+                if (line.Length > 0) line.Append(' ');
+                line.Append(word);
             }
+            if (line.Length > 0) yield return line.ToString();
         }
 
-        /// <summary>"meters", "gauge" or "chip" for statsTileStyle. Anything else keeps the fallback.</summary>
-        static StatsTileStyle ParseStyle(string s, StatsTileStyle fallback)
+        // --- copies ---------------------------------------------------------------
+
+        /// <summary>
+        /// A separate Config with the same values, the same unrecognised keys and the same
+        /// record of what the file mentioned. The Settings window edits one of these and the
+        /// live config is replaced wholesale, never written through.
+        /// </summary>
+        public Config Clone()
         {
-            if (string.IsNullOrEmpty(s)) return fallback;
-            switch (s.Trim().ToLowerInvariant())
+            var copy = new Config();
+            foreach (Setting s in All) s.Copy(this, copy);
+            foreach (var kv in _unknown) copy._unknown[kv.Key] = kv.Value;
+            foreach (string key in _present) copy._present.Add(key);
+            copy._formatCurrent = _formatCurrent;
+            return copy;
+        }
+
+        /// <summary>
+        /// Every preference back at its default, keeping what is not a preference: the
+        /// desktop count and any keys this build does not recognise.
+        /// </summary>
+        public Config WithDefaults()
+        {
+            var fresh = Clone();
+            foreach (Setting s in All)
+                if (!s.Hidden) s.Copy(Factory, fresh);
+            return fresh;
+        }
+
+        /// <summary>Same value for every setting and the same unrecognised keys.</summary>
+        public bool SameAs(Config other)
+        {
+            if (other == null) return false;
+
+            foreach (Setting s in All)
+                if (s.Format(this) != s.Format(other)) return false;
+
+            if (_unknown.Count != other._unknown.Count) return false;
+            foreach (var kv in _unknown)
             {
-                case "meters": return StatsTileStyle.Meters;
-                case "gauge":  return StatsTileStyle.Gauge;
-                case "chip":   return StatsTileStyle.Chip;
-                default:       return fallback;
+                string v;
+                if (!other._unknown.TryGetValue(kv.Key, out v) || v != kv.Value) return false;
             }
-        }
-
-        static bool ParseBool(string s, bool fallback)
-        {
-            if (string.IsNullOrEmpty(s)) return fallback;
-            switch (s.Trim().ToLowerInvariant())
-            {
-                case "1": case "true":  case "yes": case "on":  return true;
-                case "0": case "false": case "no":  case "off": return false;
-                default: return fallback;
-            }
-        }
-
-        static Color ParseColor(string s, Color fallback)
-        {
-            if (string.IsNullOrEmpty(s)) return fallback;
-            string h = s.Trim();
-            if (h.Length > 0 && h[0] == '#') h = h.Substring(1);
-            if (h.Length != 6) return fallback;
-
-            int rgb;
-            if (!int.TryParse(h, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out rgb))
-                return fallback;
-
-            return Color.FromArgb((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
-        }
-
-        static string ToHex(Color c)
-        {
-            return string.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}", c.R, c.G, c.B);
+            return true;
         }
     }
 }

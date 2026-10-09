@@ -554,6 +554,52 @@ namespace DesktopSwitcher
         public const int WM_MBUTTONDOWN = 0x0207;
         public const int WM_XBUTTONDOWN = 0x020B;
 
+        // --- dark window chrome ------------------------------------------------
+
+        [DllImport("dwmapi.dll")]
+        static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+        [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+        static extern int SetWindowTheme(IntPtr hwnd, string subAppName, string subIdList);
+
+        /// <summary>
+        /// DWMWA_USE_IMMERSIVE_DARK_MODE. 20 from 20H1 on, which 19045 is; builds before
+        /// that used 19 for the same thing, and nothing here runs on them.
+        /// </summary>
+        const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+
+        /// <summary>
+        /// Paints a top-level window's title bar dark or light. Documented for Windows 11
+        /// and quietly present in Windows 10 since 20H1 - the same attribute Explorer's own
+        /// dark windows use. A failure is not worth reporting: the window still works, it
+        /// just has a light title bar over a dark body.
+        /// </summary>
+        public static void SetDarkTitleBar(IntPtr hwnd, bool dark)
+        {
+            try
+            {
+                int value = dark ? 1 : 0;
+                DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref value, sizeof(int));
+            }
+            catch (DllNotFoundException) { }
+            catch (EntryPointNotFoundException) { }
+        }
+
+        /// <summary>
+        /// Gives a window's scroll bars the dark or light system look. "DarkMode_Explorer"
+        /// is the theme class File Explorer uses for its own dark scroll bars since 1809;
+        /// on anything that lacks it the call fails and the bars stay as they were.
+        /// </summary>
+        public static void SetDarkScrollBars(IntPtr hwnd, bool dark)
+        {
+            try
+            {
+                SetWindowTheme(hwnd, dark ? "DarkMode_Explorer" : "Explorer", null);
+            }
+            catch (DllNotFoundException) { }
+            catch (EntryPointNotFoundException) { }
+        }
+
         // --- constants --------------------------------------------------------
 
         public const uint GW_HWNDNEXT = 2;

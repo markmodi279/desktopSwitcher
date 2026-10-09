@@ -141,6 +141,17 @@ namespace DesktopSwitcher
             button.DialogResult = result;
             button.Size = new Size(width, height);
             button.Font = font;
+            StyleButton(button, background);
+            return button;
+        }
+
+        /// <summary>
+        /// A flat button in this family's tones over <paramref name="background"/>, the
+        /// taskbar colour. Shared with SettingsWindow, whose buttons have to match these and
+        /// have to be re-toned in place when the taskbar colour changes under an open window.
+        /// </summary>
+        internal static void StyleButton(Button button, Color background)
+        {
             button.FlatStyle = FlatStyle.Flat;
             button.FlatAppearance.BorderSize = 1;
             button.FlatAppearance.BorderColor = Palette.Lift(background, 0.24f);
@@ -149,7 +160,6 @@ namespace DesktopSwitcher
             button.BackColor = Palette.Lift(background, 0.06f);
             button.ForeColor = Palette.BodyText(background);
             button.UseVisualStyleBackColor = false;
-            return button;
         }
 
         static int Scale(int value, double dpiScale)
