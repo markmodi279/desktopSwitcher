@@ -882,27 +882,120 @@ namespace DesktopSwitcher
         }
 
         /// <summary>
-        /// The rows, tab-separated into columns the panel lines up. Public and static so
-        /// --stats and the --strip harness print and draw exactly what the real panel does.
+        /// The panel: three tiles, CPU, memory and network, each with a chart of the last
+        /// minute along the bottom - what a single figure refreshed once a second cannot
+        /// show is the spike that has just passed. CPU and memory are percentages and get a
+        /// ring gauge; network has no top, so it gets its two figures in the ring's place.
+        ///
+        /// It used to be three text rows in tab-stop columns, then the same rows with a
+        /// boxed strip of graph beside each. The strips read as progress bars rather than
+        /// graphs, and were too short to show a shape, so the figures and their history
+        /// went into tiles where the chart can run the tile's full width.
+        ///
+        /// No lines, only tiles. Public and static so --stats and the --strip harness print
+        /// and draw exactly what the real panel does.
         /// </summary>
         public static TooltipContent StatsContent(SystemStats stats, bool kept)
         {
-            var lines = new List<string>();
+            int now = Environment.TickCount;
+            IList<StatsPoint> history = stats.History;
 
-            lines.Add("CPU\t" + Percent(stats.CpuPercent));
+            var cpu = new StatsTile();
+            cpu.Label = "CPU";
+            cpu.HasGauge = true;
+            cpu.Gauge = stats.CpuPercent < 0 ? -1f : stats.CpuPercent / 100f;
+            cpu.Figure = Percent(stats.CpuPercent);
+            cpu.Detail = "peak " + Percent(Peak(history, CpuOf));
+            cpu.Primary = Series(history, now, CpuOf, 100.0);
 
-            lines.Add("Memory\t" + (stats.HasMemory
-                ? Gigabytes(stats.MemoryUsed) + " / " + Gigabytes(stats.MemoryTotal) + " GB\t"
-                  + stats.MemoryLoad + "%"
-                : Unknown));
+            // The figure is the load because that is what the ring shows; the gigabytes are
+            // the detail, which is the answer to "how much is that".
+            var memory = new StatsTile();
+            memory.Label = "Memory";
+            memory.HasGauge = true;
+            memory.Gauge = stats.HasMemory ? stats.MemoryLoad / 100f : -1f;
+            memory.Figure = stats.HasMemory ? stats.MemoryLoad + "%" : Unknown;
+            memory.Detail = stats.HasMemory
+                ? Gigabytes(stats.MemoryUsed) + " / " + Gigabytes(stats.MemoryTotal) + " GB"
+                : Unknown;
+            memory.Primary = Series(history, now, MemoryOf, 100.0);
 
-            lines.Add("Network\t" + Down + Rate(stats.DownBytesPerSecond)
-                      + "\t" + Up + Rate(stats.UpBytesPerSecond));
+            // Download is the filled shape, upload the line over it: down is the one people
+            // usually mean, and is usually the larger.
+            double scale = NetworkScale(history);
+            var network = new StatsTile();
+            network.Label = "Network";
+            network.Figure = Down + Rate(stats.DownBytesPerSecond);
+            network.Figure2 = Up + Rate(stats.UpBytesPerSecond);
+            network.Detail = "peak " + Rate(Math.Max(Peak(history, DownOf), Peak(history, UpOf)));
+            network.Primary = Series(history, now, DownOf, scale);
+            network.Secondary = Series(history, now, UpOf, scale);
 
             // Says so the same way a desktop's panel says "(current)". Only when kept: a
             // popup behaves the way a popup is expected to, but a panel that sits through
             // clicks elsewhere would otherwise look stuck.
-            return new TooltipContent(kept ? "System   (kept open)" : "System", lines);
+            return new TooltipContent(kept ? "System   (kept open)" : "System", null,
+                                      new List<StatsTile> { cpu, memory, network });
+        }
+
+        /// <summary>The highest known value in the history, -1 when there is none.</summary>
+        static float Peak(IList<StatsPoint> history, Func<StatsPoint, double> value)
+        {
+            double peak = -1;
+            foreach (StatsPoint p in history)
+                peak = Math.Max(peak, value(p));
+            return (float)peak;
+        }
+
+        /// <summary>
+        /// The floor under the network chart's scale, in bytes a second. The scale is
+        /// otherwise the busiest moment in the window, down or up, so a burst fills the
+        /// graph whatever the link speed - a fixed scale would sit flat on a slow link or
+        /// pinned on a fast one. Without the floor an idle machine's background trickle,
+        /// a few KB/s, would be scaled up to fill it too and look like real traffic.
+        /// </summary>
+        public const double NetworkFloor = 64 * 1024;
+
+        /// <summary>
+        /// What the network chart's top stands for over the current window. Public so
+        /// --stats can print it beside the figures it was computed from.
+        /// </summary>
+        public static double NetworkScale(IList<StatsPoint> history)
+        {
+            double top = NetworkFloor;
+            foreach (StatsPoint p in history)
+            {
+                if (p.Down > top) top = p.Down;
+                if (p.Up > top) top = p.Up;
+            }
+            return top;
+        }
+
+        static double CpuOf(StatsPoint p) { return p.Cpu; }
+        static double MemoryOf(StatsPoint p) { return p.Memory; }
+        static double DownOf(StatsPoint p) { return p.Down; }
+        static double UpOf(StatsPoint p) { return p.Up; }
+
+        /// <summary>
+        /// One series of the history, normalised for a StatsTile chart: x by age across
+        /// HistoryMs, so readings two seconds apart and one second apart land where they
+        /// were actually taken, and y as a share of <paramref name="top"/>. Unknown values
+        /// - negative - are left out rather than drawn as zero.
+        /// </summary>
+        static List<PointF> Series(IList<StatsPoint> history, int now,
+                                   Func<StatsPoint, double> value, double top)
+        {
+            var points = new List<PointF>();
+            foreach (StatsPoint p in history)
+            {
+                double v = value(p);
+                if (v < 0 || top <= 0) continue;
+
+                int age = unchecked(now - p.At);
+                float x = 1f - (float)age / SystemStats.HistoryMs;
+                points.Add(new PointF(x, (float)(v / top)));
+            }
+            return points;
         }
 
         /// <summary>

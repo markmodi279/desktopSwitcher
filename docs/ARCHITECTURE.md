@@ -297,6 +297,19 @@ retargets, so the frame timer eases the bars like every other value on the strip
 has no meter because it has no top: any fixed scale would sit full on a fast link or flat on
 a slow one.
 
+**The stats panel is tiles, drawn from history `SystemStats` already keeps.** Every reading
+taken is appended to `History` and aged out after a minute, so the charts have data the
+moment the panel opens - two seconds apart from the reconcile tick, one second apart once
+it is open. Points are placed by their own timestamp, not their index, which is what makes
+the uneven spacing harmless. `TooltipContent` can carry a list of `StatsTile` - label,
+figure, ring gauge, detail, chart series - already normalised to 0..1 by
+`Controller.StatsContent`, so `TooltipWindow` only maps them onto rectangles and knows
+nothing about percent or bytes. The tiles go into the panel as a single row of their own
+height, so `RowsHeight`, `Measure` and `RowOrigin` - and with them the pinned-edge slide that
+`--slide` checks - cover the tiles without a second height calculation. The figures were text
+rows in tab-stop columns at first, then rows with a boxed graph strip beside each; the strips
+read as progress bars and were too short to show a shape.
+
 **A pinned panel closes on a click elsewhere, and hides with the taskbar.** Both follow from
 the panel being a top-level topmost window rather than the taskbar's child. Nothing the app
 owns hears a click on another window, so `ClickWatcher` installs a low-level mouse hook while

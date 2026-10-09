@@ -28,10 +28,36 @@ namespace DesktopSwitcher
     ///
     /// Values read -1 until they are known. The caller decides how to say so.
     /// </summary>
+    /// <summary>One reading in SystemStats.History. Rates are -1 where not yet known.</summary>
+    sealed class StatsPoint
+    {
+        public readonly int At;           // Environment.TickCount when it was taken
+        public readonly float Cpu;
+        public readonly float Memory;     // memory load, 0..100
+        public readonly double Down, Up;
+
+        public StatsPoint(int at, float cpu, float memory, double down, double up)
+        {
+            At = at;
+            Cpu = cpu;
+            Memory = memory;
+            Down = down;
+            Up = up;
+        }
+    }
+
     sealed class SystemStats
     {
         /// <summary>A sample closer than this to the last one is skipped, not taken.</summary>
         public const int MinIntervalMs = 500;
+
+        /// <summary>
+        /// How far back History reaches: the span the panel's charts draw. A minute is
+        /// long enough to show a spike that has already passed - the thing a single figure
+        /// refreshed once a second cannot - and short enough that one is not flattened into
+        /// a hairline by the rest of the window.
+        /// </summary>
+        public const int HistoryMs = 60 * 1000;
 
         /// <summary>
         /// The longest the cached adapter list is trusted without a change notification.
@@ -67,6 +93,12 @@ namespace DesktopSwitcher
         uint _memLoad;
         ulong _memTotal, _memAvail;
 
+        // Oldest first. Fed by every reading that is actually taken, so it fills from the
+        // reconcile tick while the panel is closed - two seconds apart - and once a second
+        // while it is open. Uneven spacing is fine because each point carries its own time
+        // and the sparkline places it by age, not by index.
+        readonly List<StatsPoint> _history = new List<StatsPoint>();
+
         /// <summary>
         /// Busy share of all processors, 0..100, between the last two readings.
         ///
@@ -91,6 +123,13 @@ namespace DesktopSwitcher
         /// modified - within a few percent of Task Manager's "In use", never wildly apart.
         /// </summary>
         public ulong MemoryUsed { get { return _memTotal > _memAvail ? _memTotal - _memAvail : 0; } }
+
+        /// <summary>
+        /// The last HistoryMs of readings, oldest first, plus at most one older point so a
+        /// line drawn from them enters at the window's left edge rather than starting
+        /// partway in. Read-only; the list itself is this object's.
+        /// </summary>
+        public IList<StatsPoint> History { get { return _history.AsReadOnly(); } }
 
         public SystemStats()
         {
@@ -132,6 +171,30 @@ namespace DesktopSwitcher
 
             _at = now;
             _primed = true;
+
+            Record(now);
+        }
+
+        /// <summary>
+        /// Appends the reading just taken and drops what has aged out. Nothing is recorded
+        /// until CPU has a rate: the first reading has nothing to measure from, and a point
+        /// that says "unknown" would only be skipped when drawn.
+        /// </summary>
+        void Record(int now)
+        {
+            if (_cpu < 0) return;
+
+            _history.Add(new StatsPoint(now, _cpu, _memOk ? (float)_memLoad : -1f, _down, _up));
+
+            // Keeps the newest point that is past the window - the one the line enters from
+            // - and drops everything older. A negative age is TickCount having wrapped
+            // between two points, which is treated as aged out like anything else ancient.
+            while (_history.Count > 1)
+            {
+                int age = unchecked(now - _history[1].At);
+                if (age >= 0 && age < HistoryMs) break;
+                _history.RemoveAt(0);
+            }
         }
 
         void SampleCpu()

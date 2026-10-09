@@ -16,20 +16,69 @@ namespace DesktopSwitcher
     {
         readonly string _title;
         readonly IList<string> _lines;
+        readonly IList<StatsTile> _tiles;
 
         public TooltipContent(string title, IList<string> lines)
+            : this(title, lines, null)
+        {
+        }
+
+        public TooltipContent(string title, IList<string> lines, IList<StatsTile> tiles)
         {
             _title = title;
             _lines = lines != null ? lines : new List<string>();
+            _tiles = tiles;
         }
 
         public string Title { get { return _title; } }
 
-        /// <summary>
-        /// Window titles, or a single "empty" marker - or, for the stats tile, tab-separated
-        /// columns, which the panel lines up on its tab stops.
-        /// </summary>
+        /// <summary>Window titles, or a single "empty" marker.</summary>
         public IList<string> Lines { get { return _lines; } }
+
+        /// <summary>
+        /// Tiles drawn side by side under the lines, or null for none. Only the stats panel
+        /// has any.
+        /// </summary>
+        public IList<StatsTile> Tiles { get { return _tiles; } }
+    }
+
+    /// <summary>
+    /// One tile of the stats panel: a label, a figure - in a ring gauge, or plain - a detail
+    /// line, and a chart of the last minute along the bottom.
+    ///
+    /// Already normalised by whoever built it - the gauge 0..1, chart points with x 0..1
+    /// from the oldest edge of the window to now and y 0..1 from the floor - so the panel
+    /// only maps them onto rectangles and knows nothing about percent, bytes or seconds.
+    /// The scale is the content's decision for the same reason the text is. A plain data
+    /// bag, filled field by field by Controller.StatsContent.
+    /// </summary>
+    sealed class StatsTile
+    {
+        public string Label;
+
+        /// <summary>The big figure: inside the ring when there is one, the first line when not.</summary>
+        public string Figure;
+
+        /// <summary>A second big line under Figure, for a tile with no ring. Null for none.</summary>
+        public string Figure2;
+
+
+        /// <summary>Small print under the visual: a peak, a total.</summary>
+        public string Detail;
+
+        /// <summary>Whether this tile draws a ring gauge around Figure.</summary>
+        public bool HasGauge;
+
+        /// <summary>The ring's fill, 0..1. Negative draws the track alone: not known yet.</summary>
+        public float Gauge = -1f;
+
+        /// <summary>
+        /// The chart: a filled shape for Primary and a plain line for Secondary, which may be
+        /// null. Points outside x 0..1 are clipped, which is how the one point older than the
+        /// window enters from its edge.
+        /// </summary>
+        public IList<PointF> Primary;
+        public IList<PointF> Secondary;
     }
 
     /// <summary>
@@ -53,7 +102,21 @@ namespace DesktopSwitcher
             public string Text;
             public Font Font;
             public Color Ink;       // resolved when the row is built, not when it is drawn
+
+            // The stats tiles, as one row: set, the row is the whole tile strip and Text is
+            // empty. A row rather than a separate block so that RowsHeight, and with it
+            // Measure, RowOrigin and the pinned-edge slide, account for the tiles without
+            // a second height calculation that would have to be kept in step with the first.
+            public IList<StatsTile> Tiles;
         }
+
+        // Tile geometry at 96 DPI. The gauge is the tallest thing in a tile and sets its
+        // height; everything else stacks around it. See TilesHeight for the sum.
+        const int TileGap = 8;          // between tiles, and above the row of them
+        const int TilePad = 8;          // inside a tile, every edge
+        const int GaugeSize = 64;       // the ring's box, and the height of the network figures' box
+        const int GaugeStroke = 6;
+        const int ChartHeight = 30;
 
         readonly Color _background;
         readonly Color _highlight;
@@ -62,12 +125,12 @@ namespace DesktopSwitcher
         readonly Font _titleFont;
         readonly Font _bodyFont;
 
-        // Tab stops for rows that are columns rather than prose - the stats panel's
-        // "Memory <tab> 9.8 / 15.9 GB <tab> 61%". Spaces cannot line those up in a
-        // proportional font, and with the figures changing every second, unaligned columns
-        // would shuffle sideways on every refresh. Only rows that contain a tab are drawn or
-        // measured with it, so window titles render exactly as they always have.
-        readonly StringFormat _tabs;
+        // The stats tiles' type: the figure in a ring, the larger figures of a tile with no
+        // ring, and the small print under both. Created with the window like the two above,
+        // so a panel that never shows the stats pays three font handles and nothing else.
+        readonly Font _gaugeFont;
+        readonly Font _figureFont;
+        readonly Font _smallFont;
 
         readonly int _padX, _padY, _accent, _width;
 
@@ -131,12 +194,9 @@ namespace DesktopSwitcher
             float body = (float)(12 * dpiScale);
             _titleFont = new Font("Segoe UI", body, FontStyle.Bold, GraphicsUnit.Pixel);
             _bodyFont = new Font("Segoe UI", body, FontStyle.Regular, GraphicsUnit.Pixel);
-
-            // Successive distances, not positions: stops at 72 and 72 + 110, authored at 96
-            // DPI. The first clears the longest label, "Network"; the second clears the
-            // widest main figure, "9.8 / 15.9 GB" or a download rate.
-            _tabs = new StringFormat();
-            _tabs.SetTabStops(0f, new float[] { Scale(72), Scale(110) });
+            _gaugeFont = new Font("Segoe UI", (float)(16 * dpiScale), FontStyle.Bold, GraphicsUnit.Pixel);
+            _figureFont = new Font("Segoe UI", (float)(14 * dpiScale), FontStyle.Bold, GraphicsUnit.Pixel);
+            _smallFont = new Font("Segoe UI", (float)(11 * dpiScale), FontStyle.Regular, GraphicsUnit.Pixel);
 
             var cp = new CreateParams();
             cp.Caption = "DesktopSwitcherTooltip";
@@ -437,6 +497,15 @@ namespace DesktopSwitcher
                 foreach (string line in content.Lines)
                     Add(rows, g, line, _bodyFont, Palette.SecondaryText(_background));
 
+                if (content.Tiles != null && content.Tiles.Count > 0)
+                {
+                    var tiles = new Row();
+                    tiles.Text = "";
+                    tiles.Font = _bodyFont;
+                    tiles.Tiles = content.Tiles;
+                    rows.Add(tiles);
+                }
+
                 size = Measure(rows);
             }
 
@@ -446,7 +515,7 @@ namespace DesktopSwitcher
         void Add(List<Row> rows, Graphics g, string text, Font font, Color ink)
         {
             var row = new Row();
-            row.Text = Fit(g, text, font, FormatFor(text), _width - _padX * 2);
+            row.Text = Fit(g, text, font, _width - _padX * 2);
             row.Font = font;
             row.Ink = ink;
             rows.Add(row);
@@ -500,9 +569,29 @@ namespace DesktopSwitcher
             int height = 0;
 
             for (int i = 0; i < rows.Count; i++)
-                height += LineHeight(rows[i].Font);
+                height += RowHeight(rows[i]);
 
             return height;
+        }
+
+        int RowHeight(Row row)
+        {
+            return row.Tiles != null ? TilesHeight() : LineHeight(row.Font);
+        }
+
+        /// <summary>
+        /// The tile row: the gap above it, then one tile - label, gauge, detail, chart, each
+        /// padded - and nothing below, since the panel's own padding follows.
+        /// </summary>
+        int TilesHeight()
+        {
+            return Scale(TileGap) + TileHeight();
+        }
+
+        int TileHeight()
+        {
+            return Scale(TilePad) * 2 + LineHeight(_bodyFont) + Scale(GaugeSize)
+                 + Scale(4) + LineHeight(_smallFont) + Scale(ChartHeight);
         }
 
         int LineHeight(Font font)
@@ -510,32 +599,17 @@ namespace DesktopSwitcher
             return (int)Math.Ceiling(font.GetHeight()) + Scale(3);
         }
 
-        /// <summary>The tab-stop format for a row that has columns, null for one that does not.</summary>
-        StringFormat FormatFor(string text)
-        {
-            return text != null && text.IndexOf('\t') >= 0 ? _tabs : null;
-        }
-
-        /// <summary>
-        /// Trims a title to fit, with an ellipsis. Window titles run long. Measured with the
-        /// row's tab stops when it has them, since a tab is as wide as the gap to its stop.
-        /// </summary>
-        static string Fit(Graphics g, string text, Font font, StringFormat format, int maxWidth)
+        /// <summary>Trims a title to fit, with an ellipsis. Window titles run long.</summary>
+        static string Fit(Graphics g, string text, Font font, int maxWidth)
         {
             if (string.IsNullOrEmpty(text)) return "";
-            if (Width(g, text, font, format) <= maxWidth) return text;
+            if (g.MeasureString(text, font).Width <= maxWidth) return text;
 
             string s = text;
-            while (s.Length > 4 && Width(g, s + "...", font, format) > maxWidth)
+            while (s.Length > 4 && g.MeasureString(s + "...", font).Width > maxWidth)
                 s = s.Substring(0, s.Length - 4);
 
             return s + "...";
-        }
-
-        static float Width(Graphics g, string text, Font font, StringFormat format)
-        {
-            if (format == null) return g.MeasureString(text, font).Width;
-            return g.MeasureString(text, font, PointF.Empty, format).Width;
         }
 
         // --- rendering --------------------------------------------------------
@@ -618,15 +692,210 @@ namespace DesktopSwitcher
             {
                 Row row = _rows[i];
 
-                StringFormat format = FormatFor(row.Text);
                 using (var brush = new SolidBrush(row.Ink))
+                    g.DrawString(row.Text, row.Font, brush, _padX, y);
+
+                if (row.Tiles != null) DrawTiles(g, row.Tiles, y);
+
+                y += RowHeight(row);
+            }
+        }
+
+        // --- stats tiles ------------------------------------------------------
+
+        /// <summary>
+        /// The tiles side by side across the panel's width, equal shares of it. The width is
+        /// the panel's fixed one, so the tiles never resize as the figures change; they only
+        /// get narrower if tooltipWidth is set narrower, and the gauge shrinks to fit.
+        /// </summary>
+        void DrawTiles(Graphics g, IList<StatsTile> tiles, int y)
+        {
+            int gap = Scale(TileGap);
+            int top = y + gap;
+            int inner = _width - _padX * 2;
+            int width = (inner - gap * (tiles.Count - 1)) / tiles.Count;
+            int height = TileHeight();
+
+            for (int i = 0; i < tiles.Count; i++)
+                DrawTile(g, tiles[i], new Rectangle(_padX + i * (width + gap), top, width, height));
+        }
+
+        /// <summary>
+        /// One tile, top to bottom: label, the visual - a ring gauge with the figure inside,
+        /// or for a tile without one its figures - then the detail line and the chart.
+        ///
+        /// The card is a step further off the taskbar colour than the panel is, the same
+        /// direction Palette.Lift always goes, so it separates on a light taskbar as on a
+        /// dark one. Everything coloured is the accent, matching the meters on the strip,
+        /// so the tile and the panel it opens read as the same thing.
+        /// </summary>
+        void DrawTile(Graphics g, StatsTile tile, Rectangle r)
+        {
+            using (var card = new SolidBrush(Palette.Lift(_background, 0.12f)))
+            using (var path = Rounded(r, Scale(6)))
+                g.FillPath(card, path);
+
+            int pad = Scale(TilePad);
+            int x = r.X + pad;
+            int w = r.Width - pad * 2;
+            int y = r.Y + pad;
+
+            using (var format = new StringFormat())
+            {
+                format.Trimming = StringTrimming.EllipsisCharacter;
+                format.FormatFlags = StringFormatFlags.NoWrap;
+
+                using (var label = new SolidBrush(Palette.SecondaryText(_background)))
+                    g.DrawString(tile.Label ?? "", _bodyFont, label,
+                                 new RectangleF(x, y, w, LineHeight(_bodyFont)), format);
+                y += LineHeight(_bodyFont);
+
+                var visual = new Rectangle(x, y, w, Scale(GaugeSize));
+                if (tile.HasGauge) DrawGauge(g, tile, visual);
+                else DrawFigures(g, tile, visual);
+                y = visual.Bottom + Scale(4);
+
+                format.Alignment = StringAlignment.Center;
+                using (var detail = new SolidBrush(Palette.MutedText(_background)))
+                    g.DrawString(tile.Detail ?? "", _smallFont, detail,
+                                 new RectangleF(x, y, w, LineHeight(_smallFont)), format);
+                y += LineHeight(_smallFont);
+            }
+
+            DrawChart(g, tile, new Rectangle(x, y, w, Scale(ChartHeight)));
+        }
+
+        /// <summary>
+        /// A ring around the figure, filled clockwise from twelve o'clock by Gauge on a faint
+        /// track. Round caps so the leading end reads as moving, not cut off. The track is
+        /// drawn even with no reading, so an unmeasured gauge is visibly an empty one.
+        /// </summary>
+        void DrawGauge(Graphics g, StatsTile tile, Rectangle box)
+        {
+            float stroke = Scale(GaugeStroke);
+            float size = Math.Min(box.Width, box.Height) - stroke;
+            if (size < stroke) return;
+
+            var ring = new RectangleF(box.X + (box.Width - size) / 2f, box.Y + (box.Height - size) / 2f,
+                                      size, size);
+
+            using (var track = new Pen(Color.FromArgb(50, _highlight), stroke))
+                g.DrawEllipse(track, ring);
+
+            if (tile.Gauge > 0f)
+            {
+                using (var arc = new Pen(_highlight, stroke))
                 {
-                    if (format == null) g.DrawString(row.Text, row.Font, brush, _padX, y);
-                    else g.DrawString(row.Text, row.Font, brush, new PointF(_padX, y), format);
+                    arc.StartCap = LineCap.Round;
+                    arc.EndCap = LineCap.Round;
+                    g.DrawArc(arc, ring, -90f, 360f * Math.Min(1f, tile.Gauge));
+                }
+            }
+
+            using (var ink = new SolidBrush(Palette.PrimaryText(_background)))
+            using (var format = new StringFormat())
+            {
+                format.Alignment = StringAlignment.Center;
+                format.LineAlignment = StringAlignment.Center;
+                g.DrawString(tile.Figure ?? "", _gaugeFont, ink, ring, format);
+            }
+        }
+
+        /// <summary>
+        /// A tile without a gauge: its one or two figures, centred in the same box a ring
+        /// would fill, so the detail line and chart below land level with the other tiles'.
+        /// </summary>
+        void DrawFigures(Graphics g, StatsTile tile, Rectangle box)
+        {
+            int line = LineHeight(_figureFont);
+            int lines = tile.Figure2 != null ? 2 : 1;
+            float y = box.Y + (box.Height - line * lines) / 2f;
+
+            using (var ink = new SolidBrush(Palette.PrimaryText(_background)))
+            using (var format = new StringFormat())
+            {
+                format.Alignment = StringAlignment.Center;
+                format.Trimming = StringTrimming.EllipsisCharacter;
+                format.FormatFlags = StringFormatFlags.NoWrap;
+
+                g.DrawString(tile.Figure ?? "", _figureFont, ink, new RectangleF(box.X, y, box.Width, line), format);
+                if (tile.Figure2 != null)
+                    g.DrawString(tile.Figure2, _figureFont, ink, new RectangleF(box.X, y + line, box.Width, line), format);
+            }
+        }
+
+        /// <summary>
+        /// The last minute as a filled shape for Primary, with a plain line in the text tone
+        /// for Secondary. No box around it - a boxed strip read as a progress bar, not a
+        /// graph - only a faint baseline, so an empty chart is a floor with nothing on it
+        /// rather than nothing at all.
+        /// </summary>
+        void DrawChart(Graphics g, StatsTile tile, Rectangle area)
+        {
+            using (var floor = new Pen(Color.FromArgb(60, _highlight), Math.Max(1f, (float)_scale)))
+                g.DrawLine(floor, area.X, area.Bottom - 0.5f, area.Right, area.Bottom - 0.5f);
+
+            // Clipped to the area: the point older than the window sits left of it, and is
+            // there only so the line enters from the edge.
+            Region previous = g.Clip;
+            g.SetClip(area);
+            try
+            {
+                PointF[] primary = Plot(tile.Primary, area);
+                if (primary.Length >= 2)
+                {
+                    // Filled down to the floor, so the shape of the last minute reads at a
+                    // glance; the line on top keeps the edge crisp where the fill is faint.
+                    var outline = new PointF[primary.Length + 2];
+                    Array.Copy(primary, outline, primary.Length);
+                    outline[primary.Length] = new PointF(primary[primary.Length - 1].X, area.Bottom);
+                    outline[primary.Length + 1] = new PointF(primary[0].X, area.Bottom);
+
+                    using (var fill = new SolidBrush(Color.FromArgb(80, _highlight)))
+                        g.FillPolygon(fill, outline);
+                    using (var pen = new Pen(_highlight, Math.Max(1f, (float)(1.5 * _scale))))
+                        g.DrawLines(pen, primary);
                 }
 
-                y += LineHeight(row.Font);
+                PointF[] secondary = Plot(tile.Secondary, area);
+                if (secondary.Length >= 2)
+                {
+                    using (var pen = new Pen(Palette.SecondaryText(_background), Math.Max(1f, (float)_scale)))
+                        g.DrawLines(pen, secondary);
+                }
             }
+            finally
+            {
+                g.Clip = previous;
+                previous.Dispose();
+            }
+        }
+
+        static GraphicsPath Rounded(Rectangle r, int radius)
+        {
+            var path = new GraphicsPath();
+            int d = Math.Max(1, Math.Min(radius * 2, Math.Min(r.Width, r.Height)));
+            path.AddArc(r.X, r.Y, d, d, 180, 90);
+            path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        /// <summary>Normalised points onto the area, y up from its floor. Empty for none.</summary>
+        static PointF[] Plot(IList<PointF> points, Rectangle area)
+        {
+            if (points == null) return new PointF[0];
+
+            var result = new PointF[points.Count];
+            for (int i = 0; i < points.Count; i++)
+            {
+                float y = Math.Max(0f, Math.Min(1f, points[i].Y));
+                result[i] = new PointF(area.X + points[i].X * area.Width,
+                                       area.Bottom - y * area.Height);
+            }
+            return result;
         }
 
         /// <summary>
@@ -727,7 +996,9 @@ namespace DesktopSwitcher
             if (_buffer != null) { _buffer.Dispose(); _buffer = null; }
             _titleFont.Dispose();
             _bodyFont.Dispose();
-            _tabs.Dispose();
+            _gaugeFont.Dispose();
+            _figureFont.Dispose();
+            _smallFont.Dispose();
         }
     }
 }

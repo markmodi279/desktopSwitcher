@@ -81,8 +81,14 @@ catches up shortly rather than only at the next hover.
 The two small bars after `+`, in your highlight colour, are the system tile: CPU on the left,
 memory on the right, each filling from the bottom. They follow the machine every couple of
 seconds - every second while the panel is open - so a glance says whether it is busy.
-Hovering the tile only names it; click it for the figures: CPU, memory in use, and network
-throughput down and up, refreshed every second. The panel stays open once clicked: it still
+Hovering the tile only names it; click it for the panel, refreshed every second: three
+tiles, CPU, memory and network. CPU and memory each show a ring gauge with the percentage in
+it; network shows its download and upload rates. Under each is a detail line - the peak over
+the last minute for CPU and network, gigabytes used of total for memory - and a chart of the
+last minute, so a spike that has already passed still shows. The network chart scales to the
+busiest moment in that minute, with a floor of 64 KB/s so background chatter stays near the
+bottom; download is the filled shape, upload the thin line. The tiles share the panel's
+width, so a much narrower `tooltipWidth` makes them cramped. The panel stays open once clicked: it still
 follows the pointer to describe other buttons, but goes back to the stats rather than
 disappearing when the pointer leaves. The bars brighten and the cell stays lit while the
 panel is open. Clicking it again,

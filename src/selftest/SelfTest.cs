@@ -296,15 +296,24 @@ namespace DesktopSwitcher
             TooltipContent content = Controller.StatsContent(stats, false);
 
             Console.WriteLine(string.Format("  sample {0}  ({1:0.0} ms)", sample, costMs));
-            foreach (string line in content.Lines)
+            foreach (StatsTile tile in content.Tiles)
             {
-                // The panel lines these up on tab stops; a console just gets padding.
-                string[] cells = line.Split('\t');
-                var sb = new StringBuilder("    ");
-                for (int c = 0; c < cells.Length; c++)
-                    sb.Append(c < cells.Length - 1 ? cells[c].PadRight(c == 0 ? 10 : 18) : cells[c]);
-                Console.WriteLine(sb.ToString());
+                // A tile per line: what it says, the gauge it would draw, and how many chart
+                // points it has - the last should match the history count below.
+                string figures = tile.Figure + (tile.Figure2 != null ? "  " + tile.Figure2 : "");
+                Console.WriteLine(string.Format("    {0,-9} {1,-20} {2,-18} {3}{4}",
+                    tile.Label, figures, tile.Detail,
+                    tile.HasGauge ? (tile.Gauge < 0 ? "gauge -  " : string.Format("gauge {0:0.00}  ", tile.Gauge)) : "",
+                    "chart " + (tile.Primary != null ? tile.Primary.Count : 0)));
             }
+
+            // What the charts are drawn from: how much history there is, the span it
+            // covers, and what the network chart's top stands for. The span should grow a
+            // second per sample and the point count by one, until HistoryMs caps both.
+            IList<StatsPoint> history = stats.History;
+            int span = history.Count > 0 ? unchecked(history[history.Count - 1].At - history[0].At) : 0;
+            Console.WriteLine(string.Format("    graphs    {0} point(s) over {1:0.0}s, network top {2:0} KB/s",
+                history.Count, span / 1000.0, Controller.NetworkScale(history) / 1024));
             Console.WriteLine();
         }
 
