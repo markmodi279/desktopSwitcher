@@ -85,7 +85,8 @@ seconds - every second while the panel is open - so a glance says whether it is 
 Hovering the tile only names it; click it for the panel, refreshed every second: three
 tiles, CPU, memory and network. CPU and memory each show a ring gauge with the percentage in
 it; network shows its download and upload rates. Under each is a detail line - the peak over
-the last minute for CPU and network, gigabytes used of total for memory - and a chart of the
+the last minute for CPU and network (for network, download and upload each, in the larger
+one's unit), gigabytes used of total for memory - and a chart of the
 last minute, so a spike that has already passed still shows. The network chart scales to the
 busiest moment in that minute, with a floor of 64 KB/s so background chatter stays near the
 bottom; download is the filled shape, upload the thin line. The tiles share the panel's

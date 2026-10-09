@@ -935,7 +935,9 @@ namespace DesktopSwitcher
             // 1023 KB/s, and from 1000 MB/s. Digits in Segoe UI are all one width, so 8s
             // stand for any of them.
             network.FigureTemplate = "8888 KB/s";
-            network.Detail = "peak " + Rate(Math.Max(Peak(history, DownOf), Peak(history, UpOf)));
+            // Both peaks, each with its arrow: a bare "peak 4.5 MB/s" under two figures left
+            // it a guess which direction it was.
+            network.Detail = "peak " + RatePair(Peak(history, DownOf), Peak(history, UpOf));
             network.Primary = Series(history, now, DownOf, scale);
             network.Secondary = Series(history, now, UpOf, scale);
 
@@ -1042,6 +1044,36 @@ namespace DesktopSwitcher
             if (bytesPerSecond < MB) return (bytesPerSecond / KB).ToString("0") + " KB/s";
             if (bytesPerSecond < 10 * MB) return (bytesPerSecond / MB).ToString("0.0") + " MB/s";
             return (bytesPerSecond / MB).ToString("0") + " MB/s";
+        }
+
+        /// <summary>
+        /// Download and upload rates in one unit, "↓ 2.8 ↑ 4.5 MB/s", for a line too
+        /// narrow for two Rate()s side by side. The unit is the larger figure's, so the
+        /// smaller can read as a fraction - "↓ 0.3 ↑ 4.5 MB/s" - which is still the
+        /// right number, and one unit is what makes the pair fit at all.
+        ///
+        /// Never more than three digits a figure. Rate() goes to four - "1023 KB/s" - and
+        /// two of those with "peak" measured 125px against the 117 a tile's detail line has
+        /// at the default width, so the pair moves to MB from 1000 KB/s rather than 1024.
+        /// </summary>
+        static string RatePair(double down, double up)
+        {
+            if (down < 0 && up < 0) return Unknown;
+
+            const double KB = 1024, MB = 1024 * 1024;
+            double top = Math.Max(down, up);
+
+            // 999.5 so a figure that would round up to 1000 still changes unit.
+            if (top < 999.5 * KB)
+                return Down + Figure(down, KB, "0") + " " + Up + Figure(up, KB, "0") + " KB/s";
+
+            string format = top < 9.95 * MB ? "0.0" : "0";
+            return Down + Figure(down, MB, format) + " " + Up + Figure(up, MB, format) + " MB/s";
+        }
+
+        static string Figure(double bytesPerSecond, double unit, string format)
+        {
+            return bytesPerSecond < 0 ? Unknown : (bytesPerSecond / unit).ToString(format);
         }
 
         static void OpenTaskManager()
