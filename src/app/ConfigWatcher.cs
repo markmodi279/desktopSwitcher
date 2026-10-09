@@ -114,6 +114,7 @@ namespace DesktopSwitcher
             }
 
             if (text == Config.LastWritten) return;
+            Config.Adopt(text);
 
             _changed(Config.FromText(text));
         }

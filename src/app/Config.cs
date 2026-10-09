@@ -358,12 +358,24 @@ namespace DesktopSwitcher
         bool _formatCurrent;
 
         /// <summary>
-        /// The exact text this process last wrote to config.ini. ConfigWatcher compares the
-        /// file against it, which is how the app's own saves - a desktop added, a slider in
-        /// the Settings window - are told apart from a person saving in Notepad, and do not
-        /// bounce back as a reload of what was just applied.
+        /// The text of config.ini that the live settings came from: what this process last
+        /// wrote, or the hand edit it last applied. ConfigWatcher compares the file against
+        /// it, which is how the app's own saves - a desktop added, a slider in the Settings
+        /// window - are told apart from a person saving in Notepad, and do not bounce back
+        /// as a reload of what was just applied.
+        ///
+        /// It has to follow hand edits too, not only writes. It used to be only what this
+        /// process wrote, and then an edit that put a value back - 100 to 101, applied, then
+        /// back to 100 - produced exactly the text last written, was taken for the app's own
+        /// save and ignored, and left the strip on 101 with the file saying 100.
         /// </summary>
         public static string LastWritten { get; private set; }
+
+        /// <summary>Records that the live settings now match <paramref name="text"/>, which this process did not write.</summary>
+        public static void Adopt(string text)
+        {
+            LastWritten = text;
+        }
 
         public static string Directory
         {

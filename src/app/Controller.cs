@@ -1487,7 +1487,17 @@ namespace DesktopSwitcher
             next.LastCount = _pendingCount >= 1 ? _pendingCount : _config.LastCount;
             if (next.SameAs(_config)) return;
 
-            ApplyConfig(next, "config.ini edited", false);
+            // Named in the log, so "I saved and nothing happened" can be told apart from
+            // "it applied, but not the value I meant".
+            var changed = new System.Text.StringBuilder();
+            foreach (Setting s in Config.All)
+            {
+                if (s.Format(next) == s.Format(_config)) continue;
+                if (changed.Length > 0) changed.Append(", ");
+                changed.Append(s.Key + " " + s.Format(_config) + " -> " + s.Format(next));
+            }
+
+            ApplyConfig(next, "config.ini edited: " + (changed.Length > 0 ? changed.ToString() : "unrecognised keys"), false);
         }
 
         void QueueSave(int count)
