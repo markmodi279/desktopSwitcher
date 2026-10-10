@@ -14,8 +14,8 @@ To install it
    It copies itself to %LOCALAPPDATA%\DesktopSwitcher, starts with Windows, and
    the buttons appear next to the clock. You can then delete the unzipped folder.
 
-Answer No to run it from where it is without installing; it will not ask again.
-The tray menu's "Install to this PC..." does it later.
+Answer No to just try it: nothing is installed, and it stops when you exit. It
+will not ask again; the tray menu's "Install to this PC..." installs it later.
 
 To update it
 ------------

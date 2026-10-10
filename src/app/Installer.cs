@@ -68,8 +68,9 @@ namespace DesktopSwitcher
                 ? "Desktop Switcher is already installed.\n\nReplace it with this version and restart it?"
                 : "Install Desktop Switcher?\n\nThis copies it to:\n" + InstallDir
                   + "\n\nand starts it with Windows. No administrator rights are needed, and you can "
-                  + "remove it later from the tray icon's menu.\n\nChoose No to run it from here "
-                  + "without installing.";
+                  + "remove it later from the tray icon's menu.\n\n"
+                  + "Yes: install it.\n"
+                  + "No: just try it for now. Nothing is installed, and it stops when you exit.";
 
             DialogResult answer = MessageBox.Show(text, "Desktop Switcher",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question);

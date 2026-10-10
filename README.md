@@ -32,7 +32,7 @@ says so - that file is what to send with a bug report.
 Download `DesktopSwitcher-<version>.zip` from the project's Releases page, unzip it anywhere
 and run `DesktopSwitcher.exe`. It asks whether to install: **Yes** copies it to
 `%LOCALAPPDATA%\DesktopSwitcher` and starts it with Windows, so the unzipped folder can go;
-**No** runs it from where it is, and does not ask again (the tray menu's **Install to this PC**
+**No** just tries it - nothing is installed, and it stops when you exit - and does not ask again (the tray menu's **Install to this PC**
 does it later). Running a newer download offers to replace the installed copy, and the tray
 menu's **Uninstall** removes it, optionally with your settings. Nothing needs administrator
 rights. Windows SmartScreen will warn about an unsigned program; **More info, Run anyway**
