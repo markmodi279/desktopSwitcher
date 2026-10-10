@@ -1570,6 +1570,21 @@ namespace DesktopSwitcher
 
             menu.Items.Add(new ToolStripSeparator());
 
+            // One or the other, depending on where this copy is running from. Install is
+            // here for anyone who answered No at first launch.
+            if (Installer.IsInstalledCopy)
+            {
+                var uninstall = new ToolStripMenuItem("Uninstall...");
+                uninstall.Click += delegate { if (Installer.ConfirmUninstall()) Close(); };
+                menu.Items.Add(uninstall);
+            }
+            else
+            {
+                var install = new ToolStripMenuItem("Install to this PC...");
+                install.Click += delegate { if (Installer.Install(true)) Close(); };
+                menu.Items.Add(install);
+            }
+
             var exit = new ToolStripMenuItem("Exit");
             exit.Click += delegate { Close(); };
             menu.Items.Add(exit);
@@ -1633,7 +1648,7 @@ namespace DesktopSwitcher
 
         // --- autostart --------------------------------------------------------
 
-        static bool IsAutostartEnabled()
+        internal static bool IsAutostartEnabled()
         {
             try
             {
@@ -1651,6 +1666,13 @@ namespace DesktopSwitcher
 
         static void SetAutostart(bool enabled)
         {
+            SetAutostart(enabled, Application.ExecutablePath);
+        }
+
+        /// <summary>The Run entry names a path, so the installer, which runs from somewhere
+        /// else, has to say which exe it means.</summary>
+        internal static void SetAutostart(bool enabled, string exe)
+        {
             try
             {
                 using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RunKey, true))
@@ -1659,7 +1681,6 @@ namespace DesktopSwitcher
 
                     if (enabled)
                     {
-                        string exe = Application.ExecutablePath;
                         key.SetValue(RunValue, "\"" + exe + "\"");
                         Log.Write("controller: autostart enabled");
                     }

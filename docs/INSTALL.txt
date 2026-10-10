@@ -7,15 +7,24 @@ with the current desktop highlighted.
 Needs Windows 10 version 22H2 (build 19045). It does not work on Windows 11.
 No installer, no admin rights. Nothing else to download.
 
-To run it
----------
+To install it
+-------------
 1. Unzip this folder anywhere.
-2. Double-click DesktopSwitcher.exe. The buttons appear next to the clock.
+2. Double-click DesktopSwitcher.exe and answer Yes when asked to install.
+   It copies itself to %LOCALAPPDATA%\DesktopSwitcher, starts with Windows, and
+   the buttons appear next to the clock. You can then delete the unzipped folder.
 
-To keep it
-----------
+Answer No to run it from where it is without installing; it will not ask again.
+The tray menu's "Install to this PC..." does it later.
+
+To update it
+------------
+Unzip the new version and double-click it. It offers to replace the old one.
+
+To remove it
+------------
 Right-click the small tray icon (near the clock, may be under the ^ arrow) and
-tick "Start with Windows". Settings are in the same menu.
+choose "Uninstall...". Settings are in the same menu.
 
 To quit it
 ----------

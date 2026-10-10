@@ -36,6 +36,10 @@ namespace DesktopSwitcher
                 }
 
                 Startup.InstallCrashHandlers();
+
+                // A downloaded copy offers to move itself into place first; if it does, the
+                // installed copy is already starting and this one has nothing left to do.
+                if (Installer.OfferInstall()) return 0;
                 try { return RunApp(cfg); }
                 catch (Exception ex) { Startup.Report("startup", ex, false); return 1; }
             }
