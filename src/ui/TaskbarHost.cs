@@ -121,16 +121,62 @@ namespace DesktopSwitcher
         {
             Native.RECT notify;
             int x = tray.Right;
+            int notifyLeft = -1;
             if (_notifyArea != IntPtr.Zero && Native.GetWindowRect(_notifyArea, out notify))
+            {
                 x = notify.Left;
+                notifyLeft = notify.Left;
+            }
 
             IntPtr tile = _tray == IntPtr.Zero ? IntPtr.Zero : Native.FindWindowEx(_tray, IntPtr.Zero, null, TileCaption);
             Native.RECT t;
+            bool tileUsed = false;
             if (tile != IntPtr.Zero && Native.IsWindowVisible(tile)
                 && Native.GetWindowRect(tile, out t) && t.Left < x && t.Left > tray.Left)
+            {
                 x = t.Left;
+                tileUsed = true;
+            }
 
+            if (Log.Enabled) LogAnchorChange(x, notifyLeft, tileUsed);
             return x;
+        }
+
+        int _lastAnchorX = int.MinValue;
+        int _lastNotifyLeft = int.MinValue;
+        bool _lastTileUsed;
+
+        /// <summary>
+        /// Records every move of the anchor, and which of its two inputs moved it.
+        ///
+        /// The strip visibly jumps left and back now and then, and there are two quite
+        /// different causes: the notification area widening because a tray icon was promoted
+        /// out of the overflow flyout for a few seconds, and MediaController's tile arriving
+        /// or leaving. Both look the same on screen and nothing else records either. The
+        /// notification area's left edge is logged on its own, so a change in it with no tile
+        /// involved is a tray icon, and a change in the tile flag is MediaController.
+        ///
+        /// Only on change, so the call that happens on every watchdog tick costs one
+        /// comparison and writes nothing when the taskbar is still.
+        /// </summary>
+        void LogAnchorChange(int x, int notifyLeft, bool tileUsed)
+        {
+            if (x == _lastAnchorX && notifyLeft == _lastNotifyLeft && tileUsed == _lastTileUsed) return;
+
+            string cause;
+            if (_lastAnchorX == int.MinValue) cause = "first reading";
+            else if (tileUsed != _lastTileUsed) cause = tileUsed ? "MediaController tile appeared" : "MediaController tile gone";
+            else if (notifyLeft != _lastNotifyLeft) cause = "notification area " + (notifyLeft < _lastNotifyLeft ? "widened" : "narrowed")
+                                                           + " (tray icon shown or hidden)";
+            else cause = "tile moved";
+
+            Log.Write("taskbar: anchor x " + (_lastAnchorX == int.MinValue ? "-" : _lastAnchorX.ToString())
+                      + " -> " + x + "; notify.Left " + notifyLeft + ", tile " + (tileUsed ? "used" : "not used")
+                      + "; " + cause);
+
+            _lastAnchorX = x;
+            _lastNotifyLeft = notifyLeft;
+            _lastTileUsed = tileUsed;
         }
 
         /// <summary>
