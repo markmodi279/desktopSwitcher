@@ -103,6 +103,36 @@ namespace DesktopSwitcher
             }
         }
 
+        /// <summary>Caption of MediaController's tile when it is docked beside the clock.</summary>
+        const string TileCaption = "MediaControllerTileRight";
+
+        /// <summary>
+        /// Screen X that the strip's right edge (plus margin) sits against: the left edge of the
+        /// notification area, otherwise the taskbar's right edge - or, when MediaController's
+        /// tile has taken the slot beside the clock, the left edge of that tile.
+        ///
+        /// The tile announces that through its window caption ("...Right"), not through where it
+        /// happens to be: a tile on the strip's other side has the plain caption and is ignored,
+        /// so the two apps cannot each wait for the other. Looked up on every call, not cached,
+        /// because the tile comes and goes with its app and Explorer restarts. The watchdog's
+        /// once-per-second Reassert is what follows it.
+        /// </summary>
+        int AnchorScreenX(Native.RECT tray)
+        {
+            Native.RECT notify;
+            int x = tray.Right;
+            if (_notifyArea != IntPtr.Zero && Native.GetWindowRect(_notifyArea, out notify))
+                x = notify.Left;
+
+            IntPtr tile = _tray == IntPtr.Zero ? IntPtr.Zero : Native.FindWindowEx(_tray, IntPtr.Zero, null, TileCaption);
+            Native.RECT t;
+            if (tile != IntPtr.Zero && Native.IsWindowVisible(tile)
+                && Native.GetWindowRect(tile, out t) && t.Left < x && t.Left > tray.Left)
+                x = t.Left;
+
+            return x;
+        }
+
         /// <summary>
         /// Strip bounds in Shell_TrayWnd client coordinates.
         ///
@@ -118,13 +148,8 @@ namespace DesktopSwitcher
             Native.RECT tray;
             if (_tray == IntPtr.Zero || !Native.GetWindowRect(_tray, out tray)) return false;
 
-            // Anchor to the notification area when present, otherwise the taskbar edge.
-            int anchorScreenX;
+            int anchorScreenX = AnchorScreenX(tray);
             Native.RECT notify;
-            if (_notifyArea != IntPtr.Zero && Native.GetWindowRect(_notifyArea, out notify))
-                anchorScreenX = notify.Left;
-            else
-                anchorScreenX = tray.Right;
 
             if (IsVertical)
             {
@@ -232,12 +257,7 @@ namespace DesktopSwitcher
             Native.RECT tray;
             if (_tray == IntPtr.Zero || !Native.GetWindowRect(_tray, out tray)) return false;
 
-            int anchorScreenX;
-            Native.RECT notify;
-            if (_notifyArea != IntPtr.Zero && Native.GetWindowRect(_notifyArea, out notify))
-                anchorScreenX = notify.Left;
-            else
-                anchorScreenX = tray.Right;
+            int anchorScreenX = AnchorScreenX(tray);
 
             // Just left of where the strip will sit, vertically centred - empty taskbar
             // unless a great many windows are open. The step off the strip's edge is
