@@ -24,6 +24,9 @@ namespace DesktopSwitcher
     {
         const string ExeName = "DesktopSwitcher.exe";
 
+        /// <summary>Registered window message that makes a running copy exit cleanly.</summary>
+        public const string QuitMessageName = "DesktopSwitcher.Quit";
+
         public static string InstallDir
         {
             get
@@ -138,20 +141,65 @@ namespace DesktopSwitcher
         // process that happens to share the name is left alone.
         static void StopInstalledCopy()
         {
+            StopOtherInstances(InstalledExe, true);
+        }
+
+        /// <summary>
+        /// Stops every other running copy - only the one at <paramref name="onlyPath"/> when
+        /// that is given - and returns how many are still alive.
+        ///
+        /// Asked politely first, killed only if that fails. A killed process never runs its
+        /// shutdown, so its tray icon is never removed: Explorer keeps drawing it until the
+        /// pointer crosses it. That left a dead icon beside the live one, which widened the
+        /// notification area and shoved the strip left until someone opened the overflow
+        /// flyout and hovered. taskkill without /F does not help - it only signals windows
+        /// that are visible, and this one is hidden - so a message is posted to it directly.
+        /// </summary>
+        public static int StopOtherInstances(string onlyPath, bool allowKill)
+        {
             int self = Process.GetCurrentProcess().Id;
+            int remaining = 0;
             foreach (Process p in Process.GetProcessesByName("DesktopSwitcher"))
             {
                 try
                 {
                     if (p.Id == self) continue;
-                    if (!string.Equals(p.MainModule.FileName, InstalledExe, StringComparison.OrdinalIgnoreCase))
+                    if (onlyPath != null && !string.Equals(p.MainModule.FileName, onlyPath,
+                                                           StringComparison.OrdinalIgnoreCase))
                         continue;
-                    p.Kill();
-                    p.WaitForExit(3000);
+
+                    RequestClose(p.Id);
+                    if (p.WaitForExit(3000)) continue;
+
+                    if (allowKill)
+                    {
+                        Log.Write("installer: pid " + p.Id + " did not close when asked - killing");
+                        p.Kill();
+                        p.WaitForExit(3000);
+                    }
+                    else remaining++;
                 }
                 catch (Exception) { }
                 finally { p.Dispose(); }
             }
+            return remaining;
+        }
+
+        // The quit message to every top-level window the process owns, hidden ones included:
+        // the controller's own window is never shown, and it is the one that acts on it.
+        //
+        // Not WM_CLOSE: posting that to the process's windows ended it without the
+        // controller's shutdown ever running, so the tray icon was left behind anyway.
+        static void RequestClose(int pid)
+        {
+            uint quit = Native.RegisterWindowMessage(QuitMessageName);
+            Native.EnumWindows(delegate(IntPtr hwnd, IntPtr param)
+            {
+                uint owner;
+                Native.GetWindowThreadProcessId(hwnd, out owner);
+                if (owner == (uint)pid) Native.PostMessage(hwnd, (int)quit, IntPtr.Zero, IntPtr.Zero);
+                return true;
+            }, IntPtr.Zero);
         }
 
         /// <summary>

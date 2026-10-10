@@ -57,6 +57,7 @@ namespace DesktopSwitcher
                     case "--anim":    return CmdAnim(args);
                     case "--slide":   return CmdSlide(args);
                     case "--config":  return CmdConfig();
+                    case "--quit":    return CmdQuit();
                     case "--winver":  return CmdWinVer();
                     case "--settings": return CmdSettings(args);
                     case "--help":
@@ -101,6 +102,7 @@ namespace DesktopSwitcher
             Console.WriteLine("  --strip N              run the real switcher strip for N seconds");
             Console.WriteLine("  --anim [ms]            step the strip's easing headlessly, frame by frame");
             Console.WriteLine("  --slide [ms]           step the hover panel's travel between buttons");
+            Console.WriteLine("  --quit                 close any running DesktopSwitcher the way Exit does, so its tray icon goes with it");
             Console.WriteLine("  --config               print every setting and check config.ini round-trips");
             Console.WriteLine("  --winver               print the Windows build and whether startup would accept it");
             Console.WriteLine("  --settings [light|dark|#RRGGBB]  open the Settings window on its own; saves nothing");
@@ -1654,6 +1656,14 @@ namespace DesktopSwitcher
                                           : "refused: " + why);
             Console.WriteLine("crash report would be written to " + Startup.CrashPath);
             return why == null ? 0 : 1;
+        }
+
+        static int CmdQuit()
+        {
+            int left = Installer.StopOtherInstances(null, false);
+            Console.WriteLine(left == 0 ? "no other DesktopSwitcher is running"
+                                        : left + " would not close; not killed, to avoid a stranded tray icon");
+            return left == 0 ? 0 : 1;
         }
 
         static int CmdConfig()

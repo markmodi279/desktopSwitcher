@@ -48,6 +48,7 @@ namespace DesktopSwitcher
         Timer _settleTimer;      // debounced rebuild after a theme, accent, or display change
 
         uint _taskbarCreatedMessage;
+        uint _quitMessage;           // see Installer.QuitMessageName
         int _buttonWidth, _plusWidth, _statsWidth, _margin, _barHeight;
         Color _background;
         bool _started;
@@ -70,6 +71,7 @@ namespace DesktopSwitcher
             Text = "DesktopSwitcher";
 
             _taskbarCreatedMessage = Native.RegisterWindowMessage("TaskbarCreated");
+            _quitMessage = Native.RegisterWindowMessage(Installer.QuitMessageName);
 
             // Force the window into existence, here, on the UI thread.
             //
@@ -1214,6 +1216,16 @@ namespace DesktopSwitcher
 
         protected override void WndProc(ref Message m)
         {
+            // Another copy (the installer, or --quit) asking this one to exit the way the tray's
+            // Exit does. Not gated on _started: being asked to quit during startup is still
+            // being asked to quit.
+            if (_quitMessage != 0 && (uint)m.Msg == _quitMessage)
+            {
+                Log.Write("controller: asked to quit");
+                Close();
+                return;
+            }
+
             if (_started && _taskbarCreatedMessage != 0
                 && (uint)m.Msg == _taskbarCreatedMessage)
             {

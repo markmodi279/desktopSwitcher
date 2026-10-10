@@ -87,9 +87,19 @@ selftests return live data.
 The installed exe lives at
 `/mnt/c/Users/Siddh/AppData/Local/DesktopSwitcher/DesktopSwitcher.exe`. Windows locks a
 running exe, so `csc` fails with `CS0016 ... being used by another process` unless the
-process is killed first. Kill it, rebuild with `-target:winexe` straight to that path, then
+process is stopped first. Stop it with the console build's `--quit` (it asks the running copy to
+exit the way the tray's Exit does), rebuild with `-target:winexe` straight to that path, then
 relaunch with `cmd.exe /c start "" "<windows path>"` **backgrounded** — a foreground
 `start` never returns to the WSL shell.
+
+**Do not `taskkill /F` it.** A killed process never removes its tray icon, so Explorer keeps
+drawing a dead one beside the live one until the pointer crosses it. That widens the
+notification area and the strip sits 30 px to the left until someone opens the `^` flyout and
+hovers - which looks like a bug in the strip and is not. Plain `taskkill` (no `/F`) does
+nothing: it only signals visible windows and the controller's is hidden. `--quit` posts a
+registered message (`DesktopSwitcher.Quit`) that the controller handles. With `diagnostics =
+true` the log shows `asked to quit`, `shutting down`; if the next start reads a wider
+`notify.Left` than the one before it, a ghost is back.
 
 Two gotchas reading the PID out of `tasklist.exe`: its output begins with a blank line, so
 `awk '{print $2}' | head -1` yields an empty string — grep for the image name first. And
@@ -118,7 +128,7 @@ shell.
 | `--config` | every setting with its value, range and default, and that `config.ini` round-trips through the settings table |
 | `--help` | the command list |
 
-**Ask first** — these mutate desktop state or take over the screen: `--switch`, `--create`,
+**Ask first** — these mutate desktop state or take over the screen: `--quit` (closes the running app), `--switch`, `--create`,
 `--remove`, `--rename`, `--move`, `--soak`, `--watch`, `--service`, `--testwindow`,
 `--strip`, `--settings` (opens the Settings window standalone; prints changes, saves nothing).
 
