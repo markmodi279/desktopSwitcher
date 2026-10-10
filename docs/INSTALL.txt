@@ -1,0 +1,42 @@
+Desktop Switcher
+================
+
+A numbered button for each virtual desktop, docked in the Windows 10 taskbar,
+with the current desktop highlighted.
+
+Needs Windows 10 version 22H2 (build 19045). It does not work on Windows 11.
+No installer, no admin rights. Nothing else to download.
+
+To run it
+---------
+1. Unzip this folder anywhere.
+2. Double-click DesktopSwitcher.exe. The buttons appear next to the clock.
+
+To keep it
+----------
+Right-click the small tray icon (near the clock, may be under the ^ arrow) and
+tick "Start with Windows". Settings are in the same menu.
+
+To quit it
+----------
+Right-click the tray icon, then Exit. There is no other way: the strip has no
+close button.
+
+Windows says "Windows protected your PC"
+----------------------------------------
+The app is not code-signed, which costs money, so SmartScreen warns about any
+new unsigned program. Click "More info", then "Run anyway". To check the file
+is the one that was published, compare its SHA256 with the .sha256 file that
+came with the download:
+
+    certutil -hashfile DesktopSwitcher.exe SHA256
+
+Something went wrong
+--------------------
+If it reports an error it saves details to
+
+    %APPDATA%\DesktopSwitcher\crash.txt
+
+Send that file along with what you were doing.
+
+Licence: MIT, see LICENSE.

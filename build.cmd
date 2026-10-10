@@ -5,6 +5,7 @@ rem  DesktopSwitcher build script.
 rem
 rem    build.cmd            -> windowed build (no console), for normal use
 rem    build.cmd console    -> console build, for milestone testing / selftest
+rem    build.cmd release    -> windowed build into dist\, zipped with a SHA256, to hand out
 rem
 rem  Targets the in-box .NET Framework compiler, so nothing needs installing.
 rem  NOTE: that compiler is C# 5 only - no string interpolation, nameof, ?. etc.
@@ -24,6 +25,15 @@ set "OUTEXE=%OUTDIR%\DesktopSwitcher.exe"
 
 set "TARGET=winexe"
 if /i "%~1"=="console" set "TARGET=exe"
+
+rem  release builds go to dist\, never the live install path: building over a running
+rem  exe fails, and a release should not disturb the copy in use.
+set "RELEASE="
+if /i "%~1"=="release" (
+  set "RELEASE=1"
+  set "OUTDIR=%~dp0dist\stage"
+  set "OUTEXE=%~dp0dist\stage\DesktopSwitcher.exe"
+)
 
 if not exist "%CSC%" (
   echo ERROR: C# compiler not found at:
@@ -51,4 +61,29 @@ if errorlevel 1 (
 )
 
 echo BUILD OK
+if not defined RELEASE exit /b 0
+
+rem  --- release packaging --------------------------------------------------------
+rem  The version comes from the exe itself (AssemblyInfo.cs), so the zip name can never
+rem  disagree with what Explorer shows. PowerShell is in the box, like the compiler.
+set "VER="
+for /f "delims=" %%V in ('powershell -NoProfile -Command "(Get-Item '%OUTEXE%').VersionInfo.FileVersion"') do set "VER=%%V"
+if not defined VER (
+  echo ERROR: could not read the version from %OUTEXE%
+  exit /b 1
+)
+
+set "ZIP=%~dp0dist\DesktopSwitcher-%VER%.zip"
+copy /y "%~dp0LICENSE" "%OUTDIR%\LICENSE" >nul
+copy /y "%~dp0docs\INSTALL.txt" "%OUTDIR%\README.txt" >nul
+if exist "%ZIP%" del "%ZIP%"
+
+powershell -NoProfile -Command "Compress-Archive -Path '%OUTDIR%\*' -DestinationPath '%ZIP%'; $h = (Get-FileHash -Algorithm SHA256 '%ZIP%').Hash.ToLower(); Set-Content -Encoding ASCII -Path '%ZIP%.sha256' -Value ($h + '  DesktopSwitcher-%VER%.zip'); Write-Host ('SHA256 ' + $h)"
+if errorlevel 1 (
+  echo.
+  echo PACKAGING FAILED
+  exit /b 1
+)
+
+echo RELEASE OK -^> %ZIP%
 exit /b 0

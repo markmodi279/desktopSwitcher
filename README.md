@@ -27,6 +27,15 @@ is older than 22H2, Windows Update brings it up for free.
 If the app ever hits an unexpected error it writes `%APPDATA%\DesktopSwitcher\crash.txt` and
 says so - that file is what to send with a bug report.
 
+## Install
+
+Download `DesktopSwitcher-<version>.zip` from the project's Releases page, unzip it anywhere
+and run `DesktopSwitcher.exe`. Right-click the tray icon and tick **Start with Windows** to
+keep it. Windows SmartScreen will warn about an unsigned program; **More info, Run anyway**
+gets past it, and the `.sha256` file beside the download lets you check you have the file
+that was published. The zip carries a plain-text `README.txt` that says the same
+(source: [docs/INSTALL.txt](docs/INSTALL.txt)).
+
 ## Build
 
 ```cmd
@@ -35,6 +44,11 @@ build.cmd console    :: console build, keeps the selftest output visible
 ```
 
 Output goes to `%LOCALAPPDATA%\DesktopSwitcher\DesktopSwitcher.exe`.
+
+`build.cmd release` builds into `dist\` instead and leaves `DesktopSwitcher-<version>.zip` and
+a `.sha256` beside it, ready to upload. The version comes from
+[src/app/AssemblyInfo.cs](src/app/AssemblyInfo.cs), so bump it there first. It never touches
+the installed copy, so it works while the app is running.
 
 > The compiler used is **C# 5 only** — no string interpolation, `nameof`, `?.` or
 > expression-bodied members anywhere in this tree.
