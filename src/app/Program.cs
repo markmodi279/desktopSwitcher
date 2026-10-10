@@ -22,7 +22,23 @@ namespace DesktopSwitcher
             Log.Init(Config.LogPath, cfg.Diagnostics);
 
             // No arguments means "run the app". Everything else is selftest.
-            if (args.Length == 0) return RunApp(cfg);
+            if (args.Length == 0)
+            {
+                // Refuse before touching any COM interface: on a Windows build the GUIDs were
+                // not verified for, the vtable calls would misbehave rather than fail cleanly.
+                string osText;
+                string why = Startup.CheckWindows(out osText);
+                if (why != null)
+                {
+                    Log.Write("startup: unsupported Windows " + osText);
+                    Startup.ShowUnsupported(why);
+                    return 2;
+                }
+
+                Startup.InstallCrashHandlers();
+                try { return RunApp(cfg); }
+                catch (Exception ex) { Startup.Report("startup", ex, false); return 1; }
+            }
 
             return SelfTest.Run(args);
         }

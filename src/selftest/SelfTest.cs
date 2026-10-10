@@ -57,6 +57,7 @@ namespace DesktopSwitcher
                     case "--anim":    return CmdAnim(args);
                     case "--slide":   return CmdSlide(args);
                     case "--config":  return CmdConfig();
+                    case "--winver":  return CmdWinVer();
                     case "--settings": return CmdSettings(args);
                     case "--help":
                     case "-h":
@@ -101,6 +102,7 @@ namespace DesktopSwitcher
             Console.WriteLine("  --anim [ms]            step the strip's easing headlessly, frame by frame");
             Console.WriteLine("  --slide [ms]           step the hover panel's travel between buttons");
             Console.WriteLine("  --config               print every setting and check config.ini round-trips");
+            Console.WriteLine("  --winver               print the Windows build and whether startup would accept it");
             Console.WriteLine("  --settings [light|dark|#RRGGBB]  open the Settings window on its own; saves nothing");
             Console.WriteLine();
         }
@@ -1643,6 +1645,17 @@ namespace DesktopSwitcher
         /// surface now reads: a typo in a key, a Choice whose spellings do not parse back,
         /// or a range whose ends the parser clamps differently would all show here first.
         /// </summary>
+        static int CmdWinVer()
+        {
+            string text;
+            string why = Startup.CheckWindows(out text);
+            Console.WriteLine("Windows " + text);
+            Console.WriteLine(why == null ? "supported: startup would proceed"
+                                          : "refused: " + why);
+            Console.WriteLine("crash report would be written to " + Startup.CrashPath);
+            return why == null ? 0 : 1;
+        }
+
         static int CmdConfig()
         {
             Config live = Config.Load();

@@ -20,7 +20,12 @@ Windows 10, and nothing else. It builds with the C# compiler that ships in the b
 Developed and verified against **Windows 10 22H2, build 19045.7548**. It relies on
 undocumented shell COM interfaces whose GUIDs differ between Windows builds; 19045 is
 the terminal Windows 10 build, so they are stable there. **It will not work on
-Windows 11** without new interface GUIDs.
+Windows 11** without new interface GUIDs. On any other build the app declines to start and
+says which build it found, rather than calling interfaces it cannot vouch for; if Windows 10
+is older than 22H2, Windows Update brings it up for free.
+
+If the app ever hits an unexpected error it writes `%APPDATA%\DesktopSwitcher\crash.txt` and
+says so - that file is what to send with a bug report.
 
 ## Build
 
