@@ -225,6 +225,19 @@ namespace DesktopSwitcher
         /// </summary>
         internal int GlideAnchor(int raw)
         {
+            // Against the tile, the strip does not glide on its own account: it follows the
+            // tile exactly, and the tile does the easing. MediaController glides itself when the
+            // tray moves it, so a second glide here only leaves the strip late and the tile drawn
+            // over it - which a recording of the two windows' edges showed as up to 9 px of
+            // overlap. Against an older MediaController that jumps, the strip jumps with it, and
+            // nothing overlaps either way. Leaving the tile (it exits) is not snapped: the raw
+            // anchor then jumps back to the tray edge and the offset below eases the strip there.
+            if (_anchorIsTile)
+            {
+                _glideLastRaw = raw;
+                _glideOffset = 0f;
+                return raw;
+            }
             if (_glideLastRaw != int.MinValue && raw != _glideLastRaw)
                 _glideOffset += _glideLastRaw - raw;
             _glideLastRaw = raw;

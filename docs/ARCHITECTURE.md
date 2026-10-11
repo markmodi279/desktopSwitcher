@@ -202,7 +202,7 @@ eases that to zero over `GlideMs` (300, the same as the tile's, and deliberately
 frame). With the tile beside the clock, the strip does *not* ease on its own: it sits against
 the tile, the tile eases itself, and a location hook on the tile's process makes the strip
 follow it exactly. A second ease on top left the strip late and the tile drawn over it.
-MediaController also moves the strip in the same step as the tile, because following from
+MediaController also moves the strip right after the tile, in the same turn, because following from
 another process is always a few milliseconds behind and that is a frame the compositor can
 present.
 
