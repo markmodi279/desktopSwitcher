@@ -358,6 +358,22 @@ namespace DesktopSwitcher
         [DllImport("user32.dll", SetLastError = true)]
         public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 
+        // --- window location events ---------------------------------------------
+
+        public delegate void WinEventProc(IntPtr hook, uint eventType, IntPtr hwnd, int idObject,
+                                          int idChild, uint threadId, uint time);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr module,
+                                                    WinEventProc proc, uint processId, uint threadId, uint flags);
+
+        [DllImport("user32.dll")]
+        public static extern bool UnhookWinEvent(IntPtr hook);
+
+        public const uint EVENT_OBJECT_LOCATIONCHANGE = 0x800B;
+        public const uint WINEVENT_OUTOFCONTEXT = 0;
+        public const int OBJID_WINDOW = 0;
+
         [DllImport("kernel32.dll")]
         public static extern uint GetCurrentThreadId();
 

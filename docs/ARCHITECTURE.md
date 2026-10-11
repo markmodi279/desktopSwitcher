@@ -181,17 +181,30 @@ animation timer did not: a WinForms timer started from a thread with no message 
 which froze the strip's animation and is how this was found. Touching `Handle` in the constructor
 is what makes the marshalling real; do not remove it as dead code.
 
-`Controller` runs seven timers, all on the UI thread:
+`Controller` runs eight timers, all on the UI thread, and a ninth that only runs while the strip is gliding:
 
 | Timer | Interval | Job |
 |---|---|---|
 | startup | 500 ms | waits for the taskbar to exist at login, then stops |
 | reconcile | `reconcileMs` (2000) | model safety net, the occupancy dot's cheap window sweep, and a stats reading |
 | watchdog | 1000 ms | is the taskbar still there, is the strip still in it |
+| anchor | 40 ms | reads where the tray edge is, and places the strip only if it has moved; also (re)makes the location hook on MediaController's tile |
+| glide | 15 ms | runs only while the strip eases to a moved tray edge; `--glide` checks the arithmetic |
 | focus | 300 ms | sample the foreground window |
 | save | 2000 ms | debounced config write |
 | theme | 600 ms | debounced rebuild after `WM_SETTINGCHANGE`/`ImmersiveColorSet` |
 | settings | 150 ms | debounced apply of the Settings window's latest change; created when the window first changes something |
+
+The strip's position follows the tray in two different ways. With no MediaController tile, a
+moved notification area is eased: `TaskbarHost` remembers how far the strip lags and `Motion`
+eases that to zero over `GlideMs` (300, the same as the tile's, and deliberately not
+`animationMs`: at 100 ms an exponential ease puts over half of a 30 px move into its first
+frame). With the tile beside the clock, the strip does *not* ease on its own: it sits against
+the tile, the tile eases itself, and a location hook on the tile's process makes the strip
+follow it exactly. A second ease on top left the strip late and the tile drawn over it.
+MediaController also moves the strip in the same step as the tile, because following from
+another process is always a few milliseconds behind and that is a frame the compositor can
+present.
 
 `SwitcherStrip` owns three more, and they are the only timers in the tree that are not always
 running. The animation frame timer, 15 ms, is started when a visual target changes and

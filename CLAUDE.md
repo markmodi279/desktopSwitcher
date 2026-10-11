@@ -123,6 +123,7 @@ shell.
 | `--taskbar` | taskbar geometry, DPI scale, computed strip bounds, sampled colour |
 | `--where <title>` | whether a window is on the current desktop |
 | `--anim [ms]` | steps the strip's easing headlessly and prints each frame; needs no shell at all |
+| `--glide` | the strip's glide to a moved tray edge, headlessly: no jump on the first frame, only toward the target, lands exactly, a mid-glide retarget is absorbed |
 | `--slide [ms]` | the same for the hover panel's travel between buttons: placement, the pinned bottom edge, the row-block origin, the accent stub |
 | `--winver` | the Windows build, and whether startup would accept it (19041-19045 only; Windows 11 is refused) |
 | `--config` | every setting with its value, range and default, and that `config.ini` round-trips through the settings table |

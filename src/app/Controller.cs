@@ -40,6 +40,10 @@ namespace DesktopSwitcher
         Config _settingsPending;        // the window's latest change, waiting out the debounce
         Timer _settingsTimer;           // that debounce
 
+        const int AnchorPollMs = 40;
+        Timer _anchorTimer;      // notices the tray anchor moving between watchdog ticks
+        Timer _glideTimer;       // runs only while the strip eases to a moved anchor
+        int _glideTick;
         Timer _startupTimer;     // waits for the taskbar to exist at login
         Timer _reconcileTimer;   // model safety net
         Timer _watchdogTimer;    // strip / taskbar health
@@ -153,6 +157,15 @@ namespace DesktopSwitcher
                 SampleStats();
             });
             _watchdogTimer = StartTimer(1000, delegate { Watchdog(); });
+
+            // The watchdog is too slow to follow a tray change: the tile beside the strip
+            // moves at once and would sit over it for up to a second. This only reads, and
+            // only places the strip when the anchor has actually moved.
+            _anchorTimer = StartTimer(AnchorPollMs, delegate
+            {
+                WatchTile();
+                if (_strip != null && _host.AnchorMoved()) PlaceStrip();
+            });
             _focusTimer = StartTimer(300, delegate { _foreground.Sample(); });
 
             _saveTimer = new Timer();
@@ -185,6 +198,61 @@ namespace DesktopSwitcher
 
             _started = true;
             Log.Write("controller: started");
+        }
+
+        /// <summary>
+        /// Positions the strip, and starts the glide if that found the anchor had moved.
+        /// Every placement goes through here, so none of them can make the strip jump.
+        /// </summary>
+        void PlaceStrip()
+        {
+            _host.Reassert(_strip.Handle, _strip.Width, _margin);
+            if (_host.Gliding) StartGlide();
+        }
+
+        // MediaController's tile moves first and the strip follows it. Polled, the strip was
+        // always a few frames behind a tile that is itself easing, so the tile sat over the
+        // strip. A location hook on the tile's process says when it moves; the poll above only
+        // notices the tile arriving or leaving, which is when the hook is (re)made.
+        LocationWatcher _tileWatch;
+
+        void WatchTile()
+        {
+            uint pid = _host.TileProcessId;
+            if (_tileWatch != null && _tileWatch.ProcessId == pid) return;
+            if (_tileWatch != null) { _tileWatch.Dispose(); _tileWatch = null; }
+            if (pid != 0) _tileWatch = new LocationWatcher(pid, OnTileMoved);
+        }
+
+        void OnTileMoved()
+        {
+            if (_strip != null && _host.AnchorMoved()) PlaceStrip();
+        }
+
+        void StartGlide()
+        {
+            if (_glideTimer == null)
+            {
+                _glideTimer = new Timer();
+                _glideTimer.Interval = Motion.FrameMs;
+                _glideTimer.Tick += OnGlideFrame;
+            }
+            if (_glideTimer.Enabled) return;
+            _glideTick = Environment.TickCount;
+            _glideTimer.Start();
+        }
+
+        void OnGlideFrame(object sender, EventArgs e)
+        {
+            int now = Environment.TickCount;
+            int elapsed = now - _glideTick;
+            _glideTick = now;
+
+            if (_strip == null) { _glideTimer.Stop(); return; }
+
+            _host.StepGlide(elapsed);
+            _host.Reassert(_strip.Handle, _strip.Width, _margin);
+            if (!_host.Gliding) _glideTimer.Stop();
         }
 
         Timer StartTimer(int interval, EventHandler tick)
@@ -241,6 +309,7 @@ namespace DesktopSwitcher
         void RebuildStrip()
         {
             DisposeStrip();
+            _host.ResetGlide();
 
             int count = _service.Count > 0 ? _service.Count : 1;
 
@@ -324,7 +393,7 @@ namespace DesktopSwitcher
             _foreground.Ignore(_strip.Handle);
 
             _strip.SetDesktops(_service.Desktops);
-            _host.Reassert(_strip.Handle, _strip.Width, _margin);
+            PlaceStrip();
             RefreshOccupancy();
             PushStatsLevels();
 
@@ -1141,7 +1210,7 @@ namespace DesktopSwitcher
             }
 
             _strip.SetDesktops(_service.Desktops);
-            _host.Reassert(_strip.Handle, _strip.Width, _margin);
+            PlaceStrip();
             RefreshOccupancy();
 
             QueueSave(_service.Count);
@@ -1190,7 +1259,7 @@ namespace DesktopSwitcher
             }
 
             // Cheap, and keeps the strip above sibling task buttons.
-            _host.Reassert(_strip.Handle, _strip.Width, _margin);
+            PlaceStrip();
         }
 
         void HandleExplorerRestart()
@@ -1725,6 +1794,9 @@ namespace DesktopSwitcher
             StopTimer(ref _startupTimer);
             StopTimer(ref _reconcileTimer);
             StopTimer(ref _watchdogTimer);
+            StopTimer(ref _glideTimer);
+            StopTimer(ref _anchorTimer);
+            if (_tileWatch != null) { _tileWatch.Dispose(); _tileWatch = null; }
             StopTimer(ref _focusTimer);
             StopTimer(ref _settleTimer);
             StopTimer(ref _settingsTimer);

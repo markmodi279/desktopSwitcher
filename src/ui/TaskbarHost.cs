@@ -131,11 +131,14 @@ namespace DesktopSwitcher
             IntPtr tile = _tray == IntPtr.Zero ? IntPtr.Zero : Native.FindWindowEx(_tray, IntPtr.Zero, null, TileCaption);
             Native.RECT t;
             bool tileUsed = false;
+            _anchorIsTile = false;
             if (tile != IntPtr.Zero && Native.IsWindowVisible(tile)
                 && Native.GetWindowRect(tile, out t) && t.Left < x && t.Left > tray.Left)
             {
                 x = t.Left;
                 tileUsed = true;
+                _anchorIsTile = true;
+                Native.GetWindowThreadProcessId(tile, out _tilePid);
             }
 
             if (Log.Enabled) LogAnchorChange(x, notifyLeft, tileUsed);
@@ -179,6 +182,93 @@ namespace DesktopSwitcher
             _lastTileUsed = tileUsed;
         }
 
+        // --- glide ------------------------------------------------------------
+
+        bool _anchorIsTile;     // set by AnchorScreenX: the strip is against the tile, not the tray
+        uint _tilePid;
+
+        /// <summary>Process id of the tile's owner while it is the anchor, else 0.</summary>
+        public uint TileProcessId { get { return _anchorIsTile ? _tilePid : 0; } }
+
+        int _glideLastRaw = int.MinValue;   // the anchor as last seen, before any glide
+        float _glideOffset;                 // pixels the shown anchor still lags the real one
+
+        /// <summary>True while the strip is still catching up with a moved anchor.</summary>
+        public bool Gliding { get { return _glideOffset != 0f; } }
+
+        /// <summary>
+        /// Forgets any glide in progress, so the next placement lands exactly. Called when
+        /// the strip is rebuilt: a new strip, a new taskbar or a new display have no earlier
+        /// position worth easing from.
+        /// </summary>
+        public void ResetGlide()
+        {
+            _glideLastRaw = int.MinValue;
+            _glideOffset = 0f;
+        }
+
+        /// <summary>
+        /// The anchor the strip is actually drawn against: the real one, plus whatever of
+        /// the last move it has not yet covered.
+        ///
+        /// A tray icon appearing or going moves the notification area's left edge, and the
+        /// strip used to jump the same distance on the next watchdog tick. The move is not
+        /// eased by interpolating the strip's position but by remembering how far behind it
+        /// is: when the real anchor moves from a to b, the offset takes up (a - b) so the
+        /// strip stays where it was, and StepGlide then eases that offset to zero. It is the
+        /// anchor that glides and not the strip's left edge because the strip's width changes
+        /// on its own (a desktop added or removed) and must land at once, with its right
+        /// edge still against the tray; the offset is added to the anchor, so it does.
+        ///
+        /// A second move mid-glide simply adds to the offset, so retargeting is free - the
+        /// same property Motion.Rate is chosen for.
+        /// </summary>
+        internal int GlideAnchor(int raw)
+        {
+            if (_glideLastRaw != int.MinValue && raw != _glideLastRaw)
+                _glideOffset += _glideLastRaw - raw;
+            _glideLastRaw = raw;
+            return raw + (int)Math.Round(_glideOffset);
+        }
+
+        /// <summary>
+        /// True when the anchor is not where the strip was last placed against it. A few
+        /// window-rect reads and no writes, so it is cheap enough to ask many times a second;
+        /// that is the point of it. The watchdog's once-per-second Reassert was the only thing
+        /// noticing a tray change, so MediaController's tile - which follows the notification
+        /// area on its own timer - moved left over the strip, and the strip only then went
+        /// after it. Asking this every few tens of milliseconds closes that gap.
+        /// </summary>
+        public bool AnchorMoved()
+        {
+            Native.RECT tray;
+            if (_tray == IntPtr.Zero || _glideLastRaw == int.MinValue || IsVertical) return false;
+            EnsureChildren();
+            if (!Native.GetWindowRect(_tray, out tray)) return false;
+            return AnchorScreenX(tray) != _glideLastRaw;
+        }
+
+        /// <summary>
+        /// One frame of the glide. True when the offset moved and the strip needs placing
+        /// again; false once it has landed.
+        /// </summary>
+        public bool StepGlide(int elapsedMs)
+        {
+            return Motion.Ease(ref _glideOffset, 0f, Motion.Rate(elapsedMs, GlideMs), Motion.PixelEpsilon);
+        }
+
+        /// <summary>
+        /// How long the strip takes to settle after the tray moves it. Its own number, not
+        /// animationMs, and the same one MediaController's tile uses, so the two move alike
+        /// alone or together.
+        ///
+        /// Not animationMs (100) because the ease is exponential and covers the same fraction of
+        /// what is left every frame: for a 30 px move at 100 ms that is 17 px in the first 15 ms
+        /// frame, which reads as a jump with a short tail. animationMs also drives the hover
+        /// panel and the underline, which want to be quick; this wants to be seen.
+        /// </summary>
+        public const int GlideMs = 300;
+
         /// <summary>
         /// Strip bounds in Shell_TrayWnd client coordinates.
         ///
@@ -217,7 +307,7 @@ namespace DesktopSwitcher
             }
 
             var topLeft = new Native.POINT();
-            topLeft.X = anchorScreenX - margin - width;
+            topLeft.X = GlideAnchor(anchorScreenX) - margin - width;
             topLeft.Y = tray.Top;
             if (!Native.ScreenToClient(_tray, ref topLeft)) return false;
 

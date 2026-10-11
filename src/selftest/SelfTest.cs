@@ -56,6 +56,7 @@ namespace DesktopSwitcher
                     case "--strip":   return CmdStrip(api, args);
                     case "--anim":    return CmdAnim(args);
                     case "--slide":   return CmdSlide(args);
+                    case "--glide":   return CmdGlide(args);
                     case "--config":  return CmdConfig();
                     case "--quit":    return CmdQuit();
                     case "--winver":  return CmdWinVer();
@@ -102,6 +103,7 @@ namespace DesktopSwitcher
             Console.WriteLine("  --strip N              run the real switcher strip for N seconds");
             Console.WriteLine("  --anim [ms]            step the strip's easing headlessly, frame by frame");
             Console.WriteLine("  --slide [ms]           step the hover panel's travel between buttons");
+            Console.WriteLine("  --glide                step the strip's glide to a moved tray anchor, headlessly");
             Console.WriteLine("  --quit                 close any running DesktopSwitcher the way Exit does, so its tray icon goes with it");
             Console.WriteLine("  --config               print every setting and check config.ini round-trips");
             Console.WriteLine("  --winver               print the Windows build and whether startup would accept it");
@@ -1078,6 +1080,76 @@ namespace DesktopSwitcher
 
             Console.WriteLine("Done.");
             return 0;
+        }
+
+        /// <summary>
+        /// --glide: the strip's slide (over TaskbarHost.GlideMs) when the notification area changes width, with no
+        /// taskbar. The numbers are the ones from a real log - a tray icon moving the anchor
+        /// from 1539 to 1584 and, nine seconds later, back. Checks what the eye would miss on
+        /// a 15ms frame: that the first frame does not jump, that it only ever moves toward
+        /// the target, that it lands exactly and reports itself finished, and that a second
+        /// move mid-glide is absorbed rather than snapping.
+        /// </summary>
+        static int CmdGlide(string[] args)
+        {
+            int animationMs = TaskbarHost.GlideMs;
+
+            const int Frame = Motion.FrameMs;
+            bool ok = true;
+            var host = new TaskbarHost();
+
+            Console.WriteLine("glideMs       " + animationMs);
+            Console.WriteLine();
+
+            // Rest at 1539, then the area narrows by 45px.
+            host.GlideAnchor(1539);
+            int shown = host.GlideAnchor(1584);
+            Console.WriteLine("anchor 1539 -> 1584");
+            Console.WriteLine("   frame 0   shown " + shown + "   (must still be 1539: no jump)");
+            if (shown != 1539) { Console.WriteLine("   FAIL  jumped on the first frame"); ok = false; }
+
+            int frames = 0, prev = shown;
+            while (host.Gliding && frames < 1000)
+            {
+                host.StepGlide(Frame);
+                shown = host.GlideAnchor(1584);
+                frames++;
+                Console.WriteLine("   frame " + frames + "   shown " + shown);
+                if (shown < prev) { Console.WriteLine("   FAIL  moved away from the target"); ok = false; }
+                prev = shown;
+            }
+            Console.WriteLine("   landed on " + shown + " after " + frames + " frames (" + (frames * Frame) + "ms)");
+            if (shown != 1584 || host.Gliding) { Console.WriteLine("   FAIL  did not land exactly on 1584"); ok = false; }
+            Console.WriteLine();
+
+            // Move again, then retarget half way through.
+            Console.WriteLine("anchor 1584 -> 1539, then 1539 -> 1584 after 5 frames");
+            shown = host.GlideAnchor(1539);
+            if (shown != 1584) { Console.WriteLine("   FAIL  jumped on the first frame"); ok = false; }
+            for (int i = 0; i < 5; i++) { host.StepGlide(Frame); shown = host.GlideAnchor(1539); }
+            int before = shown;
+            int after = host.GlideAnchor(1584);
+            Console.WriteLine("   at retarget shown " + before + ", then " + after + "   (must not jump)");
+            if (after != before) { Console.WriteLine("   FAIL  retarget jumped"); ok = false; }
+            frames = 0;
+            while (host.Gliding && frames < 1000)
+            {
+                host.StepGlide(Frame);
+                shown = host.GlideAnchor(1584);
+                frames++;
+            }
+            Console.WriteLine("   landed on " + shown + " after " + frames + " more frames");
+            if (shown != 1584 || host.Gliding) { Console.WriteLine("   FAIL  did not land exactly on 1584"); ok = false; }
+
+            // A rebuild forgets any glide.
+            host.GlideAnchor(1539);
+            host.ResetGlide();
+            shown = host.GlideAnchor(1539);
+            if (shown != 1539 || host.Gliding) { Console.WriteLine("FAIL  ResetGlide left a glide behind"); ok = false; }
+
+            Console.WriteLine();
+            Console.WriteLine(ok ? "OK" : "FAILED");
+            return ok ? 0 : 1;
         }
 
         /// <summary>
