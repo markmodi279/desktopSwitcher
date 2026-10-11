@@ -29,7 +29,8 @@ says so - that file is what to send with a bug report.
 
 ## Install
 
-Download `DesktopSwitcher-<version>.zip` from the project's Releases page, unzip it anywhere
+Download `DesktopSwitcher-<version>.zip` from the
+[latest release](https://github.com/markmodi279/desktopSwitcher/releases/latest), unzip it anywhere
 and run `DesktopSwitcher.exe`. It asks whether to install: **Yes** copies it to
 `%LOCALAPPDATA%\DesktopSwitcher` and starts it with Windows, so the unzipped folder can go;
 **No** just tries it - nothing is installed, and it stops when you exit - and does not ask again (the tray menu's **Install to this PC**
