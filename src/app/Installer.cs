@@ -63,10 +63,19 @@ namespace DesktopSwitcher
         {
             if (IsInstalledCopy) return false;
 
-            try { if (File.Exists(DeclinedFlag)) return false; }
-            catch (Exception) { }
-
+            // The "don't ask again" answer belongs to the first-install question only. An
+            // installed copy means this is an update, and an update is always offered: with
+            // the flag honoured here, a newer download did nothing visible at all - no dialog,
+            // and the new copy then exited on the single-instance lock - so one stray No made
+            // every later update silently dead.
             bool update = File.Exists(InstalledExe);
+
+            if (!update)
+            {
+                try { if (File.Exists(DeclinedFlag)) return false; }
+                catch (Exception) { }
+            }
+
             string text = update
                 ? "Desktop Switcher is already installed.\n\nReplace it with this version and restart it?"
                 : "Install Desktop Switcher?\n\nThis copies it to:\n" + InstallDir
@@ -79,6 +88,9 @@ namespace DesktopSwitcher
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question);
 
             if (answer == DialogResult.Yes) return Install(!update);
+
+            // Declining an update is not a decision about installing, so it is not remembered.
+            if (update) return false;
 
             try
             {
