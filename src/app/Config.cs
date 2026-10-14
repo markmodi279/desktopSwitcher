@@ -162,6 +162,15 @@ namespace DesktopSwitcher
         public int AnimationMs = 80;
 
         // --- appearance -------------------------------------------------------
+        /// <summary>
+        /// Classic or modern drawing, for the strip and the hover panel separately - see
+        /// Look. Both classic by default while modern is new: the modern panel is the one
+        /// with a different window behind it, and the things that can go wrong with that -
+        /// over a video, across an Explorer restart, on a second monitor - only show by eye.
+        /// </summary>
+        public Look StripLook = Look.Classic;
+        public Look PanelLook = Look.Classic;
+
         public Color HighlightColor = Color.FromArgb(0x00, 0x78, 0xD7);
         /// <summary>Color.Empty means "sample the live taskbar colour at runtime".</summary>
         public Color BackgroundColor = Color.Empty;
@@ -189,6 +198,11 @@ namespace DesktopSwitcher
         public static readonly Setting[] All =
         {
             // --- strip
+            Choice(StripSection, "stripStyle", "Style",
+                new[] { "classic", "modern" }, new[] { "Classic", "Modern" },
+                c => (int)c.StripLook, (c, v) => c.StripLook = (Look)v,
+                "Modern rounds the buttons, marks the current desktop with a short pill and "
+                + "sets its number in semibold. Classic is the original square buttons and full-width underline."),
             Int(StripSection, "buttonWidth", "Button width", 16, 128, "px",
                 c => c.ButtonWidth, (c, v) => c.ButtonWidth = v,
                 "Width of each numbered desktop button."),
@@ -221,6 +235,11 @@ namespace DesktopSwitcher
             Bool(PanelSection, "tooltips", "Hover panel",
                 c => c.Tooltips, (c, v) => c.Tooltips = v,
                 "Hovering a button lists the windows on that desktop."),
+            Choice(PanelSection, "panelStyle", "Style",
+                new[] { "classic", "modern" }, new[] { "Classic", "Modern" },
+                c => (int)c.PanelLook, (c, v) => c.PanelLook = (Look)v,
+                "Modern is a floating card with rounded corners, a shadow and the app's icon "
+                + "beside each window. Classic is the original flat panel. The stats panel follows it too."),
             Int(PanelSection, "tooltipDelayMs", "Delay", 0, 5000, "ms",
                 c => c.TooltipDelayMs, (c, v) => c.TooltipDelayMs = v,
                 "How long to hover before the panel appears. 400 is the Windows default.")

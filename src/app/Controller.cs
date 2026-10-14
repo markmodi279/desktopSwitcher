@@ -355,7 +355,8 @@ namespace DesktopSwitcher
                                            _buttonWidth, _plusWidth, _statsWidth, _barHeight,
                                            _background, _config.HighlightColor,
                                            (uint)_config.TooltipDelayMs, _config.TooltipWidth,
-                                           _config.AnimationMs, _host.DpiScale);
+                                           _config.AnimationMs, _host.DpiScale,
+                                           _config.StripLook, _config.PanelLook);
             }
             catch (System.ComponentModel.Win32Exception ex)
             {
@@ -879,7 +880,22 @@ namespace DesktopSwitcher
             string title = desktop.DisplayName;
             if (desktop.IsCurrent) title += "   (current)";
 
-            return new TooltipContent(title, WindowLines(desktop));
+            IList<WindowEntry> entries;
+            int total;
+            var content = new TooltipContent(title, WindowLines(desktop, out entries, out total));
+            content.Windows = entries;
+            content.Note = WindowCount(total);
+            return content;
+        }
+
+        /// <summary>
+        /// The modern panel's "5 windows", or null for none - the "- empty -" row already
+        /// says so. Public for the --strip harness, so its panels say what the real ones do.
+        /// </summary>
+        public static string WindowCount(int total)
+        {
+            if (total == 0) return null;
+            return total == 1 ? "1 window" : total + " windows";
         }
 
         /// <summary>
@@ -897,26 +913,41 @@ namespace DesktopSwitcher
         /// </summary>
         const string Sep = "  \u2014  ";
 
-        IList<string> WindowLines(Desktop desktop)
+        /// <summary>
+        /// A desktop's rows as text, with the window behind each one beside it in
+        /// <paramref name="entries"/> - null for a row that is not a window - and every
+        /// window on the desktop counted in <paramref name="total"/>, listed or not.
+        /// </summary>
+        IList<string> WindowLines(Desktop desktop, out IList<WindowEntry> entries, out int total)
         {
             var lines = new List<string>();
+            var behind = new List<WindowEntry>();
+            entries = behind;
             IList<WindowEntry> windows = _inventory.WindowsOn(desktop.Id);
+            total = windows.Count;
 
             // An empty desktop is worth saying out loud: it is the one you can remove
             // without losing anything, and otherwise you would have to visit it to find out.
             if (windows.Count == 0)
             {
                 lines.Add("- empty -");
+                behind.Add(null);
                 return lines;
             }
 
             // Only real windows get a bullet. The overflow line is a count, not an entry.
             int max = _config.TooltipMaxWindows;
             for (int i = 0; i < windows.Count && i < max; i++)
+            {
                 lines.Add(WindowLine(windows[i]));
+                behind.Add(windows[i]);
+            }
 
             if (windows.Count > max)
+            {
                 lines.Add("+" + (windows.Count - max) + " more");
+                behind.Add(null);
+            }
 
             return lines;
         }

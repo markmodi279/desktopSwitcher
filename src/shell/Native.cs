@@ -344,6 +344,124 @@ namespace DesktopSwitcher
         public const int WS_EX_TOPMOST = 0x00000008;
         public const int WS_EX_TRANSPARENT = 0x00000020;
 
+        // --- layered windows ----------------------------------------------------
+        //
+        // The modern hover panel is a layered window fed by UpdateLayeredWindow: one call
+        // that moves it, sizes it and hands DWM a premultiplied 32bpp bitmap whose alpha is
+        // per pixel. That alpha is the whole reason for the route - it is what lets the
+        // corners be antialiased and the shadow fade out, neither of which a plain window
+        // can do on Windows 10, where DWM rounds nothing for us. Such a window never gets
+        // WM_PAINT; what it shows is only ever what the last UpdateLayeredWindow gave it.
+
+        public const int WS_EX_LAYERED = 0x00080000;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct SIZE
+        {
+            public int cx, cy;
+        }
+
+        [StructLayout(LayoutKind.Sequential, Pack = 1)]
+        public struct BLENDFUNCTION
+        {
+            public byte BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat;
+        }
+
+        public const byte AC_SRC_OVER = 0x00;
+        public const byte AC_SRC_ALPHA = 0x01;
+        public const uint ULW_ALPHA = 0x00000002;
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool UpdateLayeredWindow(IntPtr hWnd, IntPtr hdcDst, ref POINT pptDst,
+                                                      ref SIZE psize, IntPtr hdcSrc, ref POINT pptSrc,
+                                                      uint crKey, ref BLENDFUNCTION pblend, uint flags);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct BITMAPINFOHEADER
+        {
+            public int biSize, biWidth, biHeight;
+            public short biPlanes, biBitCount;
+            public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant;
+        }
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+        [DllImport("gdi32.dll")]
+        public static extern bool DeleteDC(IntPtr hdc);
+
+        [DllImport("gdi32.dll")]
+        public static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
+
+        [DllImport("gdi32.dll")]
+        public static extern bool DeleteObject(IntPtr obj);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        public static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER bmi, uint usage,
+                                                     out IntPtr bits, IntPtr section, uint offset);
+
+        // --- app icons ----------------------------------------------------------
+
+        // PrivateExtractIcons rather than ExtractIconEx or Icon.ExtractAssociatedIcon: it is
+        // the one that takes the size wanted and picks the nearest image the file carries,
+        // so a 20px row at 125% gets the exe's own 20 or 24px art rather than its 16 or 32
+        // stretched. Documented "not intended for general use", and in the box since XP.
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        static extern uint PrivateExtractIcons(string file, int index, int cx, int cy,
+                                               IntPtr[] icons, uint[] ids, uint count, uint flags);
+
+        /// <summary>
+        /// The first icon in an exe at the size asked for, or IntPtr.Zero. The caller owns
+        /// the handle and must DestroyIcon it.
+        /// </summary>
+        public static IntPtr ExtractIcon(string path, int size)
+        {
+            if (string.IsNullOrEmpty(path)) return IntPtr.Zero;
+
+            var icons = new IntPtr[1];
+            var ids = new uint[1];
+            uint got = PrivateExtractIcons(path, 0, size, size, icons, ids, 1, 0);
+
+            // 0xFFFFFFFF is "file not found", 0 is "no icons in it".
+            if (got == 0 || got == 0xFFFFFFFF) return IntPtr.Zero;
+            return icons[0];
+        }
+
+        [DllImport("user32.dll", SetLastError = true)]
+        static extern IntPtr SendMessageTimeout(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam,
+                                                uint flags, uint timeout, out IntPtr result);
+
+        [DllImport("user32.dll", EntryPoint = "GetClassLongPtrW")]
+        static extern IntPtr GetClassLongPtr(IntPtr hWnd, int index);
+
+        const int WM_GETICON = 0x007F;
+        const int ICON_BIG = 1;
+        const int GCLP_HICON = -14;
+        const uint SMTO_ABORTIFHUNG = 0x0002;
+
+        /// <summary>
+        /// The icon a window shows for itself, or IntPtr.Zero. Borrowed: it belongs to the
+        /// window, so the caller copies it and never destroys it.
+        ///
+        /// The fallback for when the exe has no icon to give - a packaged app's exe often
+        /// carries nothing useful, and some processes cannot be opened at all. ICON_BIG
+        /// because the row is 16px at 96 DPI and larger at anything above: shrinking a 32
+        /// reads far better than stretching a 16. A timeout, and SMTO_ABORTIFHUNG, because
+        /// this goes to a window on another desktop that may be hung, from the thread that
+        /// draws the strip.
+        /// </summary>
+        public static IntPtr GetWindowIcon(IntPtr hWnd)
+        {
+            if (hWnd == IntPtr.Zero) return IntPtr.Zero;
+
+            IntPtr icon;
+            if (SendMessageTimeout(hWnd, WM_GETICON, new IntPtr(ICON_BIG), IntPtr.Zero,
+                                   SMTO_ABORTIFHUNG, 50, out icon) != IntPtr.Zero && icon != IntPtr.Zero)
+                return icon;
+
+            return GetClassLongPtr(hWnd, GCLP_HICON);
+        }
+
         // --- focus ------------------------------------------------------------
 
         [DllImport("user32.dll")]
@@ -686,43 +804,56 @@ namespace DesktopSwitcher
         /// </summary>
         public static string GetAppName(uint pid)
         {
+            return AppNameFromPath(GetProcessPath(pid));
+        }
+
+        /// <summary>
+        /// The full path of a process's exe, or "" if it cannot be opened - elevated, gone,
+        /// or protected. What the modern panel takes the app's icon from; the name comes off
+        /// the same path through AppNameFromPath, so a sweep pays for one query, not two.
+        ///
+        /// Never throws, for the same reason GetAppName does not.
+        /// </summary>
+        public static string GetProcessPath(uint pid)
+        {
             if (pid == 0) return string.Empty;
 
             try
             {
-                return Pretty(ImageBaseName(pid));
+                IntPtr process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+                if (process == IntPtr.Zero) return string.Empty;
+
+                try
+                {
+                    var sb = new StringBuilder(512);
+                    int size = sb.Capacity;
+                    if (!QueryFullProcessImageName(process, 0, sb, ref size)) return string.Empty;
+                    return sb.ToString();
+                }
+                finally
+                {
+                    CloseHandle(process);
+                }
             }
             catch (Exception ex)
             {
-                Log.Write("native: app name failed - " + ex.Message);
+                Log.Write("native: process path failed - " + ex.Message);
                 return string.Empty;
             }
         }
 
-        static string ImageBaseName(uint pid)
+        /// <summary>The app an exe path is, ready to show, or "" for an empty path.</summary>
+        public static string AppNameFromPath(string path)
         {
-            IntPtr process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
-            if (process == IntPtr.Zero) return string.Empty;
+            if (string.IsNullOrEmpty(path)) return string.Empty;
 
-            try
-            {
-                var sb = new StringBuilder(512);
-                int size = sb.Capacity;
-                if (!QueryFullProcessImageName(process, 0, sb, ref size)) return string.Empty;
+            int slash = path.LastIndexOf('\\');
+            if (slash >= 0) path = path.Substring(slash + 1);
 
-                string path = sb.ToString();
-                int slash = path.LastIndexOf('\\');
-                if (slash >= 0) path = path.Substring(slash + 1);
+            if (path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                path = path.Substring(0, path.Length - 4);
 
-                if (path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-                    path = path.Substring(0, path.Length - 4);
-
-                return path;
-            }
-            finally
-            {
-                CloseHandle(process);
-            }
+            return Pretty(path);
         }
 
         /// <summary>The pid behind a packaged app's frame window, or 0.</summary>

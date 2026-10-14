@@ -22,6 +22,28 @@ namespace DesktopSwitcher
     }
 
     /// <summary>
+    /// How the strip or the hover panel is drawn - stripStyle and panelStyle, one each.
+    ///
+    /// It was one switch for both at first, on the reasoning that the two are meant to read
+    /// as one thing. Two won out: someone who wants the new panel may well want to keep the
+    /// strip the taskbar has always had, and the strip is the part on screen all day. Every
+    /// mix is meant to work - a classic panel keeps its stub over a modern strip, and a
+    /// modern panel needs none over a classic one, where the lit cell still says which
+    /// button it describes.
+    ///
+    /// Classic is the original: square cells, a full-width underline, and a flat panel
+    /// flush over the strip with an accent stub. Modern rounds the cells, marks the current
+    /// desktop with a short pill, and makes the panel a layered window - rounded, shadowed,
+    /// an icon on every window row. The panel's frame is the one structural difference; the
+    /// rest is the same drawing code reading different numbers.
+    /// </summary>
+    enum Look
+    {
+        Classic,
+        Modern,
+    }
+
+    /// <summary>
     /// The numbered button strip that lives in the taskbar.
     ///
     /// A NativeWindow rather than a Form, because a Form cannot become a child of
@@ -133,6 +155,8 @@ namespace DesktopSwitcher
         readonly int _tooltipWidth;
         readonly int _animationMs;
         readonly double _dpiScale;
+        readonly Look _look;           // stripStyle: this strip's own cells and bar
+        readonly Look _panelLook;      // panelStyle: handed to the hover panel it creates
 
         List<Desktop> _desktops = new List<Desktop>();
         ButtonVisual[] _visuals = new ButtonVisual[0];
@@ -196,6 +220,8 @@ namespace DesktopSwitcher
         Color _highlight;
         Bitmap _buffer;
         Font _font;
+        Font _currentFont;             // modern: the current desktop's number, semibold
+        Font _glyphFont;               // modern: Segoe MDL2 Assets for the '+'; null if missing
 
         TooltipWindow _tooltip;
         Timer _reshowTimer;            // runs only between a button change and the follow
@@ -204,7 +230,7 @@ namespace DesktopSwitcher
                              int buttonWidth, int plusWidth, int statsWidth, int barHeight,
                              Color background, Color highlight,
                              uint hoverDelay, int tooltipWidth, int animationMs,
-                             double dpiScale)
+                             double dpiScale, Look look, Look panelLook)
         {
             _buttonWidth = buttonWidth;
             _plusWidth = plusWidth;
@@ -214,6 +240,8 @@ namespace DesktopSwitcher
             _tooltipWidth = tooltipWidth;
             _animationMs = animationMs;
             _dpiScale = dpiScale;
+            _look = look;
+            _panelLook = panelLook;
             _background = background;
             _highlight = highlight;
 
@@ -817,11 +845,43 @@ namespace DesktopSwitcher
             if (_barLevel <= 0.001f || _barWidth < 1f) return;
 
             int barHeight = Math.Max(2, (int)Math.Round(_barHeight * _barLevel));
+
+            if (_look == Look.Modern)
+            {
+                // A short pill centred under the number, inside the rounded cell rather than
+                // along the taskbar's edge - Windows 11's mark, where classic keeps Windows
+                // 10's full-width line. Centred on the travelling bar's own centre, so it
+                // slides between buttons exactly as the line does.
+                float pw = Math.Min(_barWidth, Scale(16));
+                float ph = Math.Max(2f, barHeight - 1);
+                float cx = _barX + _barWidth / 2f;
+                float bottom = height - CellInsetY() - Scale(2);
+
+                using (var brush = new SolidBrush(_highlight))
+                using (var path = RoundedRect(new RectangleF(cx - pw / 2f, bottom - ph, pw, ph), ph / 2f))
+                    g.FillPath(brush, path);
+                return;
+            }
+
             var bar = new Rectangle((int)Math.Round(_barX), height - barHeight,
                                     (int)Math.Round(_barWidth), barHeight);
 
             using (var brush = new SolidBrush(_highlight))
                 g.FillRectangle(brush, bar);
+        }
+
+        int Scale(int value)
+        {
+            return (int)Math.Round(value * _dpiScale);
+        }
+
+        /// <summary>
+        /// How far a modern cell stands in from the taskbar's top and bottom edges. Inset so
+        /// it reads as a soft tile on the bar rather than a slice of it.
+        /// </summary>
+        int CellInsetY()
+        {
+            return Scale(4);
         }
 
         void DrawButton(Graphics g, Rectangle bounds, string caption, ButtonVisual visual)
@@ -836,9 +896,22 @@ namespace DesktopSwitcher
 
                 // Nudge up so the glyph looks centred in the space above the bar.
                 var textBounds = new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height - _barHeight);
-                g.DrawString(caption, _font, brush, textBounds, format);
 
-                DrawDot(g, textBounds, caption, visual.Dot);
+                // Modern: the current desktop's number in semibold, so it reads in weight as
+                // well as brightness, and '+' as the Add glyph from the icon font Windows 10's
+                // own interface uses. The weight switches halfway through the highlight's
+                // ease, where the brightness is already most of the way there.
+                Font font = _font;
+                string text = caption;
+                if (_look == Look.Modern)
+                {
+                    if (caption == "+" && _glyphFont != null) { font = _glyphFont; text = "\uE710"; }
+                    else if (visual.Highlight >= 0.5f && _currentFont != null) font = _currentFont;
+                }
+
+                g.DrawString(text, font, brush, textBounds, format);
+
+                DrawDot(g, textBounds, caption, font, visual.Dot);
             }
         }
 
@@ -852,7 +925,19 @@ namespace DesktopSwitcher
             if (lift > 0.001f)
             {
                 using (var fill = new SolidBrush(Palette.Lift(_background, lift * 0.10f)))
-                    g.FillRectangle(fill, bounds);
+                {
+                    if (_look == Look.Modern)
+                    {
+                        var inner = new RectangleF(bounds.X + Scale(2), bounds.Y + CellInsetY(),
+                                                   bounds.Width - Scale(4), bounds.Height - CellInsetY() * 2);
+                        using (var path = RoundedRect(inner, Scale(4)))
+                            g.FillPath(fill, path);
+                    }
+                    else
+                    {
+                        g.FillRectangle(fill, bounds);
+                    }
+                }
             }
 
             // The underline is not drawn here. See DrawBar: it travels between buttons,
@@ -1449,14 +1534,14 @@ namespace DesktopSwitcher
         /// this desktop occupied", a fact about the desktop and not about the pointer, and
         /// riding the ramp would read as a second state mark competing with the underline.
         /// </summary>
-        void DrawDot(Graphics g, Rectangle textBounds, string caption, float amount)
+        void DrawDot(Graphics g, Rectangle textBounds, string caption, Font font, float amount)
         {
             if (amount <= 0.001f) return;
 
             int diameter = Math.Max(2, _barHeight);
             int gap = Math.Max(2, _barHeight);
 
-            float halfGlyph = g.MeasureString(caption, _font).Width / 2f;
+            float halfGlyph = g.MeasureString(caption, font).Width / 2f;
             int x = textBounds.X + textBounds.Width / 2 + (int)Math.Ceiling(halfGlyph) + gap;
 
             // Clamped to the button's own right edge so a two-digit number on a narrow
@@ -1486,6 +1571,18 @@ namespace DesktopSwitcher
             // 40px taskbar; semibold so a letter that small still has some weight to it.
             if (_labelFont != null) _labelFont.Dispose();
             _labelFont = new Font("Segoe UI Semibold", Math.Max(7f, size * 0.70f), FontStyle.Regular, GraphicsUnit.Pixel);
+
+            if (_currentFont != null) { _currentFont.Dispose(); _currentFont = null; }
+            if (_glyphFont != null) { _glyphFont.Dispose(); _glyphFont = null; }
+            if (_look != Look.Modern) return;
+
+            _currentFont = new Font("Segoe UI Semibold", size, FontStyle.Regular, GraphicsUnit.Pixel);
+
+            // GDI+ quietly substitutes a missing face, and E710 in any other font is a box.
+            // Every Windows 10 has MDL2 Assets, but a font that is not there falls back to
+            // the plain '+' rather than drawing that box.
+            _glyphFont = new Font("Segoe MDL2 Assets", size * 0.93f, FontStyle.Regular, GraphicsUnit.Pixel);
+            if (_glyphFont.Name != "Segoe MDL2 Assets") { _glyphFont.Dispose(); _glyphFont = null; }
         }
 
         // --- input ------------------------------------------------------------
@@ -1822,7 +1919,7 @@ namespace DesktopSwitcher
         void EnsureTooltip()
         {
             if (_tooltip == null)
-                _tooltip = new TooltipWindow(_background, _highlight, _tooltipWidth, _dpiScale);
+                _tooltip = new TooltipWindow(_background, _highlight, _tooltipWidth, _dpiScale, _panelLook);
         }
 
         // --- stats panel ------------------------------------------------------
@@ -2237,6 +2334,8 @@ namespace DesktopSwitcher
 
             if (_buffer != null) { _buffer.Dispose(); _buffer = null; }
             if (_font != null) { _font.Dispose(); _font = null; }
+            if (_currentFont != null) { _currentFont.Dispose(); _currentFont = null; }
+            if (_glyphFont != null) { _glyphFont.Dispose(); _glyphFont = null; }
             if (_labelFont != null) { _labelFont.Dispose(); _labelFont = null; }
         }
     }

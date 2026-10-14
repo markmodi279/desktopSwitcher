@@ -7,16 +7,23 @@ namespace DesktopSwitcher
     /// One open window, as a tooltip wants to read it: the app that owns it, then what it
     /// is showing. Kept apart rather than pre-joined so the display format stays the
     /// caller's business.
+    ///
+    /// Path and Handle are for the modern panel's icon - the exe's own art first, the
+    /// window's if the exe gives none. Path is "" when the process could not be opened.
     /// </summary>
     sealed class WindowEntry
     {
         public string App;
         public string Title;
+        public string Path;
+        public IntPtr Handle;
 
-        public WindowEntry(string app, string title)
+        public WindowEntry(string app, string title, string path, IntPtr handle)
         {
             App = app;
             Title = title;
+            Path = path ?? string.Empty;
+            Handle = handle;
         }
     }
 
@@ -86,8 +93,9 @@ namespace DesktopSwitcher
         public static WindowEntry Describe(IntPtr hwnd)
         {
             string title = Native.GetText(hwnd);
-            string app = Native.GetAppName(Native.GetOwningProcessId(hwnd));
-            return new WindowEntry(app, TrimRepeat(title, app));
+            string path = Native.GetProcessPath(Native.GetOwningProcessId(hwnd));
+            string app = Native.AppNameFromPath(path);
+            return new WindowEntry(app, TrimRepeat(title, app), path, hwnd);
         }
 
         /// <summary>
@@ -166,8 +174,8 @@ namespace DesktopSwitcher
 
             // Ten Chrome windows are one process, so resolve each pid once. Local to the
             // sweep on purpose: a pid the kernel has since recycled can never hand back a
-            // dead process's name.
-            var apps = new Dictionary<uint, string>();
+            // dead process's name. Holds each pid's exe path; the app name is read off it.
+            var paths = new Dictionary<uint, string>();
 
             try
             {
@@ -175,7 +183,7 @@ namespace DesktopSwitcher
                 var uwp = new UwpPairs(candidates);
 
                 for (int i = 0; i < candidates.Count; i++)
-                    AddIfReal(map, apps, uwp, candidates[i]);
+                    AddIfReal(map, paths, uwp, candidates[i]);
             }
             catch (ShellUnavailableException)
             {
@@ -197,7 +205,7 @@ namespace DesktopSwitcher
                 Log.Write(delegate { return "inventory: swept " + Total(map) + " windows across " + map.Count + " desktops"; });
         }
 
-        void AddIfReal(Dictionary<Guid, List<WindowEntry>> map, Dictionary<uint, string> apps,
+        void AddIfReal(Dictionary<Guid, List<WindowEntry>> map, Dictionary<uint, string> paths,
                        UwpPairs uwp, IntPtr hwnd)
         {
             string title = Native.GetText(hwnd);
@@ -211,7 +219,8 @@ namespace DesktopSwitcher
             Guid desktop;
             if (!_api.TryGetWindowDesktop(hwnd, out desktop)) return;
 
-            string app = AppOf(apps, uwp.AppWindow(hwnd, title));
+            string path = PathOf(paths, uwp.AppWindow(hwnd, title));
+            string app = Native.AppNameFromPath(path);
 
             List<WindowEntry> windows;
             if (!map.TryGetValue(desktop, out windows))
@@ -219,22 +228,22 @@ namespace DesktopSwitcher
                 windows = new List<WindowEntry>();
                 map[desktop] = windows;
             }
-            windows.Add(new WindowEntry(app, TrimRepeat(title, app)));
+            windows.Add(new WindowEntry(app, TrimRepeat(title, app), path, hwnd));
         }
 
-        static string AppOf(Dictionary<uint, string> apps, IntPtr hwnd)
+        static string PathOf(Dictionary<uint, string> paths, IntPtr hwnd)
         {
             uint pid = Native.GetOwningProcessId(hwnd);
             if (pid == 0) return string.Empty;
 
-            string app;
-            if (!apps.TryGetValue(pid, out app))
+            string path;
+            if (!paths.TryGetValue(pid, out path))
             {
-                app = Native.GetAppName(pid);
-                apps[pid] = app;
+                path = Native.GetProcessPath(pid);
+                paths[pid] = path;
             }
 
-            return app;
+            return path;
         }
 
         /// <summary>

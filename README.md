@@ -97,6 +97,15 @@ Hover a number and a panel appears above it listing the windows open on that des
 Windows 10 otherwise gives you no way to see that without `Win+Tab`. Desktops with nothing
 on them say so, which is how you find the one that is safe to remove.
 
+The strip and the panel each come in two styles, set separately: **Style** at the top of
+Settings → Strip (`stripStyle`) and under Settings → Hover panel (`panelStyle`). **Classic**
+is the original: square buttons, a full-width underline, and a flat panel sitting on the
+strip. A **modern** strip rounds the buttons and marks the current desktop with a short pill
+and its number in semibold. A **modern** panel is a floating card with rounded corners and a
+soft shadow; each window row gets the app's own icon, with the app name in semibold and the
+title after it in a softer tone, and the window count sits at the right of the title. The
+stats panel follows the panel's style. Both are classic by default for now.
+
 A dim dot beside a number means that desktop has windows on it; no dot means it is empty —
 the same thing the hover panel tells you, without having to hover. It follows the desktops
 themselves, refreshed every couple of seconds, so a window opened or closed elsewhere
@@ -181,6 +190,8 @@ colour again.
 | Key | Default | Meaning |
 |---|---|---|
 | `lastCount` | `2` | desktop count restored at login |
+| `stripStyle` | `classic` | `classic` is square buttons and a full-width underline; `modern` rounds the buttons and marks the current desktop with a short pill |
+| `panelStyle` | `classic` | `classic` is the original flat panel; `modern` gives it rounded corners, a shadow and an icon beside each window, and applies to the stats panel too |
 | `buttonWidth` | `34` | per-button width at 96 DPI |
 | `plusWidth` | `26` | width of the `+` button at 96 DPI |
 | `margin` | `6` | gap between the strip and the tray icons |

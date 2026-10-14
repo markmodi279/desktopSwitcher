@@ -935,7 +935,7 @@ namespace DesktopSwitcher
                                               buttonWidth, plusWidth, statsWidth, barHeight,
                                               background, cfg.HighlightColor,
                                               (uint)cfg.TooltipDelayMs, cfg.TooltipWidth,
-                                              cfg.AnimationMs, host.DpiScale);
+                                              cfg.AnimationMs, host.DpiScale, cfg.StripLook, cfg.PanelLook);
                 strip.SetStatsMeter(host.Scale(cfg.StatsBarWidth), host.Scale(cfg.StatsBarGap),
                                     host.Scale(cfg.StatsBarHeight), cfg.StatsBarLabels, cfg.StatsBarRounded,
                                     cfg.StatsWarnPercent, cfg.StatsAlertPercent, cfg.StatsStyle,
@@ -957,12 +957,19 @@ namespace DesktopSwitcher
                     IList<WindowEntry> windows = inventory.WindowsOn(d.Id);
 
                     var lines = new List<string>();
-                    if (windows.Count == 0) lines.Add("- empty -");
+                    var entries = new List<WindowEntry>();
+                    if (windows.Count == 0) { lines.Add("- empty -"); entries.Add(null); }
                     else for (int i = 0; i < windows.Count && i < cfg.TooltipMaxWindows; i++)
+                    {
                         lines.Add(Controller.WindowLine(windows[i]));
+                        entries.Add(windows[i]);
+                    }
 
                     Console.WriteLine("  tooltip -> [" + d.Number + "] " + windows.Count + " window(s)");
-                    return new TooltipContent(d.DisplayName + (d.IsCurrent ? "   (current)" : ""), lines);
+                    var content = new TooltipContent(d.DisplayName + (d.IsCurrent ? "   (current)" : ""), lines);
+                    content.Windows = entries;
+                    content.Note = Controller.WindowCount(windows.Count);
+                    return content;
                 };
 
                 EventHandler relayout = delegate
@@ -1389,10 +1396,19 @@ namespace DesktopSwitcher
             Console.WriteLine("epsilon       " + Fixed(Motion.PixelEpsilon) + " pixel");
             Console.WriteLine();
 
-            if (!SlidePlacement(cfg, 1.25)) ok = false;
-            if (!SlideLayout(cfg, 1.25)) ok = false;
-            if (!SlideTravel(cfg, 1.25, animationMs, Frame)) ok = false;
-            if (!SlideRegime(cfg, 1.25)) ok = false;
+            // Both styles, whichever the config has: the modern panel has its own padding,
+            // gap and row height and no stub, and the arithmetic has to hold for each.
+            foreach (Look look in new[] { Look.Classic, Look.Modern })
+            {
+                Console.WriteLine("=== style " + look.ToString().ToLowerInvariant() +
+                                  (look == cfg.PanelLook ? "   (the config's)" : ""));
+                Console.WriteLine();
+
+                if (!SlidePlacement(cfg, look, 1.25)) ok = false;
+                if (!SlideLayout(cfg, look, 1.25)) ok = false;
+                if (!SlideTravel(cfg, look, 1.25, animationMs, Frame)) ok = false;
+                if (!SlideRegime(cfg, look, 1.25)) ok = false;
+            }
 
             Console.WriteLine(ok ? "All checks passed." : "CHECKS FAILED.");
             Console.WriteLine();
@@ -1403,6 +1419,20 @@ namespace DesktopSwitcher
         static int SlideScale(int value, double scale)
         {
             return (int)Math.Round(value * scale);
+        }
+
+        /// <summary>
+        /// The panel's padding, stub and gap for a style, scaled - from TooltipWindow.Metrics,
+        /// the numbers the panel itself is built from - and a window row's height: 19 for a
+        /// classic line, which is what LineHeight comes to at 96 DPI, the fixed row for modern.
+        /// </summary>
+        static void SlideMetrics(Look look, double scale, out int padY, out int accent, out int gap, out int row)
+        {
+            TooltipWindow.Metrics(look, out padY, out accent, out gap);
+            padY = SlideScale(padY, scale);
+            accent = SlideScale(accent, scale);
+            gap = SlideScale(gap, scale);
+            row = SlideScale(look == Look.Modern ? TooltipWindow.ModernRowHeight : 19, scale);
         }
 
         /// <summary>
@@ -1441,11 +1471,12 @@ namespace DesktopSwitcher
         /// slide to do. This is the check that would have caught the feature being dead on
         /// the buttons nearest the clock - which is where the pointer usually is.
         /// </summary>
-        static bool SlidePlacement(Config cfg, double scale)
+        static bool SlidePlacement(Config cfg, Look look, double scale)
         {
             var work = new Rectangle(0, 0, 1920, 1030);
             int panelWidth = SlideScale(cfg.TooltipWidth, scale);
-            int gap = SlideScale(4, scale);
+            int padY, accent, gap, row;
+            SlideMetrics(look, scale, out padY, out accent, out gap, out row);
 
             const int desktops = 3;
             int buttonWidth;
@@ -1496,10 +1527,10 @@ namespace DesktopSwitcher
         /// meet exactly, or every panel is a pixel or two out at rest - a bug that would look
         /// like bad padding rather than like a layout disagreement.
         /// </summary>
-        static bool SlideLayout(Config cfg, double scale)
+        static bool SlideLayout(Config cfg, Look look, double scale)
         {
-            int padY = SlideScale(9, scale);
-            int accent = SlideScale(3, scale);
+            int padY, accent, gap, row;
+            SlideMetrics(look, scale, out padY, out accent, out gap, out row);
             bool ok = true;
 
             Console.WriteLine("2. Measure and Render agree about where the rows start");
@@ -1513,7 +1544,7 @@ namespace DesktopSwitcher
 
             for (int i = 0; i < counts.Length; i++)
             {
-                int rowsHeight = counts[i] * SlideScale(19, scale);
+                int rowsHeight = counts[i] * row;
                 int height = TooltipWindow.MeasureHeight(padY, accent, rowsHeight);
                 int origin = TooltipWindow.RowOrigin(height, padY, accent, rowsHeight, false);
 
@@ -1540,14 +1571,12 @@ namespace DesktopSwitcher
         /// throughout, and the stub's offset inside the panel must not change, since panel
         /// and stub are supposed to be one object.
         /// </summary>
-        static bool SlideTravel(Config cfg, double scale, int animationMs, int frameMs)
+        static bool SlideTravel(Config cfg, Look look, double scale, int animationMs, int frameMs)
         {
             var work = new Rectangle(0, 0, 1920, 1030);
             int panelWidth = SlideScale(cfg.TooltipWidth, scale);
-            int gap = SlideScale(4, scale);
-            int padY = SlideScale(9, scale);
-            int accent = SlideScale(3, scale);
-            int row = SlideScale(19, scale);
+            int padY, accent, gap, row;
+            SlideMetrics(look, scale, out padY, out accent, out gap, out row);
 
             int buttonWidth;
             Rectangle[] anchors = SlideAnchors(cfg, scale, work, 1597, 3, out buttonWidth);
@@ -1659,14 +1688,12 @@ namespace DesktopSwitcher
         /// it is the panel crossing the screen - so Show snaps instead, and this proves the
         /// two placements really are far enough apart to be worth the special case.
         /// </summary>
-        static bool SlideRegime(Config cfg, double scale)
+        static bool SlideRegime(Config cfg, Look look, double scale)
         {
             var work = new Rectangle(0, 0, 1920, 1030);
             int panelWidth = SlideScale(cfg.TooltipWidth, scale);
-            int gap = SlideScale(4, scale);
-            int padY = SlideScale(9, scale);
-            int accent = SlideScale(3, scale);
-            int row = SlideScale(19, scale);
+            int padY, accent, gap, row;
+            SlideMetrics(look, scale, out padY, out accent, out gap, out row);
 
             int buttonWidth;
             Rectangle[] anchors = SlideAnchors(cfg, scale, work, 1597, 3, out buttonWidth);

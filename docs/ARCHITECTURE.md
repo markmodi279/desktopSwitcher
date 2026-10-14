@@ -86,7 +86,8 @@ commented `do not reorder`. They are not stable across Windows versions; see
 | [TaskbarHost.cs](../src/ui/TaskbarHost.cs) | Finds the taskbar, works out where the strip goes, docks it there, and samples the taskbar's colour. |
 | [SwitcherStrip.cs](../src/ui/SwitcherStrip.cs) | The strip itself: owner-drawn buttons, animation, mouse input. Raises intent as events; decides nothing. Owns the one frame timer, and drives the hover panel's travel from it as well as its own. |
 | [Motion.cs](../src/ui/Motion.cs) | The easing every moving thing is stepped by — frame interval, epsilons, and the exponential `Rate`/`Ease` pair. Belongs to neither the strip nor the panel, so the panel does not have to reach back through the class that owns it. |
-| [TooltipWindow.cs](../src/ui/TooltipWindow.cs) | The hover panel. A top-level, click-through window that draws whatever text it is handed. |
+| [TooltipWindow.cs](../src/ui/TooltipWindow.cs) | The hover panel. A top-level, click-through window that draws whatever text it is handed. In the modern style it is a layered window: one `UpdateLayeredWindow` per frame moves it and hands DWM a premultiplied bitmap, which is how it gets antialiased corners and a fading shadow on Windows 10. The shadow is one blurred square built at startup and nine-sliced, so a frame of the slide costs no blur. |
+| [AppIcons.cs](../src/ui/AppIcons.cs) | The modern panel's per-row icons: the exe's own art at the row's exact size, the window's icon when the exe has none, cached for the session. |
 | [MenuTheme.cs](../src/ui/MenuTheme.cs) | Dresses a `ContextMenuStrip` in colours derived from the sampled taskbar colour. |
 | [SettingsWindow.cs](../src/ui/SettingsWindow.cs) | The Settings window. Edits a copy of the config, one row per entry in `Config.All`, and hands a fresh copy to `Changed` after every edit; it never touches the live config. Revert, Defaults, retheme in place, and its own per-monitor DPI handling. |
 | [SettingsControls.cs](../src/ui/SettingsControls.cs) | The window's owner-drawn controls — toggle, slider, number box, segmented choice, colour swatch, sliding tab row, the setting row — and the shared, mutable `SettingsTheme` they all draw from. |
@@ -134,6 +135,12 @@ integer on every frame while the height changes, that `Measure` and `Render` sti
 about where the row block starts now that one builds downward and the other lays out upward,
 and that the accent stub rides at a fixed offset inside the panel instead of racing ahead of
 it.
+
+It runs every check twice, once per style. The modern panel has its own padding, gap and
+row height and no stub, and it takes them from `TooltipWindow.Metrics` - the method the
+panel itself is built from - so the test cannot drift from what is drawn. Its window is the
+panel plus a margin for the shadow on every side; that margin is added in `Present` and
+nowhere else, so the geometry `--slide` proves is the panel's, unchanged.
 
 ## How a change reaches the screen
 

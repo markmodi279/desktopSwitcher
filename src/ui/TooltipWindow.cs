@@ -40,6 +40,20 @@ namespace DesktopSwitcher
         /// has any.
         /// </summary>
         public IList<StatsTile> Tiles { get { return _tiles; } }
+
+        /// <summary>
+        /// The window behind each line, for the modern panel's icon and two-tone row: as long
+        /// as Lines, with null where a line is not a window - "+N more", "- empty -", a hint.
+        /// Null altogether for a panel with no windows in it. The classic panel ignores it
+        /// and draws Lines as they are, bullets and all.
+        /// </summary>
+        public IList<WindowEntry> Windows { get; set; }
+
+        /// <summary>
+        /// Small print at the right of the modern panel's title - "5 windows". Null for none,
+        /// and unused by the classic panel.
+        /// </summary>
+        public string Note { get; set; }
     }
 
     /// <summary>
@@ -116,7 +130,33 @@ namespace DesktopSwitcher
             // Measure, RowOrigin and the pinned-edge slide, account for the tiles without
             // a second height calculation that would have to be kept in step with the first.
             public IList<StatsTile> Tiles;
+
+            // Modern only. A header row is the title with Note at its right; a window row is
+            // an icon, App in semibold and Detail muted after it, with AppWidth measured once
+            // here so a frame of the slide does not measure it again. Classic builds every
+            // row as Plain, so none of this exists there.
+            public RowKind Kind;
+            public string Note;
+            public string App;
+            public string Detail;
+            public float AppWidth;
+            public Bitmap Icon;     // the cache's, never disposed by the row; null draws a letter tile
         }
+
+        enum RowKind { Plain, Header, Window }
+
+        // The modern panel's sizes at 96 DPI, beside the classic ones in Metrics. Public so
+        // --slide builds its heights from the same numbers.
+        public const int ModernRowHeight = 28;
+        const int ModernHeaderHeight = 30;
+        const int ModernIcon = 16;
+        const int ModernRadius = 8;
+
+        // The shadow's reach past the panel on every side, and how far it sits below centre.
+        // The window is the panel plus this, so the shadow has pixels to fade out in; they are
+        // click-through like the rest of it.
+        const int ShadowSpread = 12;
+        const int ShadowDrop = 3;
 
         // Tile geometry at 96 DPI. The gauge is the tallest thing in a tile and sets its
         // height; everything else stacks around it. See TilesHeight for the sum.
@@ -140,7 +180,23 @@ namespace DesktopSwitcher
         readonly Font _figureFont;
         readonly Font _smallFont;
 
-        readonly int _padX, _padY, _accent, _width;
+        readonly int _padX, _padY, _accent, _gap, _width;
+
+        // The style, and what it costs. Modern is a layered window - see Present - so it
+        // carries a DIB section to draw into and a shadow to stretch; classic carries
+        // neither and paints on WM_PAINT exactly as it always has. Everything that differs
+        // between the two keys off this one flag, set from the Look the panel was made with.
+        readonly bool _layered;
+        readonly Font _headFont;     // modern title
+        readonly Font _appFont;      // modern app name
+        readonly int _rowHeight, _headHeight, _iconSize, _radius;
+        readonly int _spread, _drop;   // shadow room around the panel, physical pixels
+        Bitmap _shadow;                // the nine-slice source, built once
+        int _shadowCorner;             // corner slice size in it
+
+        IntPtr _memDC, _dib, _oldBitmap, _bits;
+        int _dibWidth, _dibHeight;
+        Bitmap _surface;               // GDI+ over _bits, premultiplied
 
         Bitmap _buffer;
         List<Row> _rows = new List<Row>();
@@ -184,15 +240,19 @@ namespace DesktopSwitcher
         float _anchorCentre, _anchorCentreTarget;
         int _anchorWidth;
 
-        public TooltipWindow(Color background, Color highlight, int width, double dpiScale)
+        public TooltipWindow(Color background, Color highlight, int width, double dpiScale, Look look)
         {
             _background = background;
             _highlight = highlight;
             _scale = dpiScale;
+            _layered = look == Look.Modern;
 
+            int padY, accent, gap;
+            Metrics(look, out padY, out accent, out gap);
             _padX = Scale(12);
-            _padY = Scale(9);
-            _accent = Scale(3);
+            _padY = Scale(padY);
+            _accent = Scale(accent);
+            _gap = Scale(gap);
             // Every panel is this wide, whatever it holds. Sizing to content made the
             // width jump from button to button as the pointer moved along the strip, which
             // reads as the panel being redrawn rather than moved. Authored at 96 DPI, like
@@ -206,6 +266,19 @@ namespace DesktopSwitcher
             _figureFont = new Font("Segoe UI", (float)(14 * dpiScale), FontStyle.Bold, GraphicsUnit.Pixel);
             _smallFont = new Font("Segoe UI", (float)(11 * dpiScale), FontStyle.Regular, GraphicsUnit.Pixel);
 
+            if (_layered)
+            {
+                _headFont = new Font("Segoe UI Semibold", (float)(14 * dpiScale), FontStyle.Regular, GraphicsUnit.Pixel);
+                _appFont = new Font("Segoe UI Semibold", body, FontStyle.Regular, GraphicsUnit.Pixel);
+                _rowHeight = Scale(ModernRowHeight);
+                _headHeight = Scale(ModernHeaderHeight);
+                _iconSize = Scale(ModernIcon);
+                _radius = Scale(ModernRadius);
+                _spread = Scale(ShadowSpread);
+                _drop = Scale(ShadowDrop);
+                _shadow = BuildShadow(out _shadowCorner);
+            }
+
             var cp = new CreateParams();
             cp.Caption = "DesktopSwitcherTooltip";
             cp.X = 0;
@@ -218,7 +291,34 @@ namespace DesktopSwitcher
             cp.Style = Native.WS_POPUP;
             cp.ExStyle = Native.WS_EX_TOOLWINDOW | Native.WS_EX_TOPMOST
                        | Native.WS_EX_NOACTIVATE | Native.WS_EX_TRANSPARENT;
+            if (_layered) cp.ExStyle |= Native.WS_EX_LAYERED;
             CreateHandle(cp);
+        }
+
+        /// <summary>
+        /// The panel's vertical padding, accent stub height and gap to the strip for a style,
+        /// at 96 DPI. One place for them so --slide proves the geometry the panel actually
+        /// uses rather than numbers it was told agree.
+        ///
+        /// Modern has no stub - the lit cell on the strip already says which button the
+        /// panel describes, and a stub on a rounded, floating card reads as a speech-bubble
+        /// tail - and stands further off the strip, so it reads as floating over it rather
+        /// than growing out of it. Padding is even top and bottom because MeasureHeight
+        /// counts it twice; the header row carries the extra air above the list.
+        /// </summary>
+        public static void Metrics(Look look, out int padY, out int accent, out int gap)
+        {
+            if (look == Look.Modern)
+            {
+                padY = 10;
+                accent = 0;
+                gap = 8;
+                return;
+            }
+
+            padY = 9;
+            accent = 3;
+            gap = 4;
         }
 
         public bool IsVisible { get { return _visible; } }
@@ -303,7 +403,7 @@ namespace DesktopSwitcher
 
             bool accentAtTop;
             Point origin = Place(size, anchor, Screen.FromRectangle(anchor).WorkingArea,
-                                 Scale(4), out accentAtTop);
+                                 _gap, out accentAtTop);
 
             // Which edge the panel grows from decides which edge holds still, so a change of
             // regime invalidates the geometry rather than retargeting it: the panel no
@@ -365,6 +465,20 @@ namespace DesktopSwitcher
             if (_disposed || Handle == IntPtr.Zero) return;
 
             Rectangle b = Bounds();
+
+            // A layered window is moved, sized and painted by the one UpdateLayeredWindow in
+            // Present, so SetWindowPos is left only what that cannot do: show it and put it
+            // on top, on the first show. Drawn before it is shown, for the same reason the
+            // window is created without WS_VISIBLE.
+            if (_layered)
+            {
+                Present(b);
+                if ((flags & Native.SWP_SHOWWINDOW) != 0)
+                    Native.SetWindowPos(Handle, insertAfter, 0, 0, 0, 0,
+                                        flags | Native.SWP_NOMOVE | Native.SWP_NOSIZE);
+                return;
+            }
+
             Native.SetWindowPos(Handle, insertAfter, b.X, b.Y, b.Width, b.Height, flags);
 
             // Every pixel of this panel is position-dependent - the stub is placed against a
@@ -442,7 +556,7 @@ namespace DesktopSwitcher
         Point Place(Size size, Rectangle anchor)
         {
             return Place(size, anchor, Screen.FromRectangle(anchor).WorkingArea,
-                         Scale(4), out _accentAtTop);
+                         _gap, out _accentAtTop);
         }
 
         /// <summary>
@@ -497,13 +611,20 @@ namespace DesktopSwitcher
             {
                 g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
-                // The title carries the desktop's name and is what the panel is answering;
-                // the window rows support it. Both tones come from the sampled background,
-                // so a light taskbar gets dark text rather than white on white.
-                Add(rows, g, content.Title, _titleFont, Palette.PrimaryText(_background));
+                if (_layered)
+                {
+                    BuildModernRows(rows, g, content);
+                }
+                else
+                {
+                    // The title carries the desktop's name and is what the panel is answering;
+                    // the window rows support it. Both tones come from the sampled background,
+                    // so a light taskbar gets dark text rather than white on white.
+                    Add(rows, g, content.Title, _titleFont, Palette.PrimaryText(_background));
 
-                foreach (string line in content.Lines)
-                    Add(rows, g, line, _bodyFont, Palette.SecondaryText(_background));
+                    foreach (string line in content.Lines)
+                        Add(rows, g, line, _bodyFont, Palette.SecondaryText(_background));
+                }
 
                 if (content.Tiles != null && content.Tiles.Count > 0)
                 {
@@ -518,6 +639,75 @@ namespace DesktopSwitcher
             }
 
             return rows;
+        }
+
+        /// <summary>
+        /// The modern rows: a header with the window count at its right, then each line as a
+        /// window row where there is a window behind it and as plain muted text where there
+        /// is not.
+        ///
+        /// Nothing is trimmed here. Classic trims with Fit, a MeasureString loop per row;
+        /// modern hands DrawString a rectangle and lets it place the ellipsis, which is the
+        /// same answer for less work - and the app name, the one width the row's layout
+        /// depends on, is measured once, here, not per frame.
+        /// </summary>
+        void BuildModernRows(List<Row> rows, Graphics g, TooltipContent content)
+        {
+            var header = new Row();
+            header.Kind = RowKind.Header;
+            header.Text = content.Title ?? "";
+            header.Note = content.Note;
+            header.Font = _headFont;
+            header.Ink = Palette.PrimaryText(_background);
+            rows.Add(header);
+
+            IList<WindowEntry> windows = content.Windows;
+            float maxApp = (_width - _padX * 2 - TextColumn()) * 0.6f;
+
+            for (int i = 0; i < content.Lines.Count; i++)
+            {
+                WindowEntry window = windows != null && i < windows.Count ? windows[i] : null;
+                var row = new Row();
+                row.Font = _bodyFont;
+
+                if (window == null)
+                {
+                    row.Kind = RowKind.Plain;
+                    row.Text = content.Lines[i];
+                    row.Ink = DetailInk();
+                    rows.Add(row);
+                    continue;
+                }
+
+                // App first and the title after it, as Controller.Describe orders them - but
+                // in two weights rather than joined by a dash. A window with no app name
+                // leads with its title instead; one whose title is its app name says it once.
+                bool hasApp = window.App.Length > 0;
+                row.Kind = RowKind.Window;
+                row.App = hasApp ? window.App : window.Title;
+                row.Detail = !hasApp || window.Title == window.App ? "" : window.Title;
+                row.AppWidth = Math.Min(maxApp,
+                    g.MeasureString(row.App, _appFont, PointF.Empty, StringFormat.GenericTypographic).Width + 1f);
+                row.Icon = AppIcons.Get(window, _iconSize);
+                row.Ink = Palette.BodyText(_background);
+                rows.Add(row);
+            }
+        }
+
+        /// <summary>Where a window row's text starts, past its icon, from the panel's padding.</summary>
+        int TextColumn()
+        {
+            return _iconSize + Scale(10);
+        }
+
+        /// <summary>
+        /// The muted tone of a window's title and of the rows that are not windows: halfway
+        /// from Secondary to Muted, so the app name in front of it reads first without the
+        /// title fading into something that looks disabled.
+        /// </summary>
+        Color DetailInk()
+        {
+            return Palette.Blend(Palette.SecondaryText(_background), Palette.MutedText(_background), 0.5f);
         }
 
         void Add(List<Row> rows, Graphics g, string text, Font font, Color ink)
@@ -584,7 +774,10 @@ namespace DesktopSwitcher
 
         int RowHeight(Row row)
         {
-            return row.Tiles != null ? TilesHeight() : LineHeight(row.Font);
+            if (row.Tiles != null) return TilesHeight();
+            if (row.Kind == RowKind.Header) return _headHeight;
+            if (row.Kind == RowKind.Window) return _rowHeight;
+            return LineHeight(row.Font);
         }
 
         /// <summary>
@@ -628,6 +821,14 @@ namespace DesktopSwitcher
             IntPtr hdc = Native.BeginPaint(Handle, out ps);
             if (hdc == IntPtr.Zero) return;
 
+            // A layered window fed by UpdateLayeredWindow is never asked to paint, but a
+            // paint message that does arrive still has to be validated, or it repeats.
+            if (_layered)
+            {
+                Native.EndPaint(Handle, ref ps);
+                return;
+            }
+
             try
             {
                 Native.RECT client;
@@ -670,6 +871,356 @@ namespace DesktopSwitcher
                 Native.EndPaint(Handle, ref ps);
             }
         }
+
+        // --- the modern panel -------------------------------------------------
+
+        /// <summary>
+        /// Draws the modern panel at <paramref name="b"/> and hands it to the window in one
+        /// UpdateLayeredWindow, which moves and sizes it in the same call.
+        ///
+        /// Why a layered window at all: Windows 10 has no rounded corners for an ordinary
+        /// window and no shadow for a popup that is not a menu, and the obvious substitutes
+        /// both look worse - a SetWindowRgn corner is a hard pixel staircase, CS_DROPSHADOW
+        /// is a hard grey edge on two sides. Per-pixel alpha gives an antialiased corner and
+        /// a shadow that fades, and DWM composes it, so there is nothing for a video playing
+        /// underneath to leave trails in.
+        ///
+        /// The window is larger than the panel by the shadow's reach, but all of the
+        /// geometry - Place, the eased edges, --slide - is still about the panel; the margin
+        /// is a constant added here and nowhere else, so the pinned bottom edge stays pinned.
+        ///
+        /// Text keeps ClearType. Its colour fringes assume an opaque background, and the panel
+        /// body is fully opaque; only the corners and the shadow are translucent, and no text
+        /// is drawn there.
+        /// </summary>
+        void Present(Rectangle b)
+        {
+            if (b.Width <= 0 || b.Height <= 0) return;
+
+            int w = b.Width + _spread * 2;
+            int h = b.Height + _spread * 2;
+
+            try
+            {
+                // Grown, never shrunk, and sized up front for where the height is heading -
+                // the same reasoning as the classic back buffer in Paint.
+                EnsureSurface(Math.Max(w, _width + _spread * 2),
+                              Math.Max(h, TargetHeight() + _spread * 2));
+
+                using (var g = Graphics.FromImage(_surface))
+                {
+                    g.Clear(Color.Transparent);
+
+                    // The shadow is centred a little below the panel, so the window's top
+                    // margin is the spread less the drop and the panel sits that high in it.
+                    DrawShadow(g, new Rectangle(0, 0, w, h));
+
+                    g.TranslateTransform(_spread, _spread - _drop);
+                    RenderModern(g, b.Width, b.Height);
+                }
+
+                var dst = new Native.POINT();
+                dst.X = b.X - _spread;
+                dst.Y = b.Y - (_spread - _drop);
+                var size = new Native.SIZE();
+                size.cx = w;
+                size.cy = h;
+                var src = new Native.POINT();
+                var blend = new Native.BLENDFUNCTION();
+                blend.BlendOp = Native.AC_SRC_OVER;
+                blend.SourceConstantAlpha = 255;
+                blend.AlphaFormat = Native.AC_SRC_ALPHA;
+
+                if (!Native.UpdateLayeredWindow(Handle, IntPtr.Zero, ref dst, ref size, _memDC, ref src,
+                                                0, ref blend, Native.ULW_ALPHA))
+                    Log.Write("tooltip: UpdateLayeredWindow failed (win32 "
+                              + System.Runtime.InteropServices.Marshal.GetLastWin32Error() + ")");
+            }
+            catch (Exception ex)
+            {
+                Log.Write("tooltip: present failed - " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// A 32bpp top-down DIB section selected into a memory DC, with a GDI+ Bitmap laid
+        /// over the very same bits. GDI+ draws premultiplied straight into the memory
+        /// UpdateLayeredWindow reads, so a frame is drawn once and copied by nobody.
+        /// </summary>
+        void EnsureSurface(int width, int height)
+        {
+            if (_surface != null && _dibWidth >= width && _dibHeight >= height) return;
+
+            ReleaseSurface();
+
+            var bi = new Native.BITMAPINFOHEADER();
+            bi.biSize = System.Runtime.InteropServices.Marshal.SizeOf(typeof(Native.BITMAPINFOHEADER));
+            bi.biWidth = width;
+            bi.biHeight = -height;     // negative: top-down, so row 0 is the top, as GDI+ expects
+            bi.biPlanes = 1;
+            bi.biBitCount = 32;
+
+            _memDC = Native.CreateCompatibleDC(IntPtr.Zero);
+            _dib = Native.CreateDIBSection(_memDC, ref bi, 0, out _bits, IntPtr.Zero, 0);
+            if (_memDC == IntPtr.Zero || _dib == IntPtr.Zero || _bits == IntPtr.Zero)
+            {
+                ReleaseSurface();
+                throw new InvalidOperationException("no DIB section for the panel");
+            }
+
+            _oldBitmap = Native.SelectObject(_memDC, _dib);
+            _surface = new Bitmap(width, height, width * 4,
+                                  System.Drawing.Imaging.PixelFormat.Format32bppPArgb, _bits);
+            _dibWidth = width;
+            _dibHeight = height;
+        }
+
+        void ReleaseSurface()
+        {
+            if (_surface != null) { _surface.Dispose(); _surface = null; }
+            if (_memDC != IntPtr.Zero && _oldBitmap != IntPtr.Zero) Native.SelectObject(_memDC, _oldBitmap);
+            if (_dib != IntPtr.Zero) Native.DeleteObject(_dib);
+            if (_memDC != IntPtr.Zero) Native.DeleteDC(_memDC);
+            _memDC = _dib = _oldBitmap = _bits = IntPtr.Zero;
+            _dibWidth = _dibHeight = 0;
+        }
+
+        /// <summary>
+        /// The shadow's nine-slice source: a small rounded square, blurred, in black with
+        /// premultiplied alpha. Built once, because blurring the panel's own outline on every
+        /// frame of a slide would cost milliseconds a frame for a shape whose corners never
+        /// change; stretching the straight middle of this one costs nine DrawImage calls.
+        ///
+        /// The square is two corners and two pixels across, so its middle slice is two pixels
+        /// of pure straight edge. Three box passes approximate a Gaussian; each reaches a
+        /// third of the spread, so together they fade out just inside the window's margin.
+        /// </summary>
+        Bitmap BuildShadow(out int corner)
+        {
+            int core = _radius * 2 + 4;
+            int size = core + _spread * 2;
+            corner = _spread + _radius + 1;
+
+            // Lighter under a light taskbar, where a dark halo reads as dirt rather than depth.
+            int peak = Palette.IsLight(_background) ? 70 : 130;
+
+            var alpha = new int[size * size];
+            using (var mask = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+            {
+                using (var g = Graphics.FromImage(mask))
+                using (var brush = new SolidBrush(Color.FromArgb(peak, 0, 0, 0)))
+                using (var path = Rounded(new Rectangle(_spread, _spread, core, core), _radius))
+                {
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    g.FillPath(brush, path);
+                }
+
+                for (int y = 0; y < size; y++)
+                    for (int x = 0; x < size; x++)
+                        alpha[y * size + x] = mask.GetPixel(x, y).A;
+            }
+
+            int reach = Math.Max(1, _spread / 3);
+            var scratch = new int[alpha.Length];
+            for (int pass = 0; pass < 3; pass++)
+            {
+                BoxBlur(alpha, scratch, size, reach, true);
+                BoxBlur(scratch, alpha, size, reach, false);
+            }
+
+            var shadow = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            var data = shadow.LockBits(new Rectangle(0, 0, size, size),
+                                       System.Drawing.Imaging.ImageLockMode.WriteOnly,
+                                       System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            var pixels = new int[alpha.Length];
+            for (int i = 0; i < alpha.Length; i++) pixels[i] = alpha[i] << 24;   // black: colour is zero premultiplied
+            System.Runtime.InteropServices.Marshal.Copy(pixels, 0, data.Scan0, pixels.Length);
+            shadow.UnlockBits(data);
+            return shadow;
+        }
+
+        /// <summary>One pass of a running-sum box blur along rows or columns of a square.</summary>
+        static void BoxBlur(int[] src, int[] dst, int size, int reach, bool rows)
+        {
+            int span = reach * 2 + 1;
+            for (int line = 0; line < size; line++)
+            {
+                int sum = 0;
+                for (int k = -reach; k <= reach; k++)
+                    sum += src[At(line, Math.Max(0, Math.Min(size - 1, k)), size, rows)];
+
+                for (int i = 0; i < size; i++)
+                {
+                    dst[At(line, i, size, rows)] = sum / span;
+                    sum += src[At(line, Math.Min(size - 1, i + reach + 1), size, rows)]
+                         - src[At(line, Math.Max(0, i - reach), size, rows)];
+                }
+            }
+        }
+
+        static int At(int line, int i, int size, bool rows)
+        {
+            return rows ? line * size + i : i * size + line;
+        }
+
+        /// <summary>
+        /// The shadow stretched to <paramref name="outer"/>, the whole window: corners copied
+        /// one to one, the two-pixel middles stretched along the edges and across the centre.
+        /// Nearest-neighbour with half-pixel offset, so a stretched slice repeats its own
+        /// pixels and never blends in its neighbour's.
+        /// </summary>
+        void DrawShadow(Graphics g, Rectangle outer)
+        {
+            int c = _shadowCorner;
+            int s = _shadow.Width;
+            int mid = s - c * 2;
+            if (outer.Width < c * 2 || outer.Height < c * 2 || mid <= 0) return;
+
+            InterpolationMode interpolation = g.InterpolationMode;
+            PixelOffsetMode offset = g.PixelOffsetMode;
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+
+            int[] sx = { 0, c, s - c };
+            int[] sw = { c, mid, c };
+            int[] dx = { outer.X, outer.X + c, outer.Right - c };
+            int[] dw = { c, outer.Width - c * 2, c };
+            int[] dy = { outer.Y, outer.Y + c, outer.Bottom - c };
+            int[] dh = { c, outer.Height - c * 2, c };
+
+            for (int row = 0; row < 3; row++)
+                for (int col = 0; col < 3; col++)
+                    g.DrawImage(_shadow, new Rectangle(dx[col], dy[row], dw[col], dh[row]),
+                                sx[col], sx[row], sw[col], sw[row], GraphicsUnit.Pixel);
+
+            g.PixelOffsetMode = offset;
+            g.InterpolationMode = interpolation;
+        }
+
+        /// <summary>
+        /// The panel itself, in its own coordinates: a rounded card one step off the taskbar
+        /// colour with a hairline edge, then the rows from the stationary edge exactly as the
+        /// classic Render lays them out.
+        /// </summary>
+        void RenderModern(Graphics g, int width, int height)
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+
+            Color surface = Palette.Lift(_background, 0.07f);
+            using (var back = new SolidBrush(surface))
+            using (var path = Rounded(new Rectangle(0, 0, width, height), _radius))
+                g.FillPath(back, path);
+
+            // The hairline is what separates the card from a wallpaper of the same darkness;
+            // the shadow alone goes missing against a black one.
+            Color edge = Palette.IsLight(_background) ? Color.FromArgb(30, 0, 0, 0) : Color.FromArgb(36, 255, 255, 255);
+            using (var pen = new Pen(edge, 1f))
+            using (var path = Rounded(new RectangleF(0.5f, 0.5f, width - 1f, height - 1f), _radius))
+                g.DrawPath(pen, path);
+
+            bool listsWindows = false;
+            for (int i = 0; i < _rows.Count; i++)
+                if (_rows[i].Kind == RowKind.Window) listsWindows = true;
+
+            int y = RowOrigin(height, _padY, _accent, RowsHeight(), _accentAtTop);
+
+            using (var format = (StringFormat)StringFormat.GenericTypographic.Clone())
+            {
+                format.LineAlignment = StringAlignment.Center;
+                format.Trimming = StringTrimming.EllipsisCharacter;
+                format.FormatFlags |= StringFormatFlags.NoWrap;
+
+                for (int i = 0; i < _rows.Count; i++)
+                {
+                    Row row = _rows[i];
+                    int rh = RowHeight(row);
+
+                    if (row.Tiles != null) DrawTiles(g, row.Tiles, y);
+                    else if (row.Kind == RowKind.Header) DrawHeader(g, row, y, rh, width, format);
+                    else if (row.Kind == RowKind.Window) DrawWindowRow(g, row, y, rh, width, surface, format);
+                    else
+                    {
+                        // "+3 more" sits in the text column under the titles it continues; a
+                        // hint in a panel with no windows starts at the padding like the title.
+                        int x = _padX + (listsWindows ? TextColumn() : 0);
+                        using (var ink = new SolidBrush(row.Ink))
+                            g.DrawString(row.Text, row.Font, ink, new RectangleF(x, y, width - _padX - x, rh), format);
+                    }
+
+                    y += rh;
+                }
+            }
+        }
+
+        void DrawHeader(Graphics g, Row row, int y, int rh, int width, StringFormat format)
+        {
+            float noteWidth = 0f;
+            if (!string.IsNullOrEmpty(row.Note))
+            {
+                noteWidth = g.MeasureString(row.Note, _smallFont, PointF.Empty, format).Width;
+                using (var right = (StringFormat)format.Clone())
+                using (var ink = new SolidBrush(Palette.MutedText(_background)))
+                {
+                    right.Alignment = StringAlignment.Far;
+                    g.DrawString(row.Note, _smallFont, ink, new RectangleF(_padX, y, width - _padX * 2, rh), right);
+                }
+                noteWidth += Scale(12);
+            }
+
+            using (var ink = new SolidBrush(row.Ink))
+                g.DrawString(row.Text, row.Font, ink,
+                             new RectangleF(_padX, y, Math.Max(0f, width - _padX * 2 - noteWidth), rh), format);
+        }
+
+        void DrawWindowRow(Graphics g, Row row, int y, int rh, int width, Color surface, StringFormat format)
+        {
+            var icon = new Rectangle(_padX, y + (rh - _iconSize) / 2, _iconSize, _iconSize);
+            if (row.Icon != null)
+            {
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.DrawImage(row.Icon, icon);
+            }
+            else
+            {
+                DrawLetterTile(g, icon, row.App, surface);
+            }
+
+            float x = _padX + TextColumn();
+            using (var ink = new SolidBrush(row.Ink))
+                g.DrawString(row.App, _appFont, ink, new RectangleF(x, y, row.AppWidth, rh), format);
+
+            if (row.Detail.Length == 0) return;
+
+            float detailX = x + row.AppWidth + Scale(8);
+            float room = width - _padX - detailX;
+            if (room <= 0f) return;
+
+            using (var ink = new SolidBrush(DetailInk()))
+                g.DrawString(row.Detail, _bodyFont, ink, new RectangleF(detailX, y, room, rh), format);
+        }
+
+        /// <summary>
+        /// Stands in for an icon that could not be had: the app's first letter on a soft
+        /// square, so the column of icons stays a column and the row still says whose it is.
+        /// </summary>
+        void DrawLetterTile(Graphics g, Rectangle r, string app, Color surface)
+        {
+            using (var fill = new SolidBrush(Palette.Lift(surface, 0.16f)))
+            using (var path = Rounded(r, Math.Max(2, r.Width / 4)))
+                g.FillPath(fill, path);
+
+            string letter = string.IsNullOrEmpty(app) ? "?" : app.Substring(0, 1).ToUpperInvariant();
+            using (var ink = new SolidBrush(Palette.SecondaryText(surface)))
+            using (var format = new StringFormat())
+            {
+                format.Alignment = StringAlignment.Center;
+                format.LineAlignment = StringAlignment.Center;
+                g.DrawString(letter, _smallFont, ink, r, format);
+            }
+        }
+
+        // --- the classic panel ------------------------------------------------
 
         void Render(Graphics g, int width, int height)
         {
@@ -936,10 +1487,15 @@ namespace DesktopSwitcher
             }
         }
 
-        static GraphicsPath Rounded(Rectangle r, int radius)
+        /// <summary>
+        /// A rounded rectangle. RectangleF so the modern panel's hairline can sit on half-pixel
+        /// edges - a 1px line stroked on whole ones straddles two rows - while every other
+        /// caller passes a Rectangle and takes the implicit conversion.
+        /// </summary>
+        static GraphicsPath Rounded(RectangleF r, int radius)
         {
             var path = new GraphicsPath();
-            int d = Math.Max(1, Math.Min(radius * 2, Math.Min(r.Width, r.Height)));
+            float d = Math.Max(1f, Math.Min(radius * 2, Math.Min(r.Width, r.Height)));
             path.AddArc(r.X, r.Y, d, d, 180, 90);
             path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
             path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
@@ -1059,6 +1615,10 @@ namespace DesktopSwitcher
             if (Handle != IntPtr.Zero) DestroyHandle();
 
             if (_buffer != null) { _buffer.Dispose(); _buffer = null; }
+            ReleaseSurface();
+            if (_shadow != null) { _shadow.Dispose(); _shadow = null; }
+            if (_headFont != null) _headFont.Dispose();
+            if (_appFont != null) _appFont.Dispose();
             _titleFont.Dispose();
             _bodyFont.Dispose();
             _gaugeFont.Dispose();

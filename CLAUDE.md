@@ -124,7 +124,7 @@ shell.
 | `--where <title>` | whether a window is on the current desktop |
 | `--anim [ms]` | steps the strip's easing headlessly and prints each frame; needs no shell at all |
 | `--glide` | the strip's glide to a moved tray edge, headlessly: no jump on the first frame, only toward the target, lands exactly, a mid-glide retarget is absorbed |
-| `--slide [ms]` | the same for the hover panel's travel between buttons: placement, the pinned bottom edge, the row-block origin, the accent stub |
+| `--slide [ms]` | the same for the hover panel's travel between buttons, in both styles: placement, the pinned bottom edge, the row-block origin, the accent stub |
 | `--winver` | the Windows build, and whether startup would accept it (19041-19045 only; Windows 11 is refused) |
 | `--config` | every setting with its value, range and default, and that `config.ini` round-trips through the settings table |
 | `--help` | the command list |
@@ -142,7 +142,9 @@ Explorer restart, and anything on a second monitor. `--anim` and `--slide` cover
 the animation - that it converges, lands exactly and stops - but nothing about how it
 reads on screen. For the hover panel specifically, `--slide` cannot see trails behind a
 moving `WS_EX_TRANSPARENT` topmost window, which is the one thing worth checking over a
-playing video rather than over the desktop.
+playing video rather than over the desktop. The two styles draw the panel through
+different windows - plain and painted for classic, layered for modern - so a change to the
+panel wants that check in each.
 
 ## Where state lives
 
@@ -176,6 +178,7 @@ it before the next went on top.
 | **M13** | Occupancy dots: a cheap sweep in `WindowInventory` answers "does this desktop have windows" without the cost of the full one, pushed to the strip on the reconcile tick. `--occupancy` proves the cheap sweep against the full one. |
 | **M14** | The stats tile: CPU, memory and network in the hover panel, refreshed live, pinned open by a click. `SystemStats` samples on the reconcile tick so the first panel already has rates; `--stats` checks the figures and the adapter filter. |
 | **M15** | Settings without Notepad: `SettingsWindow`, owner-drawn and themed off the taskbar, applying every change live with Revert and Defaults. `Config.All` became the one table of settings, so `config.ini` is now written grouped and commented, and `ConfigWatcher` applies a hand edit the moment it is saved. `--config` proves the table round-trips; `--settings` opens the window on its own. |
+| **M16** | The modern style, set separately for the strip (`stripStyle`) and the panel (`panelStyle`): rounded cells and a pill on the strip, and a layered hover panel with antialiased corners, a nine-sliced shadow, app icons from `AppIcons` and two-tone rows. Classic draws exactly as before and stays the default for both. `--slide` runs both panel styles from `TooltipWindow.Metrics`. |
 
 Between M8 and M9, two fixes worth knowing: tooltip rows lead with the owning app resolved
 from the process, and the tooltip width is fixed rather than sized to content so it does not
