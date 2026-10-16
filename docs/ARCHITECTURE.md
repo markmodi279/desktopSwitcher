@@ -78,6 +78,7 @@ commented `do not reorder`. They are not stable across Windows versions; see
 | [WindowInventory.cs](../src/model/WindowInventory.cs) | Which windows are on which desktop, and which app owns each one. Built on demand, cached for a second. Also answers the cheaper question of which desktops merely *have* windows, for the occupancy dot. |
 | [ForegroundTracker.cs](../src/model/ForegroundTracker.cs) | Remembers the last real window to hold focus, so "send the active window here" has something to send. |
 | [SystemStats.cs](../src/model/SystemStats.cs) | CPU, memory and network throughput for the stats tile. Rates from the difference between two readings, network adapters cached between change notifications. |
+| [PublicIp.cs](../src/model/PublicIp.cs) | The public IPv4 address, for the stats panel's top right and the tile's copy gesture and menu item. Asked of Cloudflare on a pool thread when the panel opens, cached ten minutes or until the network changes. Off unless `statsPublicIp`. |
 
 ### `src/ui/` — pixels and input
 
@@ -368,6 +369,33 @@ adapters already enumerated measured 0.1 ms. So the list is rebuilt only when
 `NetworkChange` reports an address change, or every five minutes as a fallback.
 `PerformanceCounter` was avoided for the same kind of reason: the first one constructed in
 a process can stall for a second, and its category names are localised.
+
+**The public IP is the app's only network request, so it is opt-in and lazy.** Nothing on the
+machine knows the address - behind a router every adapter holds a private one - so
+`PublicIp` asks `https://1.1.1.1/cdn-cgi/trace`, falling back to `https://api.ipify.org`.
+The IPv4 literal is what keeps the answer IPv4: a hostname with an AAAA record would be
+reached over IPv6 on a dual-stack line and report that address instead; ipify's host is
+v4-only for the same reason. It asks when the stats panel or the tile's menu opens and the
+cached answer is over ten minutes old (30 s after a failure), or after `NetworkChange`
+reports an address change - never on the reconcile tick. The request runs on the thread
+pool with a 4 s timeout and the answer is marshalled back through the controller's form,
+so a dead network costs the UI nothing. The address sits at the panel's top right, in
+`TooltipContent.Corner` - not `Note`, which the desktop panels already set and the classic
+style has always ignored, so reusing it would have changed every classic panel. It is
+there from the start reading `checking...`. The copy gesture (`statsCopyGesture`, Ctrl+click
+by default) is recognised by the strip ahead of the tile's pin toggle and raised as
+`StatsCopyRequested`; the modifiers come from `Control.ModifierKeys`, since the message's
+`MK_` flags have no Alt. Its confirmation is the tile's own hint, which the click hides and
+the hover brings back saying "Copied" for two seconds - or the corner, when the panel is open.
+`statsKeepGesture` (middle click by default) shares the `TileGesture` choices and is handled
+inside the strip, which owns the pin state. `statsTaskManagerGesture` (Alt+click) is raised
+as `StatsTaskManagerRequested`. The strip checks copy, then Task Manager, then keep, so two
+set to the same click do the first of those. Shift is the only modifier a right click can carry onto the tile - any other
+right click opens the menu first. Two traps: the assembly
+has no `TargetFrameworkAttribute`, so the runtime offers only SSL3 and TLS 1.0 until
+`SecurityProtocolType.Tls12` is added, which both services need; and only a reply that
+parses as a dotted-quad IPv4 is accepted, so a captive portal's login page never reaches
+the clipboard.
 
 **The foreground window cannot be read at click time.** Clicking the taskbar hands focus to
 Explorer, so by the time a handler runs, the foreground window is `Shell_TrayWnd` — and

@@ -54,6 +54,14 @@ namespace DesktopSwitcher
         /// and unused by the classic panel.
         /// </summary>
         public string Note { get; set; }
+
+        /// <summary>
+        /// Small print at the right of the title in both styles - the stats panel's public
+        /// IP. Separate from Note so the classic desktop panels, which have always ignored
+        /// Note, still look exactly as they did. Modern shows Note in preference when both
+        /// are set; nothing sets both.
+        /// </summary>
+        public string Corner { get; set; }
     }
 
     /// <summary>
@@ -131,7 +139,8 @@ namespace DesktopSwitcher
             // a second height calculation that would have to be kept in step with the first.
             public IList<StatsTile> Tiles;
 
-            // Modern only. A header row is the title with Note at its right; a window row is
+            // Modern only, but for Note, which a classic title row carries too when the
+            // content has a Corner. A header row is the title with Note at its right; a window row is
             // an icon, App in semibold and Detail muted after it, with AppWidth measured once
             // here so a frame of the slide does not measure it again. Classic builds every
             // row as Plain, so none of this exists there.
@@ -620,7 +629,23 @@ namespace DesktopSwitcher
                     // The title carries the desktop's name and is what the panel is answering;
                     // the window rows support it. Both tones come from the sampled background,
                     // so a light taskbar gets dark text rather than white on white.
-                    Add(rows, g, content.Title, _titleFont, Palette.PrimaryText(_background));
+                    //
+                    // The note goes at the title's right, as modern puts it, and the title is
+                    // trimmed short of it rather than running underneath.
+                    if (string.IsNullOrEmpty(content.Corner))
+                    {
+                        Add(rows, g, content.Title, _titleFont, Palette.PrimaryText(_background));
+                    }
+                    else
+                    {
+                        float noteWidth = g.MeasureString(content.Corner, _smallFont).Width + Scale(12);
+                        var title = new Row();
+                        title.Text = Fit(g, content.Title, _titleFont, _width - _padX * 2 - (int)noteWidth);
+                        title.Font = _titleFont;
+                        title.Ink = Palette.PrimaryText(_background);
+                        title.Note = content.Corner;
+                        rows.Add(title);
+                    }
 
                     foreach (string line in content.Lines)
                         Add(rows, g, line, _bodyFont, Palette.SecondaryText(_background));
@@ -656,7 +681,7 @@ namespace DesktopSwitcher
             var header = new Row();
             header.Kind = RowKind.Header;
             header.Text = content.Title ?? "";
-            header.Note = content.Note;
+            header.Note = content.Note != null ? content.Note : content.Corner;
             header.Font = _headFont;
             header.Ink = Palette.PrimaryText(_background);
             rows.Add(header);
@@ -1253,6 +1278,20 @@ namespace DesktopSwitcher
 
                 using (var brush = new SolidBrush(row.Ink))
                     g.DrawString(row.Text, row.Font, brush, _padX, y);
+
+                // Right-aligned and centred on the title's line, which is taller than its own.
+                if (!string.IsNullOrEmpty(row.Note))
+                {
+                    using (var right = new StringFormat())
+                    using (var ink = new SolidBrush(Palette.MutedText(_background)))
+                    {
+                        right.Alignment = StringAlignment.Far;
+                        right.LineAlignment = StringAlignment.Center;
+                        right.FormatFlags |= StringFormatFlags.NoWrap;
+                        g.DrawString(row.Note, _smallFont, ink,
+                                     new RectangleF(_padX, y, _width - _padX * 2, RowHeight(row)), right);
+                    }
+                }
 
                 if (row.Tiles != null) DrawTiles(g, row.Tiles, y);
 

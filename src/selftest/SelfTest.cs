@@ -42,6 +42,7 @@ namespace DesktopSwitcher
                     case "--desktops": return CmdDesktops(api);
                     case "--occupancy": return CmdOccupancy(api);
                     case "--stats":   return CmdStats(args);
+                    case "--publicip": return CmdPublicIp();
                     case "--switch":  return CmdSwitch(api, args);
                     case "--create":  return CmdCreate(api);
                     case "--remove":  return CmdRemove(api, args);
@@ -89,6 +90,7 @@ namespace DesktopSwitcher
             Console.WriteLine("  --desktops             show all desktops with the windows on each");
             Console.WriteLine("  --occupancy            check the occupancy dot's cheap sweep against the full sweep");
             Console.WriteLine("  --stats [N]            print the stats panel N times, a second apart, and which adapters count");
+            Console.WriteLine("  --publicip             ask each public IP service once and print what it says (goes online)");
             Console.WriteLine("  --switch N             switch to desktop N (1-based)");
             Console.WriteLine("  --create               create a new desktop");
             Console.WriteLine("  --remove N             remove desktop N");
@@ -307,6 +309,36 @@ namespace DesktopSwitcher
             }
 
             return 0;
+        }
+
+        /// <summary>
+        /// Each service on its own, then the lookup the app does, so a failing primary shows
+        /// up as such rather than being papered over by the fallback. Online, but changes
+        /// nothing: three small HTTPS GETs.
+        /// </summary>
+        static int CmdPublicIp()
+        {
+            Console.WriteLine("Setting: statsPublicIp = " + (Config.Load().StatsPublicIp ? "true" : "false"));
+            Console.WriteLine();
+
+            foreach (string url in new[] { PublicIp.PrimaryUrl, PublicIp.FallbackUrl })
+            {
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                string error;
+                string address = PublicIp.Ask(url, out error);
+                watch.Stop();
+                Console.WriteLine(string.Format("  {0,-34} {1}  ({2:0} ms)",
+                    url, address != null ? address : "FAILED - " + error, watch.Elapsed.TotalMilliseconds));
+            }
+            Console.WriteLine();
+
+            string source;
+            double ms;
+            string found = PublicIp.Lookup(out source, out ms);
+            Console.WriteLine(string.Format("Lookup: {0}  from {1}  ({2:0} ms)",
+                found != null ? found : "none", source, ms));
+
+            return found != null ? 0 : 1;
         }
 
         static void PrintStats(SystemStats stats, int sample, double costMs)

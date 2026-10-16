@@ -71,7 +71,10 @@ Run the exe with no arguments. Then, on the strip:
 | Left click `+` | create a desktop |
 | Right click `+` | menu — **New desktop** |
 | Left click the signal tile | open the CPU, memory and network panel; click again to close it |
-| Right click the signal tile | menu — **Keep open**, **Task Manager** |
+| Middle click the signal tile | keep the panel open, or close a kept one - the menu's **Keep open** (set by `statsKeepGesture`) |
+| Alt+click the signal tile | open Task Manager (set by `statsTaskManagerGesture`) |
+| Ctrl+click the signal tile | copy your public IP (with `statsPublicIp` on; the click is set by `statsCopyGesture`) |
+| Right click the signal tile | menu — **Keep open**, **Copy public IP** (with `statsPublicIp` on), **Task Manager** |
 
 The menu exists because a touchpad cannot middle-click, which otherwise leaves removing a
 desktop with no gesture at all. It also says what it is about to do, which the bare
@@ -127,9 +130,18 @@ width, so a much narrower `tooltipWidth` makes them cramped. The panel stays ope
 follows the pointer to describe other buttons, but goes back to the stats rather than
 disappearing when the pointer leaves. The bars brighten and the cell stays lit while the
 panel is open. Clicking it again,
-or clicking anywhere else, closes it. To have it stay through clicks elsewhere, right-click
-the tile and tick **Keep open**; it then closes only from the tile or by unticking. It steps aside while the taskbar is out of sight —
+or clicking anywhere else, closes it. To have it stay through clicks elsewhere, middle-click
+the tile, or right-click it and tick **Keep open**; it then closes only from the tile or by unticking. It steps aside while the taskbar is out of sight —
 auto-hidden, or behind a fullscreen video or game — and comes back with it.
+
+With `statsPublicIp = true` the panel also shows your public IPv4 address at the top right,
+beside its title. **Ctrl+click** the tile to copy it without opening anything - the tile's
+hint says "Copied" to confirm - or use **Copy public IP** on its right-click menu, which
+shows the address in the item so the menu alone answers the question. The click can be
+changed to Shift, Alt or middle click, or turned off, with `statsCopyGesture`. It is off by default because it is the one thing in
+the app that goes online: it asks Cloudflare (`1.1.1.1`, or ipify if that is blocked) when
+the panel or menu opens, at most every 10 minutes unless the network changes - a VPN
+connecting, say. `--publicip` asks each service once and prints what it says.
 
 How the figures compare with Task Manager, measured side by side:
 
@@ -212,6 +224,10 @@ colour again.
 | `statsBarRounded` | `false` | round ends on the bars, like the panel's gauges; `false` draws plain rectangles |
 | `statsWarnPercent` | `75` | load at which a bar turns amber |
 | `statsAlertPercent` | `90` | load at which a bar turns red |
+| `statsPublicIp` | `false` | your public IPv4 address at the top right of the stats panel, and **Copy public IP** on the tile's menu; asks Cloudflare when the panel opens, at most every 10 minutes or after a network change |
+| `statsCopyGesture` | `ctrl+click` | the click on the stats tile that copies the public IP: `ctrl+click`, `shift+click`, `alt+click`, `middle-click`, `shift+right-click` or `off` |
+| `statsKeepGesture` | `middle-click` | the click on the stats tile that keeps the panel open, or closes a kept one, as **Keep open** on its menu does; same choices; if it matches `statsCopyGesture`, copying wins |
+| `statsTaskManagerGesture` | `alt+click` | the click on the stats tile that opens Task Manager; same choices |
 | `tooltips` | `true` | hover panel showing each desktop's windows |
 | `tooltipDelayMs` | `400` | hover delay before the panel appears |
 | `tooltipMaxWindows` | `8` | titles listed before the rest collapse into `+N more` |

@@ -26,6 +26,7 @@ namespace DesktopSwitcher
         readonly TaskbarHost _host = new TaskbarHost();
         readonly ForegroundTracker _foreground = new ForegroundTracker();
         readonly SystemStats _stats = new SystemStats();
+        readonly PublicIp _publicIp;     // made once the handle exists - it marshals through it
 
         DesktopService _service;
         WindowInventory _inventory;
@@ -58,6 +59,8 @@ namespace DesktopSwitcher
         bool _started;
         bool _statsPinned;            // outlives the strip, which a rebuild throws away
         bool _statsKept;              // likewise: opened by "Keep open", not by a click
+        int _ipCopiedAt;              // TickCount of the last copy, for the "copied" feedback
+        bool _ipCopied;               // whether _ipCopiedAt means anything yet
         bool _sessionNotifications;   // whether the unlock message is being delivered
         string _settleReason = "";    // what queued the pending rebuild, for the log
         int _pendingCount = -1;
@@ -92,6 +95,10 @@ namespace DesktopSwitcher
             // into the light.
             IntPtr pump = Handle;
             GC.KeepAlive(pump);
+
+            // After the handle, for the reason above: its answers arrive on a pool thread
+            // and are marshalled back through this form.
+            _publicIp = new PublicIp(this);
 
             // Needs the handle, so it goes after the line above and not before it.
             _sessionNotifications =
@@ -377,6 +384,13 @@ namespace DesktopSwitcher
                                  _config.StatsWarnPercent, _config.StatsAlertPercent, _config.StatsStyle,
                                  _host.Scale(_config.StatsIconSize), _config.StatsFanSpin,
                                  _config.StatsFanSpeed);
+            // Off while the address is not being shown: the gesture then falls through to
+            // what that click did before - a pin toggle, or nothing.
+            _strip.StatsCopyGesture = _config.StatsPublicIp ? _config.StatsCopyGesture : TileGesture.Off;
+            _strip.StatsCopyRequested += delegate { CopyPublicIp(); };
+            _strip.StatsKeepGesture = _config.StatsKeepGesture;
+            _strip.StatsTaskManagerGesture = _config.StatsTaskManagerGesture;
+            _strip.StatsTaskManagerRequested += delegate { OpenTaskManager(); };
             _strip.StatsPinChanged += delegate(bool pinned, bool kept)
             {
                 _statsPinned = pinned;
@@ -588,6 +602,7 @@ namespace DesktopSwitcher
                 // most naturally read as "close it".
                 var keep = new ToolStripMenuItem("Keep open");
                 keep.Checked = _statsKept;
+                keep.ShortcutKeyDisplayString = GestureName(_config.StatsKeepGesture);
                 keep.Click += delegate
                 {
                     if (_strip == null) return;
@@ -596,9 +611,26 @@ namespace DesktopSwitcher
                 };
                 menu.Items.Add(keep);
 
+                // The address in the caption, so the menu alone answers "what is it" without
+                // opening the panel. Disabled until one is known; opening the menu is itself
+                // a reason to ask, so a stale one is refreshed for next time.
+                if (_config.StatsPublicIp)
+                {
+                    _publicIp.Refresh(false);
+                    string address = _publicIp.Address;
+                    AddItem(menu, "Copy public IP  (" + _publicIp.Display + ")", address != null,
+                            delegate { CopyPublicIp(); });
+
+                    // The gesture beside the item, where a menu says its shortcuts.
+                    ((ToolStripMenuItem)menu.Items[menu.Items.Count - 1]).ShortcutKeyDisplayString =
+                        GestureName(_config.StatsCopyGesture);
+                }
+
                 // Where to go when the panel's three figures raise a question it cannot
                 // answer, which is usually "what is using it".
                 AddItem(menu, "Task Manager", true, delegate { OpenTaskManager(); });
+                ((ToolStripMenuItem)menu.Items[menu.Items.Count - 1]).ShortcutKeyDisplayString =
+                    GestureName(_config.StatsTaskManagerGesture);
                 return menu;
             }
 
@@ -869,7 +901,27 @@ namespace DesktopSwitcher
 
             // Before '+', whose test would otherwise claim it. Only the hint: the figures
             // are shown by a click, never by a hover.
-            if (_strip != null && index == _strip.StatsIndex) return StatsHint(_config.StatsStyle);
+            if (_strip != null && index == _strip.StatsIndex)
+            {
+                // The copy gesture's confirmation, when the panel is closed: the click hid the
+                // hint and the hover brings it back a moment later, saying this instead.
+                if (_config.StatsPublicIp && RecentlyCopied())
+                    return new TooltipContent("Copied " + _publicIp.Address, new List<string>
+                    {
+                        "Your public IP is on the clipboard",
+                    });
+
+                // The gesture says itself, or nobody would find it: nothing else on the tile
+                // hints that a modified click does anything.
+                TooltipContent hint = StatsHint(_config.StatsStyle);
+                string gesture = _config.StatsPublicIp ? GestureName(_config.StatsCopyGesture) : null;
+                if (gesture != null) hint.Lines.Add(gesture + " to copy your public IP");
+                string keepGesture = GestureName(_config.StatsKeepGesture);
+                if (keepGesture != null) hint.Lines.Add(keepGesture + " to keep it open");
+                string taskGesture = GestureName(_config.StatsTaskManagerGesture);
+                if (taskGesture != null) hint.Lines.Add(taskGesture + " for Task Manager");
+                return hint;
+            }
 
             if (index >= desktops.Count)
                 return new TooltipContent("New desktop", new List<string> { "Win+Ctrl+D" });
@@ -985,7 +1037,79 @@ namespace DesktopSwitcher
         {
             _stats.Sample();
             PushStatsLevels();
-            return StatsContent(_stats, kept);
+
+            // Once a second while the panel is open, and a no-op unless the address is
+            // stale; the answer shows on the refresh after it lands.
+            if (_config.StatsPublicIp) _publicIp.Refresh(false);
+            return StatsContent(_stats, kept, _config.StatsPublicIp ? IpCorner() : null);
+        }
+
+        /// <summary>A tile gesture as the hint and the menu spell it, or null for none.</summary>
+        static string GestureName(TileGesture gesture)
+        {
+            switch (gesture)
+            {
+                case TileGesture.CtrlClick:   return "Ctrl+click";
+                case TileGesture.ShiftClick:  return "Shift+click";
+                case TileGesture.AltClick:    return "Alt+click";
+                case TileGesture.MiddleClick: return "Middle click";
+                case TileGesture.ShiftRightClick: return "Shift+right-click";
+                default:                      return null;
+            }
+        }
+
+        /// <summary>How long "Copied" stands in for the label after a copy.</summary>
+        const int CopiedShowMs = 2000;
+
+        /// <summary>
+        /// The address onto the clipboard, from the menu item or the tile's copy gesture.
+        /// With nothing known yet there is nothing to copy; the gesture asks for one instead,
+        /// so a second try a moment later works. Either way the panel or the tile's hint says
+        /// what happened - a gesture that copies with no sign of it reads as one that did
+        /// nothing.
+        /// </summary>
+        void CopyPublicIp()
+        {
+            string address = _publicIp.Address;
+            if (address == null)
+            {
+                _publicIp.Refresh(false);
+                return;
+            }
+
+            CopyText(address);
+            _ipCopied = true;
+            _ipCopiedAt = Environment.TickCount;
+        }
+
+        bool RecentlyCopied()
+        {
+            if (!_ipCopied) return false;
+            int age = unchecked(Environment.TickCount - _ipCopiedAt);
+            return age >= 0 && age < CopiedShowMs;
+        }
+
+        /// <summary>The panel's top-right: the address, or "copied" for a moment after a copy.</summary>
+        string IpCorner()
+        {
+            return (RecentlyCopied() ? "Copied   " : "Public IP   ") + _publicIp.Display;
+        }
+
+        /// <summary>
+        /// Puts text on the clipboard. Another process can be holding the clipboard open -
+        /// clipboard managers and remote desktop do, briefly - and SetText throws for it;
+        /// WinForms already retries a few times, so a failure here is logged and dropped.
+        /// </summary>
+        static void CopyText(string text)
+        {
+            try
+            {
+                Clipboard.SetText(text);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("controller: clipboard busy - " + ex.Message);
+            }
         }
 
         /// <summary>
@@ -1032,6 +1156,15 @@ namespace DesktopSwitcher
         /// </summary>
         public static TooltipContent StatsContent(SystemStats stats, bool kept)
         {
+            return StatsContent(stats, kept, null);
+        }
+
+        /// <summary>
+        /// The same, with corner - the public IP - at the title's right. Null when
+        /// statsPublicIp is off, and from the harnesses, which ask nobody.
+        /// </summary>
+        public static TooltipContent StatsContent(SystemStats stats, bool kept, string corner)
+        {
             int now = Environment.TickCount;
             IList<StatsPoint> history = stats.History;
 
@@ -1076,8 +1209,10 @@ namespace DesktopSwitcher
             // Says so the same way a desktop's panel says "(current)". Only when kept: a
             // popup behaves the way a popup is expected to, but a panel that sits through
             // clicks elsewhere would otherwise look stuck.
-            return new TooltipContent(kept ? "System   (kept open)" : "System", null,
-                                      new List<StatsTile> { cpu, memory, network });
+            var content = new TooltipContent(kept ? "System   (kept open)" : "System", null,
+                                             new List<StatsTile> { cpu, memory, network });
+            content.Corner = corner;
+            return content;
         }
 
         /// <summary>The highest known value in the history, -1 when there is none.</summary>

@@ -22,6 +22,29 @@ namespace DesktopSwitcher
     }
 
     /// <summary>
+    /// A click on the stats tile that does something other than toggle the panel -
+    /// statsCopyGesture and statsKeepGesture. Here rather than in Config because the strip
+    /// is what recognises it. Off is also what the controller hands over for a copy while
+    /// statsPublicIp is off, so the click falls back to whatever it did before.
+    ///
+    /// Shift is the only modifier a right click can carry: a plain or Ctrl right click
+    /// opens the menu before the tile gets a look at it. Shift+right is free on the tile
+    /// because the menu already steps aside for it - on a desktop button it means "send
+    /// the active window here", which the tile has no use for.
+    ///
+    /// Appended to, never reordered: a Choice setting is stored by name but held by index.
+    /// </summary>
+    enum TileGesture
+    {
+        Off,
+        CtrlClick,
+        ShiftClick,
+        AltClick,
+        MiddleClick,
+        ShiftRightClick,
+    }
+
+    /// <summary>
     /// How the strip or the hover panel is drawn - stripStyle and panelStyle, one each.
     ///
     /// It was one switch for both at first, on the reasoning that the two are meant to read
@@ -305,6 +328,25 @@ namespace DesktopSwitcher
         /// the controller keeps it from here and hands it back to the new strip.
         /// </summary>
         public event Action<bool, bool> StatsPinChanged;
+
+        /// <summary>The stats tile was clicked with StatsCopyGesture: copy the public IP.</summary>
+        public event EventHandler StatsCopyRequested;
+
+        /// <summary>Which click on the stats tile raises StatsCopyRequested. Off for none.</summary>
+        public TileGesture StatsCopyGesture { get; set; }
+
+        /// <summary>
+        /// Which click on the stats tile toggles the panel kept open - what the menu's
+        /// "Keep open" does, without the menu. Off for none. Handled here, not raised: the
+        /// strip owns the pin state and the controller only mirrors it.
+        /// </summary>
+        public TileGesture StatsKeepGesture { get; set; }
+
+        /// <summary>The stats tile was clicked with StatsTaskManagerGesture.</summary>
+        public event EventHandler StatsTaskManagerRequested;
+
+        /// <summary>Which click on the stats tile raises StatsTaskManagerRequested. Off for none.</summary>
+        public TileGesture StatsTaskManagerGesture { get; set; }
 
         // --- layout -----------------------------------------------------------
 
@@ -1670,6 +1712,39 @@ namespace DesktopSwitcher
             // index at or past _desktops.Count.
             if (index == StatsIndex)
             {
+                // Ahead of the pin toggle, which a modified left click would otherwise also
+                // be. The panel stays as it was: a copy is not a request to open or close it.
+                if (StatsCopyRequested != null && IsGesture(StatsCopyGesture, button))
+                {
+                    Raise(StatsCopyRequested);
+                    RestOrHide();
+                    return;
+                }
+
+                // The panel is left as it was, like a copy: Task Manager opens over it, and
+                // a kept panel is still there when it closes.
+                if (StatsTaskManagerRequested != null && IsGesture(StatsTaskManagerGesture, button))
+                {
+                    Raise(StatsTaskManagerRequested);
+                    RestOrHide();
+                    return;
+                }
+
+                // Checked last, so a gesture set the same as copy or Task Manager does that
+                // rather than both. Unkeeping closes, as the menu item's unticking does - and, as with
+                // a left click putting the panel away, the hover is held off until the
+                // pointer leaves, or it would bring the panel straight back.
+                if (IsGesture(StatsKeepGesture, button))
+                {
+                    if (_statsKept)
+                    {
+                        SetStatsPinned(false);
+                        _statsDismissed = true;
+                    }
+                    else SetStatsPinned(true, true);
+                    return;
+                }
+
                 // Only left click means anything here. Pinning shows the panel at once,
                 // without the hover delay - the click is the request.
                 if (button == MouseButtons.Left)
@@ -2236,6 +2311,27 @@ namespace DesktopSwitcher
         // --- window procedure --------------------------------------------------
 
         /// <summary>Modifier state as the mouse message itself reported it.</summary>
+        /// <summary>
+        /// Whether this click is the given gesture. The modifiers come from ModifierKeys -
+        /// the key state as of the message being handled - rather than the message's own
+        /// MK_ flags, because those carry Ctrl and Shift but not Alt, and one source for all
+        /// three keeps "Ctrl+Shift+click" from counting as both or neither by accident.
+        /// Exactly the named key: Ctrl+Shift+click is not Ctrl+click.
+        /// </summary>
+        static bool IsGesture(TileGesture gesture, MouseButtons button)
+        {
+            Keys mods = Control.ModifierKeys & (Keys.Control | Keys.Shift | Keys.Alt);
+            switch (gesture)
+            {
+                case TileGesture.CtrlClick:   return button == MouseButtons.Left && mods == Keys.Control;
+                case TileGesture.ShiftClick:  return button == MouseButtons.Left && mods == Keys.Shift;
+                case TileGesture.AltClick:    return button == MouseButtons.Left && mods == Keys.Alt;
+                case TileGesture.MiddleClick: return button == MouseButtons.Middle;
+                case TileGesture.ShiftRightClick: return button == MouseButtons.Right && mods == Keys.Shift;
+                default:                      return false;
+            }
+        }
+
         static bool Shift(IntPtr wParam)
         {
             return ((int)(long)wParam & Native.MK_SHIFT) != 0;

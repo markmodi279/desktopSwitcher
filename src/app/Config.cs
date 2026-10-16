@@ -131,6 +131,33 @@ namespace DesktopSwitcher
         public int StatsWarnPercent = 75;
         public int StatsAlertPercent = 90;
 
+        /// <summary>
+        /// The public IPv4 address under the stats panel's tiles, and "Copy public IP" on
+        /// the tile's menu. Off by default because it is the one setting that reaches the
+        /// internet - see PublicIp for who is asked and how often.
+        /// </summary>
+        public bool StatsPublicIp = false;
+
+        /// <summary>
+        /// The click on the stats tile that copies the public IP without opening anything.
+        /// Ctrl+click by default: a plain click already pins the panel, and Ctrl is the key
+        /// people reach for when they mean "copy".
+        /// </summary>
+        public TileGesture StatsCopyGesture = TileGesture.CtrlClick;
+
+        /// <summary>
+        /// The click on the stats tile that toggles the panel kept open, as the menu's "Keep
+        /// open" does. Middle click by default: one button, no modifier, and the tile had
+        /// no use for it.
+        /// </summary>
+        public TileGesture StatsKeepGesture = TileGesture.MiddleClick;
+
+        /// <summary>
+        /// The click on the stats tile that opens Task Manager, as the menu's item does.
+        /// Alt+click by default: the one plain-button modifier the other two left free.
+        /// </summary>
+        public TileGesture StatsTaskManagerGesture = TileGesture.AltClick;
+
         // --- tooltips ---------------------------------------------------------
         public bool Tooltips = true;
         /// <summary>Hover delay before the panel appears. 400ms is the Windows default.</summary>
@@ -184,6 +211,15 @@ namespace DesktopSwitcher
         public const string StatsSection = "Stats";
         public const string AdvancedSection = "Advanced";
         const string StateSection = "Kept by the app";
+
+        // The tile's gestures, in TileGesture's order - shared by the copy and keep settings.
+        // Above All, not beside Choice: static fields initialise in the order they are
+        // written, and All read below them would see null.
+        static readonly string[] GestureChoices =
+            { "off", "ctrl+click", "shift+click", "alt+click", "middle-click", "shift+right-click" };
+        static readonly string[] GestureCaptions =
+            { "Off", "Ctrl+click", "Shift+click", "Alt+click", "Middle click", "Shift+right-click" };
+
 
         /// <summary>
         /// Every setting, in the order the file lists them and the window shows them. The
@@ -317,6 +353,30 @@ namespace DesktopSwitcher
             Int(StatsSection, "statsAlertPercent", "Red at", 1, 100, "%",
                 c => c.StatsAlertPercent, (c, v) => c.StatsAlertPercent = v,
                 "Load at which it turns red. Never below the amber level.")
+                .When(c => c.StatsTile),
+            Bool(StatsSection, "statsPublicIp", "Public IP",
+                c => c.StatsPublicIp, (c, v) => c.StatsPublicIp = v,
+                "Show your public IPv4 address in the stats panel, with a copy item on the tile's "
+                + "right-click menu. Asks Cloudflare (1.1.1.1) when the panel opens - at most every "
+                + "10 minutes, or after a network change.")
+                .When(c => c.StatsTile),
+            Choice(StatsSection, "statsCopyGesture", "Copy IP with",
+                GestureChoices, GestureCaptions,
+                c => (int)c.StatsCopyGesture, (c, v) => c.StatsCopyGesture = (TileGesture)v,
+                "Click on the stats tile that copies your public IP, without opening the panel. "
+                + "The right-click menu's Copy public IP works either way.")
+                .When(c => c.StatsTile && c.StatsPublicIp),
+            Choice(StatsSection, "statsKeepGesture", "Keep open with",
+                GestureChoices, GestureCaptions,
+                c => (int)c.StatsKeepGesture, (c, v) => c.StatsKeepGesture = (TileGesture)v,
+                "Click on the stats tile that keeps the panel open, or closes a kept one - what "
+                + "Keep open on its right-click menu does. If it matches another of these clicks, that one wins.")
+                .When(c => c.StatsTile),
+            Choice(StatsSection, "statsTaskManagerGesture", "Task Manager with",
+                GestureChoices, GestureCaptions,
+                c => (int)c.StatsTaskManagerGesture, (c, v) => c.StatsTaskManagerGesture = (TileGesture)v,
+                "Click on the stats tile that opens Task Manager, as the item on its right-click "
+                + "menu does. If it matches the copy click, copying wins.")
                 .When(c => c.StatsTile),
 
             // --- advanced

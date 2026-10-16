@@ -125,6 +125,7 @@ shell.
 | `--anim [ms]` | steps the strip's easing headlessly and prints each frame; needs no shell at all |
 | `--glide` | the strip's glide to a moved tray edge, headlessly: no jump on the first frame, only toward the target, lands exactly, a mid-glide retarget is absorbed |
 | `--slide [ms]` | the same for the hover panel's travel between buttons, in both styles: placement, the pinned bottom edge, the row-block origin, the accent stub |
+| `--publicip` | asks each public IP service once over HTTPS and prints the address, which one answered, and how long it took - the one selftest that goes online |
 | `--winver` | the Windows build, and whether startup would accept it (19041-19045 only; Windows 11 is refused) |
 | `--config` | every setting with its value, range and default, and that `config.ini` round-trips through the settings table |
 | `--help` | the command list |
@@ -179,6 +180,7 @@ it before the next went on top.
 | **M14** | The stats tile: CPU, memory and network in the hover panel, refreshed live, pinned open by a click. `SystemStats` samples on the reconcile tick so the first panel already has rates; `--stats` checks the figures and the adapter filter. |
 | **M15** | Settings without Notepad: `SettingsWindow`, owner-drawn and themed off the taskbar, applying every change live with Revert and Defaults. `Config.All` became the one table of settings, so `config.ini` is now written grouped and commented, and `ConfigWatcher` applies a hand edit the moment it is saved. `--config` proves the table round-trips; `--settings` opens the window on its own. |
 | **M16** | The modern style, set separately for the strip (`stripStyle`) and the panel (`panelStyle`): rounded cells and a pill on the strip, and a layered hover panel with antialiased corners, a nine-sliced shadow, app icons from `AppIcons` and two-tone rows. Classic draws exactly as before and stays the default for both. `--slide` runs both panel styles from `TooltipWindow.Metrics`. |
+| **M17** | The public IP at the stats panel's top right, copied by Ctrl+click on the tile (`statsCopyGesture`) or **Copy public IP** on its menu, behind `statsPublicIp` (off). Middle click keeps the panel open (`statsKeepGesture`), Alt+click opens Task Manager (`statsTaskManagerGesture`). `PublicIp` asks Cloudflare by IPv4 literal on a pool thread, cached ten minutes or until the network changes - the app's first and only network request. `--publicip` checks both services. |
 
 Between M8 and M9, two fixes worth knowing: tooltip rows lead with the owning app resolved
 from the process, and the tooltip width is fixed rather than sized to content so it does not
