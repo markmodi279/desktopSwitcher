@@ -92,7 +92,7 @@ commented `do not reorder`. They are not stable across Windows versions; see
 | [AppIcons.cs](../src/ui/AppIcons.cs) | The modern panel's per-row icons: the exe's own art at the row's exact size, the window's icon when the exe has none, cached for the session. |
 | [MenuTheme.cs](../src/ui/MenuTheme.cs) | Dresses a `ContextMenuStrip` in colours derived from the sampled taskbar colour. |
 | [SettingsWindow.cs](../src/ui/SettingsWindow.cs) | The Settings window. Edits a copy of the config, one row per entry in `Config.All`, and hands a fresh copy to `Changed` after every edit; it never touches the live config. Revert, Defaults, retheme in place, and its own per-monitor DPI handling. |
-| [SettingsControls.cs](../src/ui/SettingsControls.cs) | The window's owner-drawn controls — toggle, slider, number box, segmented choice, colour swatch, sliding tab row, the setting row — and the shared, mutable `SettingsTheme` they all draw from. |
+| [SettingsControls.cs](../src/ui/SettingsControls.cs) | The window's owner-drawn controls — toggle, slider, number box, segmented choice for two options, a drop-down for more, colour swatch, sliding tab row, the setting row — and the shared, mutable `SettingsTheme` they all draw from. |
 | [Palette.cs](../src/ui/Palette.cs) | The one place that knows which way "away from the background" is. Lifts a surface off the taskbar colour and picks text tones for it, in whichever direction that colour demands. |
 
 Note what is *not* here: neither the strip nor the tooltip knows what a desktop is called or

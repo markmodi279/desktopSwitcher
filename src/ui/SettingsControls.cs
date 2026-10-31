@@ -575,9 +575,10 @@ namespace DesktopSwitcher
     /// A few mutually exclusive options side by side, the selected one filled with the
     /// accent. Click one, or Left and Right with focus.
     ///
-    /// Segments are narrower past three: statsTileStyle has six, and at the two-or-three
-    /// width they made a control wider than the help text beside it, which then wrapped
-    /// into a column a word wide. Six-letter captions still fit the narrower segment.
+    /// Only for two options now - see Dropdown for why more go there. Segments are still
+    /// narrower past three: statsTileStyle had six, and at the two-or-three width they made a
+    /// control wider than the help text beside it, which then wrapped into a column a word
+    /// wide.
     /// </summary>
     sealed class Segmented : ThemedControl
     {
@@ -692,6 +693,191 @@ namespace DesktopSwitcher
                 if (!Enabled) ink = i == _index ? Theme.Surface : Theme.Muted;
                 else ink = i == _index ? Theme.OnAccent : Theme.Body;
                 DrawText(g, _items[i], Theme.BodyFont, Segment(i), ink, TextFormatFlags.HorizontalCenter);
+            }
+        }
+    }
+
+    /// <summary>
+    /// One of several options, shown as the chosen one with a chevron; click it - or Space,
+    /// Enter, F4 or Alt+Down with focus - for the list. Up and Down step through the options
+    /// without opening it, as a stock combo box does.
+    ///
+    /// For every choice with more than two options. Those were Segmented once, all their
+    /// options laid out in a row, and past three that stopped reading as one control: six
+    /// segments made a strip wider than the help text beside it, and the narrowed segments
+    /// that fixed the width only just fitted their captions. Two options stay Segmented,
+    /// where seeing both at once is the point.
+    ///
+    /// The list is a ContextMenuStrip dressed by MenuTheme, the same one the strip's own
+    /// menus use, so it opens looking like the rest of the app rather than like a stock
+    /// ComboBox's light-chrome drop-down - which owner draw of the box alone does not reach.
+    /// A fresh MenuTheme per opening, because the theme's colours change under an open
+    /// window and a MenuTheme bakes them in when it is made.
+    /// </summary>
+    sealed class Dropdown : ThemedControl
+    {
+        readonly string[] _items;
+        int _index;
+        ContextMenuStrip _menu;   // the last list opened, kept until the next or Dispose
+        MenuTheme _menuTheme;     // and what dressed it, which owns a font
+        bool _closedByPress;      // the list just closed on a press on this box - see Open
+
+        public event EventHandler SelectedIndexChanged;
+
+        public Dropdown(SettingsTheme theme, string[] items) : base(theme)
+        {
+            _items = items;
+
+            // As wide as the longest caption needs, so the box does not change width as the
+            // choice changes, with a floor so a list of short words is still something to aim at.
+            int widest = 0;
+            foreach (string item in items)
+                widest = Math.Max(widest, TextRenderer.MeasureText(item, theme.BodyFont, Size.Empty,
+                                                                   TextFormatFlags.NoPadding).Width);
+            Size = new Size(Math.Max(theme.S(120), widest + theme.S(44)), theme.S(26));
+        }
+
+        /// <summary>Setting this from code does not raise SelectedIndexChanged.</summary>
+        public int SelectedIndex
+        {
+            get { return _index; }
+            set { if (value == _index || value < 0 || value >= _items.Length) return; _index = value; Invalidate(); }
+        }
+
+        void Pick(int i)
+        {
+            if (i < 0 || i >= _items.Length || i == _index) return;
+            _index = i;
+            Invalidate();
+            if (SelectedIndexChanged != null) SelectedIndexChanged(this, EventArgs.Empty);
+        }
+
+        void Open()
+        {
+            DisposeMenu();
+
+            _menuTheme = new MenuTheme(Theme.Background, Theme.Scale);
+            _menu = new ContextMenuStrip();
+            for (int i = 0; i < _items.Length; i++)
+            {
+                int index = i;
+                var item = new ToolStripMenuItem(_items[i]);
+                item.Click += delegate { Pick(index); };
+                _menu.Items.Add(item);
+            }
+            _menuTheme.Apply(_menu);
+
+            // The box's own font rather than the menu's, which is a pixel smaller for the
+            // strip's sake, so the list reads as this control opened; the chosen option in
+            // the semibold the row titles use. Both belong to the theme, so nothing here
+            // makes a font that would need disposing.
+            _menu.Font = Theme.BodyFont;
+            _menu.Items[_index].Font = Theme.TitleFont;
+
+            // At least as wide as the box, so the list hangs from it rather than from its
+            // left corner. Items sized by hand: a drop-down sizes itself to its widest caption.
+            int width = Width - _menu.Padding.Horizontal;
+            foreach (ToolStripItem item in _menu.Items)
+            {
+                Size preferred = item.GetPreferredSize(Size.Empty);
+                item.AutoSize = false;
+                item.Size = new Size(Math.Max(preferred.Width, width), preferred.Height);
+            }
+
+            // A press outside an open list closes it before the press is delivered, so a
+            // press on this box to close the list would arrive here next and open it again.
+            // Noted on the way out, the press that closed it is let go: the box toggles, as a
+            // stock combo box does.
+            _menu.Closed += delegate(object sender, ToolStripDropDownClosedEventArgs args)
+            {
+                _closedByPress = args.CloseReason == ToolStripDropDownCloseReason.AppClicked
+                                 && ClientRectangle.Contains(PointToClient(Cursor.Position));
+            };
+
+            _menu.Show(this, new Point(0, Height));
+
+            // Highlighted, so the keyboard starts from the current option, not the top.
+            _menu.Items[_index].Select();
+        }
+
+        void DisposeMenu()
+        {
+            if (_menu != null) { _menu.Dispose(); _menu = null; }
+            if (_menuTheme != null) { _menuTheme.Dispose(); _menuTheme = null; }
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                Focus();
+                if (_closedByPress) _closedByPress = false;
+                else Open();
+            }
+            base.OnMouseDown(e);
+        }
+
+        protected override bool IsInputKey(Keys keyData)
+        {
+            Keys k = keyData & Keys.KeyCode;
+            if (k == Keys.Up || k == Keys.Down) return true;
+            return base.IsInputKey(keyData);
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter || e.KeyCode == Keys.F4
+                || (e.KeyCode == Keys.Down && e.Alt))
+            {
+                Open();
+                e.Handled = true;
+            }
+            else if (e.KeyCode == Keys.Up) { Pick(_index - 1); e.Handled = true; }
+            else if (e.KeyCode == Keys.Down) { Pick(_index + 1); e.Handled = true; }
+            base.OnKeyDown(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) DisposeMenu();
+            base.Dispose(disposing);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            var outer = new RectangleF(0.5f, 0.5f, Width - 2, Height - 2);
+            Color field = !Enabled ? Theme.Surface : (Hot ? Theme.FieldHot : Theme.Field);
+
+            using (GraphicsPath path = SettingsTheme.Rounded(outer, Theme.S(4)))
+            {
+                using (var brush = new SolidBrush(field)) g.FillPath(brush, path);
+                using (var pen = new Pen(ShowFocus ? Theme.Primary : Theme.Border, ShowFocus ? 2f : 1f))
+                    g.DrawPath(pen, path);
+            }
+
+            int chevronZone = Theme.S(26);
+            var text = new Rectangle(Theme.S(9), 0, Width - Theme.S(9) - chevronZone, Height - 1);
+            DrawText(g, _items[_index], Theme.BodyFont, text, Enabled ? Theme.Body : Theme.Muted,
+                     TextFormatFlags.Left);
+
+            // A chevron rather than a filled triangle: the menus and the tabs are all line,
+            // and a solid wedge would be the heaviest mark in the window.
+            float cx = Width - chevronZone / 2f - 1;
+            float cy = (Height - 1) / 2f;
+            float half = Theme.S(4);
+            using (var pen = new Pen(Enabled ? Theme.Secondary : Theme.Muted, Math.Max(1f, Theme.S(3) / 2f)))
+            {
+                pen.StartCap = LineCap.Round;
+                pen.EndCap = LineCap.Round;
+                g.DrawLines(pen, new[]
+                {
+                    new PointF(cx - half, cy - half / 2f),
+                    new PointF(cx, cy + half / 2f),
+                    new PointF(cx + half, cy - half / 2f),
+                });
             }
         }
     }

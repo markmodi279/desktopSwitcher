@@ -102,8 +102,10 @@ namespace DesktopSwitcher
 
             _theme = new SettingsTheme(_scale, background, _working.HighlightColor);
             BackColor = _theme.Surface;
-            // Wide enough for the widest editor - the six-way tile style - beside its help
-            // text's 120px floor and the row's padding; at 480 the two overlapped.
+            // Sized for the widest editor - the six-way tile style, when it was six segments -
+            // beside its help text's 120px floor and the row's padding; at 480 the two
+            // overlapped. Choices past two are drop-downs now and narrower; the minimum was
+            // left where it was rather than re-measured for that.
             MinimumSize = new Size(_theme.S(540), _theme.S(380));
 
             _page = new Panel();
@@ -249,6 +251,20 @@ namespace DesktopSwitcher
 
                 case SettingKind.Choice:
                 {
+                    // Two options side by side, where seeing both is the point; more in a
+                    // list. The two share SelectedIndex and its event, so the wiring is one.
+                    if (s.Captions.Length > 2)
+                    {
+                        var list = new Dropdown(_theme, s.Captions);
+                        list.SelectedIndexChanged += delegate
+                        {
+                            if (_syncing) return;
+                            Edited(s, delegate { s.SetInt(_working, list.SelectedIndex); });
+                        };
+                        _sync.Add(delegate { list.SelectedIndex = s.GetInt(_working); });
+                        return list;
+                    }
+
                     var choice = new Segmented(_theme, s.Captions);
                     choice.SelectedIndexChanged += delegate
                     {
