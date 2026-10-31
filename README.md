@@ -96,6 +96,25 @@ there, so a `Win+Ctrl+Left/Right` you did not look at still leaves you knowing w
 you went. Hold the key down and it keeps up, tracking each switch from wherever it had got
 to. Set `animationMs = 0` if you would rather it snapped.
 
+### Keyboard shortcuts
+
+| Keys | Effect |
+|---|---|
+| `Ctrl+Alt+1` ... `Ctrl+Alt+9` | switch straight to that desktop |
+| `Ctrl+Alt+Left` / `Ctrl+Alt+Right` | previous / next desktop, going round at the ends |
+
+These switch the way a click on the strip does: at once, without the sliding animation
+Windows plays for its own `Ctrl+Win+Left/Right`. Those keep working, and keep sliding. A
+digit past your last desktop does nothing. Holding a key down moves once, not repeatedly.
+
+The modifiers are set separately for the digits and the arrows, in Settings > Shortcuts
+(`jumpShortcut`, `stepShortcut`): Ctrl+Alt, Alt+Shift, Ctrl+Shift, Ctrl+Win+Alt, or off.
+`stepWrap = false` stops at the first and last desktop instead of going round. If your
+keyboard types characters with AltGr - German, French and most European layouts - Ctrl+Alt
+plus a digit is how some of them are typed, and the shortcut takes them over; pick
+Alt+Shift there. A combination another app already holds cannot be claimed: the tray says
+which, and `--hotkeys` lists what is free.
+
 Hover a number and a panel appears above it listing the windows open on that desktop —
 Windows 10 otherwise gives you no way to see that without `Win+Tab`. Desktops with nothing
 on them say so, which is how you find the one that is safe to remove.
@@ -179,8 +198,8 @@ using is saved and restored at login.
 
 ## Configuration
 
-**Settings** on the tray menu has every option on four tabs — Strip, Hover panel, Stats,
-Advanced — with switches, sliders, choices and colour pickers. Each change shows on the
+**Settings** on the tray menu has every option on five tabs — Strip, Hover panel, Stats,
+Shortcuts, Advanced — with switches, sliders, choices and colour pickers. Each change shows on the
 strip as you make it and is saved straight away. **Revert** goes back to how things were
 when the window opened, **Defaults** to how they started, and **Close** just closes:
 nothing is waiting to be applied. Options that do nothing given the others — the hover

@@ -158,6 +158,34 @@ namespace DesktopSwitcher
         /// </summary>
         public TileGesture StatsTaskManagerGesture = TileGesture.AltClick;
 
+        // --- shortcuts ----------------------------------------------------------
+        /// <summary>
+        /// Held with a digit, switches straight to that desktop - see Hotkeys for why these
+        /// land without the slide Ctrl+Win+arrows plays. Ctrl+Alt by default: free on a US
+        /// layout, and the pair other desktop tools reach for. On a layout with AltGr
+        /// (German, French and most of Europe) Ctrl+Alt+digit is how some characters are
+        /// typed - AltGr+2 is a superscript two in German, AltGr+0 a closing brace - and a
+        /// registered hotkey takes those away from every app, so Alt+Shift is the choice
+        /// there.
+        /// </summary>
+        public HotkeyModifiers JumpHotkeys = HotkeyModifiers.CtrlAlt;
+
+        /// <summary>
+        /// Held with Left or Right, steps to the previous or next desktop. Ctrl+Alt by
+        /// default, to match the digits. Older Intel graphics drivers rotate the screen on
+        /// Ctrl+Alt+arrows; where they hold the keys first, registering fails, the tray says
+        /// so, and another choice here is the way out.
+        /// </summary>
+        public HotkeyModifiers StepHotkeys = HotkeyModifiers.CtrlAlt;
+
+        /// <summary>
+        /// Next on the last desktop goes round to the first, and previous on the first to the
+        /// last. On by default, which is not what Ctrl+Win+arrows does - they stop at the
+        /// ends - but it is what was asked for: with a handful of desktops, going round is
+        /// fewer presses than going back.
+        /// </summary>
+        public bool StepWrap = true;
+
         // --- tooltips ---------------------------------------------------------
         public bool Tooltips = true;
         /// <summary>Hover delay before the panel appears. 400ms is the Windows default.</summary>
@@ -209,6 +237,7 @@ namespace DesktopSwitcher
         public const string StripSection = "Strip";
         public const string PanelSection = "Hover panel";
         public const string StatsSection = "Stats";
+        public const string ShortcutsSection = "Shortcuts";
         public const string AdvancedSection = "Advanced";
         const string StateSection = "Kept by the app";
 
@@ -219,6 +248,13 @@ namespace DesktopSwitcher
             { "off", "ctrl+click", "shift+click", "alt+click", "middle-click", "shift+right-click" };
         static readonly string[] GestureCaptions =
             { "Off", "Ctrl+click", "Shift+click", "Alt+click", "Middle click", "Shift+right-click" };
+
+        // The shortcut modifiers, in HotkeyModifiers' order - shared by the jump and step
+        // settings, and above All for the same reason as the gestures.
+        static readonly string[] HotkeyChoices =
+            { "off", "ctrl+alt", "alt+shift", "ctrl+shift", "ctrl+win+alt" };
+        static readonly string[] HotkeyCaptions =
+            { "Off", "Ctrl+Alt", "Alt+Shift", "Ctrl+Shift", "Ctrl+Win+Alt" };
 
 
         /// <summary>
@@ -378,6 +414,23 @@ namespace DesktopSwitcher
                 "Click on the stats tile that opens Task Manager, as the item on its right-click "
                 + "menu does. If it matches the copy click, copying wins.")
                 .When(c => c.StatsTile),
+
+            // --- shortcuts
+            Choice(ShortcutsSection, "jumpShortcut", "Jump to desktop",
+                HotkeyChoices, HotkeyCaptions,
+                c => (int)c.JumpHotkeys, (c, v) => c.JumpHotkeys = (HotkeyModifiers)v,
+                "Hold these and press 1 to 9 to switch straight to that desktop, with no slide. "
+                + "If your keyboard types characters with AltGr, pick Alt+Shift instead."),
+            Choice(ShortcutsSection, "stepShortcut", "Previous / next",
+                HotkeyChoices, HotkeyCaptions,
+                c => (int)c.StepHotkeys, (c, v) => c.StepHotkeys = (HotkeyModifiers)v,
+                "Hold these and press Left or Right to move one desktop over, with no slide. "
+                + "Windows' own Ctrl+Win+arrows keep working, and keep sliding."),
+            Bool(ShortcutsSection, "stepWrap", "Wrap around",
+                c => c.StepWrap, (c, v) => c.StepWrap = v,
+                "Next on the last desktop goes back to the first, and previous on the first "
+                + "goes to the last. Off stops at the ends.")
+                .When(c => c.StepHotkeys != HotkeyModifiers.Off),
 
             // --- advanced
             Int(AdvancedSection, "reconcileMs", "Check interval", 250, 60000, "ms",

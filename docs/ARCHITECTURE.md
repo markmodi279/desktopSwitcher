@@ -57,6 +57,7 @@ Everything undocumented lives here, and nothing above this folder knows a GUID.
 | [VirtualDesktopApi.cs](../src/shell/VirtualDesktopApi.cs) | The COM interfaces and every operation on a desktop: list, switch, create, remove, rename, move a window. No caching, no policy. |
 | [VirtualDesktopNotify.cs](../src/shell/VirtualDesktopNotify.cs) | The notification sink. Registers a COM object with the shell and turns its callbacks into .NET events. |
 | [Native.cs](../src/shell/Native.cs) | P/Invoke. Window enumeration, geometry, parenting, painting, DPI, process lookup. |
+| [Hotkeys.cs](../src/shell/Hotkeys.cs) | The desktop shortcuts: `RegisterHotKey` on the controller's window for Ctrl+Alt+1..9 and Ctrl+Alt+Left/Right (or whatever `jumpShortcut` and `stepShortcut` say), and the decoding of a `WM_HOTKEY` id back into "desktop N" or "one over". |
 | [ClickWatcher.cs](../src/shell/ClickWatcher.cs) | A low-level mouse hook on a thread of its own, posting every button press on the system to a window. Installed only while the stats panel is pinned, so a click elsewhere can close it. |
 
 Two rules hold this layer together. **`IVirtualDesktop` pointers are never held across
@@ -396,6 +397,21 @@ has no `TargetFrameworkAttribute`, so the runtime offers only SSL3 and TLS 1.0 u
 `SecurityProtocolType.Tls12` is added, which both services need; and only a reply that
 parses as a dotted-quad IPv4 is accepted, so a captive portal's login page never reaches
 the clipboard.
+
+**Shortcuts are registered hotkeys, and read the current desktop from the shell.** The
+slide Windows plays on `Ctrl+Win+arrows` belongs to Explorer's keyboard path, not to the
+switch - `SwitchDesktop`, which a click on the strip already calls, lands at once - so a
+shortcut only has to end in that call. `RegisterHotKey` rather than a low-level keyboard
+hook, which could have taken `Ctrl+Win+arrows` over: a hook sees every keystroke, and Windows
+silently removes one whose thread is slow to answer, which the UI thread, making COM calls
+into the shell, sometimes is. A registered hotkey costs nothing between presses and belongs
+to our window, so an Explorer restart does not touch it. `MOD_NOREPEAT` keeps a held key to
+one switch. Stepping reads the current desktop with `GetCurrentId` instead of from the
+model, because the model only moves when the switch notification has come back around the
+loop above: two quick presses of next would otherwise both step from the same desktop.
+Registration is first come, first served, so what fails is reported in a tray balloon,
+and re-registration happens only when the modifiers change, so the balloon does not come
+back on every unrelated edit.
 
 **The foreground window cannot be read at click time.** Clicking the taskbar hands focus to
 Explorer, so by the time a handler runs, the foreground window is `Shell_TrayWnd` — and

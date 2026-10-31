@@ -37,6 +37,7 @@ namespace DesktopSwitcher
         ContextMenuStrip _buttonMenu;   // the open one, rebuilt per click - contents follow the model
         MenuTheme _menuTheme;
         ConfigWatcher _configWatcher;   // applies hand edits to config.ini as they are saved
+        Hotkeys _hotkeys;               // the desktop shortcuts, held on this window
         SettingsWindow _settings;       // the open one, or null - there is only ever one
         Config _settingsPending;        // the window's latest change, waiting out the debounce
         Timer _settingsTimer;           // that debounce
@@ -202,6 +203,11 @@ namespace DesktopSwitcher
             // After the writes above, so the directory is certain to exist and the rewrite is
             // recorded as this process's own rather than seen as a hand edit.
             _configWatcher = new ConfigWatcher(this, OnConfigFileChanged);
+
+            // Only once the service exists: a key pressed before it does would have nothing
+            // to switch with.
+            _hotkeys = new Hotkeys(Handle);
+            RegisterHotkeys();
 
             _started = true;
             Log.Write("controller: started");
@@ -1467,6 +1473,11 @@ namespace DesktopSwitcher
                 Log.Write("controller: TaskbarCreated received");
                 HandleExplorerRestart();
             }
+            else if (_started && m.Msg == Native.WM_HOTKEY)
+            {
+                OnHotkey((int)m.WParam);
+                return;
+            }
             else if (_started && m.Msg == 0x007E) // WM_DISPLAYCHANGE
             {
                 Log.Write("controller: display changed");
@@ -1625,6 +1636,9 @@ namespace DesktopSwitcher
                 next.LastCount = _config.LastCount;
             }
 
+            bool keysChanged = next.JumpHotkeys != _config.JumpHotkeys
+                               || next.StepHotkeys != _config.StepHotkeys;
+
             _config = next;
             if (save || _config.LastCount != written) _config.Save();
 
@@ -1647,10 +1661,105 @@ namespace DesktopSwitcher
 
             if (_started) RebuildStrip();
 
+            // Only when the keys moved. Re-registering is cheap, but a combination another
+            // app holds would fail again and bring its balloon back on every unrelated edit.
+            // stepWrap needs nothing here - OnHotkey reads it at each press.
+            if (_hotkeys != null && keysChanged) RegisterHotkeys();
+
             // From anywhere but the window itself, the window is now showing stale values.
             if (_settings != null && !save) _settings.ShowConfig(_config);
 
             Log.Write("controller: settings applied - " + reason);
+        }
+
+        // --- shortcuts ------------------------------------------------------------
+
+        /// <summary>
+        /// Claims the configured shortcuts, letting go of any held before, and says in a
+        /// balloon which could not be had. Said rather than only logged: a key another app
+        /// holds simply does nothing when pressed, and with diagnostics off there would be
+        /// no trace anywhere of why.
+        /// </summary>
+        void RegisterHotkeys()
+        {
+            List<string> failed = _hotkeys.Register(_config.JumpHotkeys, _config.StepHotkeys);
+            if (failed.Count == 0 || _tray == null) return;
+
+            string keys = failed.Count <= 3
+                ? string.Join(", ", failed.ToArray())
+                : failed[0] + " and " + (failed.Count - 1) + " more";
+            _tray.ShowBalloonTip(5000, "Shortcut unavailable",
+                keys + (failed.Count == 1 ? " is" : " are") + " already used by another app. "
+                + "Pick other keys under Settings > Shortcuts.", ToolTipIcon.Warning);
+        }
+
+        /// <summary>
+        /// A shortcut was pressed: work out the desktop it means and switch there, through
+        /// the same call a click on the strip makes, so it lands without the slide.
+        ///
+        /// The current desktop is asked of the shell, not read from the model. The model
+        /// only moves when the switch notification arrives, posted back onto this thread
+        /// after the switch; two quick presses of Ctrl+Alt+Right would read the same stale
+        /// current twice, and the second would switch to where the first already went. The
+        /// shell's answer is current the moment SwitchDesktop returns.
+        /// </summary>
+        void OnHotkey(int id)
+        {
+            int jumpIndex, step;
+            if (_service == null || !Hotkeys.TryDecode(id, out jumpIndex, out step)) return;
+
+            IList<Desktop> desktops = _service.Desktops;
+            int count = desktops.Count;
+            if (count == 0) return;
+
+            Guid currentId;
+            try
+            {
+                currentId = _api.GetCurrentId();
+            }
+            catch (Exception ex)
+            {
+                // The shell is between lives, an Explorer restart most likely. The model's
+                // idea is the best there is, and the switch below will fail quietly too if
+                // the shell is really gone.
+                Log.Write("hotkeys: current desktop unreadable - " + ex.Message);
+                Desktop known = _service.Current;
+                if (known == null) return;
+                currentId = known.Id;
+            }
+
+            int current = -1;
+            for (int i = 0; i < count; i++)
+                if (desktops[i].Id == currentId) { current = i; break; }
+
+            int target;
+            if (step == 0)
+            {
+                // A digit past the last desktop does nothing rather than making one: creating
+                // desktops from a stray keypress is a surprise, and '+' is one click away.
+                if (jumpIndex >= count) return;
+                target = jumpIndex;
+            }
+            else
+            {
+                // The model can lag a desktop created or removed a moment ago, so the shell's
+                // current may not be in it. Step from the model's own current then.
+                if (current < 0)
+                {
+                    for (int i = 0; i < count; i++)
+                        if (desktops[i].IsCurrent) { current = i; break; }
+                    if (current < 0) return;
+                }
+
+                target = current + step;
+                if (_config.StepWrap) target = (target + count) % count;
+                else if (target < 0 || target >= count) return;
+            }
+
+            if (target == current) return;
+
+            Log.Write(delegate { return "hotkeys: id " + id + " -> desktop " + (target + 1); });
+            _service.SwitchTo(desktops[target].Id);
         }
 
         // --- settings window ----------------------------------------------------
@@ -1979,6 +2088,7 @@ namespace DesktopSwitcher
             if (_settings != null) { _settings.Close(); _settings = null; }
 
             if (_configWatcher != null) { _configWatcher.Dispose(); _configWatcher = null; }
+            if (_hotkeys != null) { _hotkeys.Dispose(); _hotkeys = null; }
 
             if (_saveTimer != null)
             {

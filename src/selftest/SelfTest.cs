@@ -61,6 +61,7 @@ namespace DesktopSwitcher
                     case "--config":  return CmdConfig();
                     case "--quit":    return CmdQuit();
                     case "--winver":  return CmdWinVer();
+                    case "--hotkeys": return CmdHotkeys();
                     case "--settings": return CmdSettings(args);
                     case "--help":
                     case "-h":
@@ -109,6 +110,7 @@ namespace DesktopSwitcher
             Console.WriteLine("  --quit                 close any running DesktopSwitcher the way Exit does, so its tray icon goes with it");
             Console.WriteLine("  --config               print every setting and check config.ini round-trips");
             Console.WriteLine("  --winver               print the Windows build and whether startup would accept it");
+            Console.WriteLine("  --hotkeys              print the desktop shortcuts and whether each one is free to register");
             Console.WriteLine("  --settings [light|dark|#RRGGBB]  open the Settings window on its own; saves nothing");
             Console.WriteLine();
         }
@@ -1787,6 +1789,40 @@ namespace DesktopSwitcher
                                           : "refused: " + why);
             Console.WriteLine("crash report would be written to " + Startup.CrashPath);
             return why == null ? 0 : 1;
+        }
+
+        /// <summary>
+        /// The configured shortcuts, each tried and let go again at once. Read-only in
+        /// effect: a key this can take is free, and is released before the next one is
+        /// tried. Run with the app quit, it says what the app would get; run beside it,
+        /// every key the app holds reads as taken - which is how to tell it holds them.
+        /// </summary>
+        static int CmdHotkeys()
+        {
+            Config cfg = Config.Load();
+            Console.WriteLine("jumpShortcut = " + Describe(cfg.JumpHotkeys) + ", stepShortcut = "
+                              + Describe(cfg.StepHotkeys) + ", stepWrap = " + (cfg.StepWrap ? "true" : "false"));
+
+            int running = 0;
+            int self = System.Diagnostics.Process.GetCurrentProcess().Id;
+            foreach (System.Diagnostics.Process p in System.Diagnostics.Process.GetProcessesByName("DesktopSwitcher"))
+            {
+                if (p.Id != self) running++;
+                p.Dispose();
+            }
+            if (running > 0)
+                Console.WriteLine("DesktopSwitcher is running: the keys it holds read as taken below.");
+            Console.WriteLine();
+
+            List<string> lines = Hotkeys.Probe(cfg.JumpHotkeys, cfg.StepHotkeys);
+            if (lines.Count == 0) Console.WriteLine("  both shortcuts are off");
+            foreach (string line in lines) Console.WriteLine("  " + line);
+            return 0;
+        }
+
+        static string Describe(HotkeyModifiers m)
+        {
+            return m == HotkeyModifiers.Off ? "off" : Hotkeys.ModifierName(m);
         }
 
         static int CmdQuit()
