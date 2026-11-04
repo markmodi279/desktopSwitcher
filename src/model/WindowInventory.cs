@@ -332,7 +332,14 @@ namespace DesktopSwitcher
         /// They cannot be matched by parentage: on current builds the CoreWindow is a
         /// sibling of the frame, not its child, which is why Native's child lookup only
         /// ever catches some of them. What the two do share is their caption, which the
-        /// shell keeps in step.
+        /// shell keeps in step - for apps that set a title at all.
+        ///
+        /// An app that does set one breaks the exact match: Notepads' frame reads
+        /// "Untitled.txt - Notepads" while its CoreWindow still reads "Notepads", and both
+        /// were listed, the frame as "Windows app". So a frame whose caption ends in a
+        /// CoreWindow's, after a separator, pairs with it too. That mattered beyond the
+        /// double row: close-all posted WM_CLOSE to the CoreWindow as well as the frame,
+        /// and the app vanished with its save prompt unanswered.
         /// </summary>
         sealed class UwpPairs
         {
@@ -374,7 +381,29 @@ namespace DesktopSwitcher
             /// window counted twice.</summary>
             public bool IsDuplicateCore(IntPtr hwnd, string title)
             {
-                return _cores.Contains(hwnd) && _framed.Contains(title);
+                if (!_cores.Contains(hwnd)) return false;
+                if (_framed.Contains(title)) return true;
+
+                foreach (string frame in _framed)
+                    if (EndsWithTitle(frame, title)) return true;
+                return false;
+            }
+
+            /// <summary>
+            /// True when <paramref name="frame"/> is <paramref name="core"/> with a document
+            /// name put in front: "Untitled.txt - Notepads" over "Notepads". The character
+            /// before the match must be a separator - a space, a dash, or the invisible
+            /// left-to-right mark (U+200E) some apps put before theirs - so "Mail" does not
+            /// pair with "Voicemail".
+            /// </summary>
+            static bool EndsWithTitle(string frame, string core)
+            {
+                if (core.Length == 0 || frame.Length <= core.Length) return false;
+                if (!frame.EndsWith(core, StringComparison.Ordinal)) return false;
+
+                char before = frame[frame.Length - core.Length - 1];
+                return before == ' ' || before == '-' || before == '\u2013' || before == '\u2014'
+                    || before == '\u200E';
             }
 
             /// <summary>
@@ -388,7 +417,20 @@ namespace DesktopSwitcher
 
                 IntPtr core;
                 if (_coreByTitle.TryGetValue(title, out core)) return core;
-                return hwnd;
+
+                // The longest CoreWindow title the frame ends with, so "Notepads" is not
+                // beaten by some shorter, unrelated "pads".
+                IntPtr best = IntPtr.Zero;
+                int bestLength = 0;
+                foreach (KeyValuePair<string, IntPtr> pair in _coreByTitle)
+                {
+                    if (pair.Key.Length > bestLength && EndsWithTitle(title, pair.Key))
+                    {
+                        best = pair.Value;
+                        bestLength = pair.Key.Length;
+                    }
+                }
+                return best != IntPtr.Zero ? best : hwnd;
             }
         }
 

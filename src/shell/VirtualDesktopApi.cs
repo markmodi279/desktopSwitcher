@@ -469,6 +469,54 @@ namespace DesktopSwitcher
             }, "MoveWindow");
         }
 
+        /// <summary>
+        /// True for a window shown on every desktop - Task View's "Show this window on all
+        /// desktops", or "Show windows from this app on all desktops".
+        ///
+        /// Asked by visibility rather than through IVirtualDesktopPinnedApps. That interface
+        /// answers the two kinds of pinning separately, and the app kind wants the view's
+        /// AppUserModelId, which means declaring IApplicationView's long vtable - several
+        /// dozen slots of risk for one string. A pinned view is visible on a desktop that is
+        /// not its own whichever way it was pinned, and IsViewVisible sits in a slot
+        /// IVirtualDesktop already declares. So: visible on any desktop besides the one
+        /// GetWindowDesktopId names means pinned.
+        ///
+        /// False with a single desktop, where there is no other to look at - and where
+        /// "on every desktop" and "on this one" are the same thing anyway. False too for a
+        /// window the view collection does not know; better to treat an unknown window as
+        /// belonging to its desktop than to protect it by guesswork.
+        /// </summary>
+        public bool IsPinned(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero || !Native.IsWindow(hwnd)) return false;
+
+            Guid home;
+            if (!TryGetWindowDesktop(hwnd, out home)) return false;
+
+            return Do(delegate
+            {
+                // Fresh, for the same TYPE_E_ELEMENTNOTFOUND reason MoveWindow queries it.
+                IApplicationView view;
+                int hr = QueryViewCollection().GetViewForHwnd(hwnd, out view);
+                if (hr < 0 || view == null) return false;
+
+                Guid[] ids = GetDesktopIdsUnwrapped();
+                for (int i = 0; i < ids.Length; i++)
+                {
+                    if (ids[i] == home) continue;
+
+                    Guid other = ids[i];
+                    IVirtualDesktop desktop = _manager.FindDesktop(ref other);
+                    if (desktop == null) continue;
+
+                    int visible;
+                    desktop.IsViewVisible(view, out visible);
+                    if (visible != 0) return true;
+                }
+                return false;
+            }, "IsPinned");
+        }
+
         // Internal helper used inside an existing Do() - must not re-enter Do().
         Guid[] GetDesktopIdsUnwrapped()
         {

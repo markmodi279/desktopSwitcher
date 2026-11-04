@@ -83,6 +83,19 @@ gestures cannot: **Send "Chrome — Inbox" here** names the window that is going
 Anything impossible right now is greyed rather than hidden — switching to the desktop you
 are already on, sending a window that is already there.
 
+**Close all and remove** clears a desktop and takes it away without visiting it. It asks
+first, then closes each window the way its own X would, so an app with unsaved work stops to
+ask about saving rather than losing it. A small panel opens at once and ticks each window off
+as it goes. A window still there after a second is marked: **asking to save** when the app
+uses a real dialog (Brave does), **still open** when it draws its question inside its own
+window (Terminal and Notepads do), since those cannot be told apart from a slow close. The
+questions are on the other desktop, so **Go there** takes you to them, and the panel, which
+shows on every desktop, comes along. **Force close** ends whatever is still open without
+saving (which takes those apps' windows on other desktops too), and **Cancel** stops,
+leaving what closed closed. The desktop is removed the moment it is empty, never before.
+Windows pinned with Task View's **Show this window on all desktops** are left alone, since
+closing one would take it off every desktop.
+
 The desktop's name titles the menu. Click it to rename — Enter saves, Escape or clicking
 anywhere else leaves it alone, and an empty name puts the desktop back to **Desktop N**.
 The name is set through the shell, so Task View shows it too.

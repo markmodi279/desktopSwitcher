@@ -77,6 +77,7 @@ commented `do not reorder`. They are not stable across Windows versions; see
 | [DesktopService.cs](../src/model/DesktopService.cs) | The only type the UI talks to. Owns the authoritative desktop list and merges the two sources it arrives from. |
 | [Desktop.cs](../src/model/Desktop.cs) | Immutable snapshot of one desktop: id, index, name, whether it is current. |
 | [WindowInventory.cs](../src/model/WindowInventory.cs) | Which windows are on which desktop, and which app owns each one. Built on demand, cached for a second. Also answers the cheaper question of which desktops merely *have* windows, for the occupancy dot. |
+| [WindowCloser.cs](../src/model/WindowCloser.cs) | The mechanism behind close-all: which windows on a desktop to close (less pinned ones and our own), `WM_CLOSE` posted to each, whether one is gone or has a save prompt up (a real dialog disables its owner; a question drawn inside the window cannot be seen, and reads as still open), and ending the processes behind the ones that will not go. Never forces Explorer or ApplicationFrameHost. |
 | [ForegroundTracker.cs](../src/model/ForegroundTracker.cs) | Remembers the last real window to hold focus, so "send the active window here" has something to send. |
 | [SystemStats.cs](../src/model/SystemStats.cs) | CPU, memory and network throughput for the stats tile. Rates from the difference between two readings, network adapters cached between change notifications. |
 | [PublicIp.cs](../src/model/PublicIp.cs) | The public IPv4 address, for the stats panel's top right and the tile's copy gesture and menu item. Asked of Cloudflare on a pool thread when the panel opens, cached ten minutes or until the network changes. Off unless `statsPublicIp`. |
@@ -93,6 +94,8 @@ commented `do not reorder`. They are not stable across Windows versions; see
 | [MenuTheme.cs](../src/ui/MenuTheme.cs) | Dresses a `ContextMenuStrip` in colours derived from the sampled taskbar colour. |
 | [SettingsWindow.cs](../src/ui/SettingsWindow.cs) | The Settings window. Edits a copy of the config, one row per entry in `Config.All`, and hands a fresh copy to `Changed` after every edit; it never touches the live config. Revert, Defaults, retheme in place, and its own per-monitor DPI handling. |
 | [SettingsControls.cs](../src/ui/SettingsControls.cs) | The window's owner-drawn controls — toggle, slider, number box, segmented choice for two options, a drop-down for more, colour swatch, sliding tab row, the setting row — and the shared, mutable `SettingsTheme` they all draw from. |
+| [ConfirmDialog.cs](../src/ui/ConfirmDialog.cs) | The themed confirmation: a title, a body and any row of buttons, the last one the safe default. Removing a desktop with windows on it, and closing every window on one. |
+| [CloseProgressWindow.cs](../src/ui/CloseProgressWindow.cs) | The live panel of a close-all: one row per window, ticked off or marked as asking to save, with Go there, Force close and Cancel. Modeless, so the prompts can be answered while it is up, and a tool window, so it shows on every desktop. Draws what it is handed; decides nothing. |
 | [Palette.cs](../src/ui/Palette.cs) | The one place that knows which way "away from the background" is. Lifts a surface off the taskbar colour and picks text tones for it, in whichever direction that colour demands. |
 
 Note what is *not* here: neither the strip nor the tooltip knows what a desktop is called or
@@ -110,6 +113,7 @@ only `Controller` holds all three.
 | [Config.cs](../src/app/Config.cs) | The `config.ini` round trip, and `All` — the one table of settings that the parser, the commented file, the Settings window and `--config` all read. Unknown keys preserved, malformed values fall back, a missing key or an older file layout triggers a rewrite. |
 | [Setting.cs](../src/app/Setting.cs) | One entry in that table: key, section, label, help text, kind, range, accessors, and the parse/format/describe for its kind. |
 | [ConfigWatcher.cs](../src/app/ConfigWatcher.cs) | Applies a hand edit to `config.ini` as soon as it is saved. Debounces an editor's burst of events, retries a locked file, and ignores the app's own writes by comparing against `Config.LastWritten`. |
+| [CloseAllRun.cs](../src/app/CloseAllRun.cs) | One "Close all and remove": asks every window to close, watches on a short tick, feeds the panel, carries out its buttons, and removes the desktop on the tick it empties - never past an open window. |
 | [Log.cs](../src/app/Log.cs) | Rolling diagnostic log, off by default, thread-safe because notifications are not. |
 | [AssemblyInfo.cs](../src/app/AssemblyInfo.cs) | Name, description and version. Attributes only; `csc` stamps the Win32 version resource from them, which is how an exe with no project file gets a Details tab. |
 
@@ -143,6 +147,18 @@ row height and no stub, and it takes them from `TooltipWindow.Metrics` - the met
 panel itself is built from - so the test cannot drift from what is drawn. Its window is the
 panel plus a margin for the shadow on every side; that margin is added in `Present` and
 nowhere else, so the geometry `--slide` proves is the panel's, unchanged.
+
+`--closeall` is the other exception in the opposite direction: the one selftest that closes
+windows. It never touches the user's. Each scenario makes a throwaway desktop, fills it with
+scripted windows from `--closetarget` - each in a process of its own, so Force close ends
+only that window - and drives a real `CloseAllRun` against them: an instant close, a tray
+app that hides, slow closes either side of the one-second "still open" mark, a real save
+dialog answered Save and answered Cancel, an in-window question, a hung window, an app that
+opens a replacement as it closes, a pinned window, one that vanishes before it is asked, one
+that arrives mid-run, the harness's own window, the desktop being closed while it is the
+current one, and twenty at once. A `finally` kills its processes, removes its desktop and
+switches back. What it cannot reach: elevated windows, and a packaged app's CoreWindow that
+the inventory failed to pair.
 
 ## How a change reaches the screen
 

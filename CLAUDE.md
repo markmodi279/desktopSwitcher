@@ -117,7 +117,7 @@ shell.
 | Command | Checks |
 |---|---|
 | `--list` | desktop enumeration, names, which is current |
-| `--desktops` | the full window inventory, per desktop, with app names |
+| `--desktops` | the full window inventory, per desktop, with app names, pinned windows tagged |
 | `--occupancy` | the occupancy dot's cheap sweep against the full sweep, per desktop |
 | `--stats [N]` | the stats panel's rows a second apart, what each reading cost, and which network adapters are counted |
 | `--taskbar` | taskbar geometry, DPI scale, computed strip bounds, sampled colour |
@@ -133,12 +133,14 @@ shell.
 
 **Ask first** — these mutate desktop state or take over the screen: `--quit` (closes the running app), `--switch`, `--create`,
 `--remove`, `--rename`, `--move`, `--soak`, `--watch`, `--service`, `--testwindow`,
-`--strip`, `--settings` (opens the Settings window standalone; prints changes, saves nothing).
+`--strip`, `--settings` (opens the Settings window standalone; prints changes, saves nothing),
+`--closeall` (about 25 s of throwaway desktops and test windows flashing up; it only ever closes
+its own windows, on desktops it creates, and cleans up after every scenario).
 
 A clean compile with zero warnings plus `--list`, `--desktops` and `--taskbar` returning
 sane live data is the baseline any change should clear.
 
-Some things can only be checked by eye, and no command covers them: hover panel placement
+Some things can only be checked by eye, and no command covers them: how the close-all panel looks, hover panel placement
 and timing, menu appearance, the Settings window's look, how the highlight animation *looks*, behaviour across an
 Explorer restart, and anything on a second monitor. `--anim` and `--slide` cover the arithmetic under
 the animation - that it converges, lands exactly and stops - but nothing about how it
@@ -183,6 +185,7 @@ it before the next went on top.
 | **M16** | The modern style, set separately for the strip (`stripStyle`) and the panel (`panelStyle`): rounded cells and a pill on the strip, and a layered hover panel with antialiased corners, a nine-sliced shadow, app icons from `AppIcons` and two-tone rows. Classic draws exactly as before and stays the default for both. `--slide` runs both panel styles from `TooltipWindow.Metrics`. |
 | **M17** | The public IP at the stats panel's top right, copied by Ctrl+click on the tile (`statsCopyGesture`) or **Copy public IP** on its menu, behind `statsPublicIp` (off). Middle click keeps the panel open (`statsKeepGesture`), Alt+click opens Task Manager (`statsTaskManagerGesture`). `PublicIp` asks Cloudflare by IPv4 literal on a pool thread, cached ten minutes or until the network changes - the app's first and only network request. `--publicip` checks both services. |
 | **M18** | Keyboard shortcuts that switch without the slide: Ctrl+Alt+1..9 jumps to a desktop, Ctrl+Alt+Left/Right steps and wraps round (`jumpShortcut`, `stepShortcut`, `stepWrap`, on a Shortcuts tab). `Hotkeys` claims them with `RegisterHotKey` on the controller's window, and they end in the same `SwitchDesktop` a click does. A combination another app holds is named in a tray balloon. `--hotkeys` checks which are free. |
+| **M19** | **Close all and remove** on a desktop's menu. `WindowCloser` posts `WM_CLOSE` to each window (a packaged app through its frame only) and tells a closed one from one with a real dialog up, which disables its owner; a question drawn inside the window cannot be seen and reads as "still open". `CloseAllRun` drives a live `CloseProgressWindow`, a tool window so it shows on every desktop, with Go there, Force close and Cancel, and removes the desktop the tick it empties. While it runs it holds `LockSetForegroundWindow`, because an app that grabs focus for its question (Terminal) otherwise drags the user to its desktop. An earlier Bring here moved the windows to the user instead and was dropped: Notepads vanished mid-move with its save prompt unanswered. `WindowInventory` now pairs a packaged app's frame with its CoreWindow when the frame's title only ends with the core's. `ConfirmDialog` takes any buttons. Pinned windows are skipped, detected by `VirtualDesktopApi.IsPinned`; `--desktops` tags them `[pinned]`. `--closeall` drives real runs against scripted test windows, each in its own process: instant, tray-hiding, slow, real dialog answered either way, in-window question, hung, respawning, pinned, vanished, late-arriving, twenty at once. |
 
 Between M8 and M9, two fixes worth knowing: tooltip rows lead with the owning app resolved
 from the process, and the tooltip width is fixed rather than sized to content so it does not

@@ -63,6 +63,8 @@ namespace DesktopSwitcher
                     case "--winver":  return CmdWinVer();
                     case "--hotkeys": return CmdHotkeys();
                     case "--settings": return CmdSettings(args);
+                    case "--closeall": return CloseAllStress.Run(api);
+                    case "--closetarget": return CloseAllStress.RunTarget(args);
                     case "--help":
                     case "-h":
                     case "/?":        Usage(); return 0;
@@ -88,7 +90,7 @@ namespace DesktopSwitcher
             Console.WriteLine();
             Console.WriteLine("Selftest commands:");
             Console.WriteLine("  --list                 show all desktops");
-            Console.WriteLine("  --desktops             show all desktops with the windows on each");
+            Console.WriteLine("  --desktops             show all desktops with the windows on each, pinned ones tagged");
             Console.WriteLine("  --occupancy            check the occupancy dot's cheap sweep against the full sweep");
             Console.WriteLine("  --stats [N]            print the stats panel N times, a second apart, and which adapters count");
             Console.WriteLine("  --publicip             ask each public IP service once and print what it says (goes online)");
@@ -112,6 +114,7 @@ namespace DesktopSwitcher
             Console.WriteLine("  --winver               print the Windows build and whether startup would accept it");
             Console.WriteLine("  --hotkeys              print the desktop shortcuts and whether each one is free to register");
             Console.WriteLine("  --settings [light|dark|#RRGGBB]  open the Settings window on its own; saves nothing");
+            Console.WriteLine("  --closeall             stress \"Close all and remove\" against its own test windows, on desktops it creates");
             Console.WriteLine();
         }
 
@@ -172,8 +175,13 @@ namespace DesktopSwitcher
                 {
                     // App first, as the tooltip shows it - so this selftest is also how you
                     // check app resolution across every open window at once.
+                    //
+                    // Pinned windows are tagged: they are what the menu's close-all leaves
+                    // alone, so this is where VirtualDesktopApi.IsPinned is checked against
+                    // what Task View says is shown on all desktops.
                     foreach (WindowEntry w in windows)
-                        Console.WriteLine("         " + (w.App.Length == 0 ? "?" : w.App) + "  -  " + w.Title);
+                        Console.WriteLine("         " + (w.App.Length == 0 ? "?" : w.App) + "  -  " + w.Title
+                                          + (api.IsPinned(w.Handle) ? "   [pinned]" : ""));
                 }
                 Console.WriteLine();
             }

@@ -30,6 +30,8 @@ namespace DesktopSwitcher
 
         DesktopService _service;
         WindowInventory _inventory;
+        WindowCloser _closer;           // the menu's close-all, over the same inventory
+        CloseAllRun _closeRun;          // the one in progress, panel and all, or null
         SwitcherStrip _strip;
         NotifyIcon _tray;
         Icon _trayIcon;
@@ -137,6 +139,7 @@ namespace DesktopSwitcher
             // and there is no count until the service exists.
             _service = new DesktopService(_api, this);
             _inventory = new WindowInventory(_api);
+            _closer = new WindowCloser(_api, _inventory);
             _service.Start();
 
             // Windows forgets the desktop count across a reboot; put it back.
@@ -670,6 +673,11 @@ namespace DesktopSwitcher
 
             menu.Items.Add(new ToolStripSeparator());
 
+            // Greyed out on an empty desktop, where it would only be Remove again. Pinned
+            // windows are left alone by the click, so they do not count here either.
+            AddItem(menu, "Close all and remove", desktops.Count > 1 && _closer.HasCloseable(id),
+                    delegate { RequestCloseAll(id); });
+
             // Removing is the one item worth hesitating over, so it says what is at stake.
             // Windows moves the windows to another desktop rather than closing them, but
             // finding them again is still a nuisance.
@@ -698,14 +706,105 @@ namespace DesktopSwitcher
                 return;
             }
 
+            string body = count == 1
+                ? "1 window will move to the next desktop."
+                : count + " windows will move to the next desktop.";
+
+            if (Ask("Remove \"" + desktop.DisplayName + "\"?", body, "Remove", "Cancel") == 0)
+                _service.Remove(id);
+        }
+
+        /// <summary>
+        /// A themed confirmation over the strip. Returns the index of the button chosen,
+        /// left to right. Escape picks the last, the safe one; -1 means closed some other way.
+        /// </summary>
+        int Ask(string title, string body, params string[] buttons)
+        {
             Rectangle anchor = _strip != null ? _strip.ScreenBounds() : Rectangle.Empty;
 
-            using (var dialog = new ConfirmDialog(desktop.DisplayName, count, _background,
+            using (var dialog = new ConfirmDialog(title, body, buttons, _background,
                                                    _host.DpiScale, anchor))
             {
-                if (dialog.ShowDialog(this) == DialogResult.OK)
-                    _service.Remove(id);
+                dialog.ShowDialog(this);
+                return dialog.Choice;
             }
+        }
+
+        /// <summary>
+        /// The menu's "Close all and remove". Confirms first, with the count - a menu row is
+        /// one misplaced click from the one above it, and this cannot be undone - then hands
+        /// over to a CloseAllRun, which shows each window closing and removes the desktop
+        /// once it is empty.
+        ///
+        /// One run at a time. A second request, for any desktop, brings the open panel
+        /// forward instead: two panels over the strip would hide each other, and the
+        /// common case is a second click on the same thing while the first is still going.
+        ///
+        /// The list is taken again here rather than carried from the menu, so the count
+        /// in the dialog is the one acted on.
+        /// </summary>
+        void RequestCloseAll(Guid id)
+        {
+            if (_closeRun != null)
+            {
+                _closeRun.Activate();
+                return;
+            }
+
+            Desktop desktop = Find(id);
+            if (desktop == null) return;
+
+            List<WindowEntry> windows = _closer.Closeable(id);
+            if (windows.Count == 0)
+            {
+                // Emptied between the menu and the click. Removing an empty desktop never
+                // asks, so neither does this.
+                if (_service.Count > 1) _service.Remove(id);
+                return;
+            }
+
+            string body = (windows.Count == 1 ? "1 window" : windows.Count + " windows")
+                + " will be asked to close, as if you clicked each one's X. Apps with unsaved "
+                + "work will ask to save first. The desktop is removed once it is empty.";
+
+            if (Ask("Close all windows and remove \"" + desktop.DisplayName + "\"?", body,
+                    "Close and remove", "Cancel") != 0) return;
+
+            // Everything again, now that the user has answered. The dialog pumps messages
+            // while it is up, so the world moved on underneath it: the desktop may have been
+            // removed from Task View or by a middle click - which hands its windows to a
+            // neighbour, where the list taken above would now close them on a desktop
+            // nobody chose to clear - or a window may have been moved off it, or opened on
+            // it. Only what is on the desktop now is closed.
+            desktop = Find(id);
+            if (desktop == null)
+            {
+                Log.Write("controller: close-all target removed while confirming, nothing closed");
+                return;
+            }
+
+            _closer.Invalidate();
+            windows = _closer.Closeable(id);
+            if (windows.Count == 0)
+            {
+                if (_service.Count > 1) _service.Remove(id);
+                return;
+            }
+
+            var run = new CloseAllRun(_service, _closer, desktop, windows,
+                                      delegate(WindowEntry w) { return Ellipsize(Describe(w), MenuTextMax); });
+            run.Ended += delegate
+            {
+                // Not current means shutdown let go of it first: the strip is about to be
+                // torn down, and a sweep to repaint it would only slow the exit.
+                if (_closeRun != run) return;
+                _closeRun = null;
+                RefreshOccupancy();
+            };
+            _closeRun = run;
+
+            Rectangle anchor = _strip != null ? _strip.ScreenBounds() : Rectangle.Empty;
+            run.Start(this, _background, _host.DpiScale, anchor);
         }
 
         Desktop Find(Guid id)
@@ -2086,6 +2185,14 @@ namespace DesktopSwitcher
                 _config.Save();
             }
             if (_settings != null) { _settings.Close(); _settings = null; }
+
+            // Stops watching; windows already asked to close carry on regardless.
+            if (_closeRun != null)
+            {
+                CloseAllRun run = _closeRun;
+                _closeRun = null;   // first, so its Ended handler knows not to refresh
+                run.Dispose();
+            }
 
             if (_configWatcher != null) { _configWatcher.Dispose(); _configWatcher = null; }
             if (_hotkeys != null) { _hotkeys.Dispose(); _hotkeys = null; }

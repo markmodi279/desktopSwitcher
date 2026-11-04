@@ -62,6 +62,10 @@ namespace DesktopSwitcher
         /// so an admin console does not come back blank.
         /// </summary>
         const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+        const uint PROCESS_TERMINATE = 0x0001;
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool TerminateProcess(IntPtr process, uint exitCode);
 
         // --- DPI ---------------------------------------------------------------
 
@@ -299,6 +303,7 @@ namespace DesktopSwitcher
         public const int WM_MOUSEHOVER = 0x02A1;
         public const int WM_MOUSELEAVE = 0x02A3;
         public const int WM_NCDESTROY = 0x0082;
+        public const int WM_CLOSE = 0x0010;
 
         /// <summary>
         /// Shift, as a mouse message reports it in wParam. Read from the message rather
@@ -469,6 +474,26 @@ namespace DesktopSwitcher
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        public const uint LSFW_LOCK = 1;
+        public const uint LSFW_UNLOCK = 2;
+
+        /// <summary>
+        /// Refuses other processes' SetForegroundWindow while the foreground is ours - and
+        /// only works when it is. Windows lifts it by itself on Alt or on any click that
+        /// moves the foreground, so it cannot strand the user.
+        /// </summary>
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool LockSetForegroundWindow(uint code);
+
+        /// <summary>False while a modal dialog it owns is up - a save prompt, most often.</summary>
+        [DllImport("user32.dll")]
+        public static extern bool IsWindowEnabled(IntPtr hWnd);
+
+        /// <summary>The owned popup last active over a window - its modal prompt, if one is
+        /// up - or the window itself when there is none.</summary>
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetLastActivePopup(IntPtr hWnd);
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool AttachThreadInput(uint attachTo, uint attachFrom, bool attach);
@@ -857,6 +882,39 @@ namespace DesktopSwitcher
             {
                 Log.Write("native: process path failed - " + ex.Message);
                 return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// Ends a process outright - Task Manager's End task, with nothing asked of the app
+        /// and nothing saved. False when it cannot be opened for that, which is the normal
+        /// answer for an elevated process seen from this unelevated one, or one already gone.
+        ///
+        /// Never throws: the caller is working through a list and one refusal must not
+        /// stop the rest.
+        /// </summary>
+        public static bool KillProcess(uint pid)
+        {
+            if (pid == 0) return false;
+
+            try
+            {
+                IntPtr process = OpenProcess(PROCESS_TERMINATE, false, pid);
+                if (process == IntPtr.Zero) return false;
+
+                try
+                {
+                    return TerminateProcess(process, 1);
+                }
+                finally
+                {
+                    CloseHandle(process);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("native: terminate failed - " + ex.Message);
+                return false;
             }
         }
 

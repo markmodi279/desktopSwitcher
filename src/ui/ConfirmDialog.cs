@@ -5,8 +5,9 @@ using System.Windows.Forms;
 namespace DesktopSwitcher
 {
     /// <summary>
-    /// The one confirmation the app ever asks for: removing a desktop that still has
-    /// windows on it. Themed off the taskbar colour like the strip, the hover panel and
+    /// The app's confirmations: removing a desktop that still has windows on it, closing
+    /// every window on one, and saying what is left when some of them would not close.
+    /// Themed off the taskbar colour like the strip, the hover panel and
     /// the context menu - a stock MessageBox would be the one thing on screen that looks
     /// borrowed from another program.
     ///
@@ -20,11 +21,24 @@ namespace DesktopSwitcher
         readonly Color _background;
         readonly Rectangle _anchor;
         readonly int _gap;
-        Button _remove;
-        Button _cancel;
+        int _choice = -1;
 
-        public ConfirmDialog(string desktopName, int windowCount, Color background,
-                             double dpiScale, Rectangle anchor)
+        /// <summary>
+        /// Which button closed the dialog, counted from the left. Escape presses the last
+        /// button, so it reports that button's index; -1 only when the window was closed
+        /// some other way, such as Alt+F4. Either way, "last or -1" means no.
+        /// </summary>
+        public int Choice
+        {
+            get { return _choice; }
+        }
+
+        /// <summary>
+        /// <paramref name="buttons"/> left to right. The last is the safe one - Cancel,
+        /// Leave them - and is the one Escape and a stray Enter reach.
+        /// </summary>
+        public ConfirmDialog(string titleText, string bodyText, string[] buttons,
+                             Color background, double dpiScale, Rectangle anchor)
         {
             _background = background;
             _anchor = anchor;
@@ -48,14 +62,10 @@ namespace DesktopSwitcher
             Font bodyFont = new Font("Segoe UI", (float)(12 * dpiScale), FontStyle.Regular,
                                      GraphicsUnit.Pixel);
 
-            int buttonWidth = Scale(88, dpiScale);
+            int buttonMinWidth = Scale(88, dpiScale);
+            int buttonPad = Scale(24, dpiScale);
             int buttonHeight = Scale(28, dpiScale);
             int buttonGap = Scale(8, dpiScale);
-
-            string titleText = "Remove \"" + desktopName + "\"?";
-            string bodyText = windowCount == 1
-                ? "1 window will move to the next desktop."
-                : windowCount + " windows will move to the next desktop.";
 
             // Measured, not guessed: Label's own AutoSize does not reliably grow its
             // Height to match wrapped text, which is what let the second line paint over
@@ -65,18 +75,30 @@ namespace DesktopSwitcher
             // wrong here.
             //
             // Sized to whichever line is naturally longest, clamped between "wide enough
-            // for two buttons" and a ceiling that keeps a long custom desktop name from
+            // for the buttons" and a ceiling that keeps a long custom desktop name from
             // making the dialog enormous - only past that ceiling does the sentence
             // actually wrap, rather than wrapping on every ordinary two-or-three-digit
-            // window count the way a fixed narrow width would.
-            int minWidth = buttonWidth * 2 + buttonGap;
+            // window count the way a fixed narrow width would. The ceiling gives way to
+            // a button row wider than it, which three long labels can be.
             int maxWidth = Scale(360, dpiScale);
             int contentWidth;
             Size titleSize, bodySize;
+            var buttonWidths = new int[buttons.Length];
+            int minWidth = 0;
 
             using (var scratch = new Bitmap(1, 1))
             using (var g = Graphics.FromImage(scratch))
             {
+                // Each button as wide as its own label wants, never narrower than the
+                // Remove/Cancel pair always were - "Close and remove" does not fit 88 px.
+                for (int i = 0; i < buttons.Length; i++)
+                {
+                    int text = (int)Math.Ceiling(g.MeasureString(buttons[i], bodyFont).Width);
+                    buttonWidths[i] = Math.Max(buttonMinWidth, text + buttonPad);
+                    minWidth += buttonWidths[i] + (i > 0 ? buttonGap : 0);
+                }
+                maxWidth = Math.Max(maxWidth, minWidth);
+
                 SizeF titleNatural = g.MeasureString(titleText, titleFont);
                 SizeF bodyNatural = g.MeasureString(bodyText, bodyFont);
 
@@ -109,36 +131,45 @@ namespace DesktopSwitcher
 
             int buttonsTop = body.Bottom + Scale(16, dpiScale);
 
-            _remove = MakeButton("Remove", DialogResult.OK, background, buttonWidth, buttonHeight, bodyFont);
-            _cancel = MakeButton("Cancel", DialogResult.Cancel, background, buttonWidth, buttonHeight, bodyFont);
-
             int clientWidth = Padding.Left + contentWidth + Padding.Right;
-
-            _cancel.Location = new Point(clientWidth - Padding.Right - buttonWidth, buttonsTop);
-            _remove.Location = new Point(_cancel.Left - buttonGap - buttonWidth, buttonsTop);
-
             int clientHeight = buttonsTop + buttonHeight + Padding.Bottom;
 
             ClientSize = new Size(clientWidth, clientHeight);
 
             Controls.Add(title);
             Controls.Add(body);
-            Controls.Add(_remove);
-            Controls.Add(_cancel);
 
-            // Cancel is the safer default: a focused Button fires on Enter whether or
+            // Right-aligned, laid out from the right so the safe button sits in the
+            // corner where the old Cancel always was.
+            Button last = null;
+            int right = clientWidth - Padding.Right;
+            for (int i = buttons.Length - 1; i >= 0; i--)
+            {
+                int index = i;
+                Button button = MakeButton(buttons[i], background, buttonWidths[i], buttonHeight, bodyFont);
+                button.Location = new Point(right - buttonWidths[i], buttonsTop);
+                right = button.Left - buttonGap;
+                button.Click += delegate
+                {
+                    _choice = index;
+                    DialogResult = DialogResult.OK;
+                };
+                Controls.Add(button);
+                if (last == null) last = button;
+            }
+
+            // The safe button is the default: a focused Button fires on Enter whether or
             // not it is the form's AcceptButton, so this is what a stray Enter reaches.
-            // Remove is one Tab or a click away, never a single keystroke away.
-            CancelButton = _cancel;
-            ActiveControl = _cancel;
+            // Anything that removes or closes is one Tab or a click away, never a single
+            // keystroke away.
+            CancelButton = last;
+            ActiveControl = last;
         }
 
-        Button MakeButton(string text, DialogResult result, Color background,
-                          int width, int height, Font font)
+        Button MakeButton(string text, Color background, int width, int height, Font font)
         {
             var button = new Button();
             button.Text = text;
-            button.DialogResult = result;
             button.Size = new Size(width, height);
             button.Font = font;
             StyleButton(button, background);
