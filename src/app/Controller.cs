@@ -44,14 +44,12 @@ namespace DesktopSwitcher
         Config _settingsPending;        // the window's latest change, waiting out the debounce
         Timer _settingsTimer;           // that debounce
 
-        const int AnchorPollMs = 40;
-        Timer _anchorTimer;      // notices the tray anchor moving between watchdog ticks
         Timer _glideTimer;       // runs only while the strip eases to a moved anchor
         int _glideTick;
         Timer _startupTimer;     // waits for the taskbar to exist at login
         Timer _reconcileTimer;   // model safety net
         Timer _watchdogTimer;    // strip / taskbar health
-        Timer _focusTimer;       // remembers the last real foreground window
+        WinEventWatcher _foregroundWatch;   // remembers the last real foreground window
         Timer _saveTimer;        // debounced config write
         Timer _settleTimer;      // debounced rebuild after a theme, accent, or display change
 
@@ -65,6 +63,7 @@ namespace DesktopSwitcher
         int _ipCopiedAt;              // TickCount of the last copy, for the "copied" feedback
         bool _ipCopied;               // whether _ipCopiedAt means anything yet
         bool _sessionNotifications;   // whether the unlock message is being delivered
+        bool _paused;                 // session locked: the reconcile and watchdog ticks are stopped
         string _settleReason = "";    // what queued the pending rebuild, for the log
         int _pendingCount = -1;
 
@@ -170,14 +169,20 @@ namespace DesktopSwitcher
             _watchdogTimer = StartTimer(1000, delegate { Watchdog(); });
 
             // The watchdog is too slow to follow a tray change: the tile beside the strip
-            // moves at once and would sit over it for up to a second. This only reads, and
-            // only places the strip when the anchor has actually moved.
-            _anchorTimer = StartTimer(AnchorPollMs, delegate
-            {
-                WatchTile();
-                if (_strip != null && _host.AnchorMoved()) PlaceStrip();
-            });
-            _focusTimer = StartTimer(300, delegate { _foreground.Sample(); });
+            // moves at once and would sit over it for up to a second. These hear the change
+            // as it happens instead - see WatchTray. Made here and then kept current by the
+            // watchdog, which remakes them when an Explorer restart changes the process.
+            WatchTray();
+            WatchTile();
+
+            // Every focus change as it happens, so "send the active window here" always has
+            // the window the user last meant. Was a 300 ms poll, which both woke the process
+            // three times a second for nothing and could miss a window focused just before
+            // the click on the strip took focus away again. System-wide, because focus moves
+            // between every process; rare enough that it costs nothing.
+            _foregroundWatch = new WinEventWatcher(Native.EVENT_SYSTEM_FOREGROUND, Native.EVENT_SYSTEM_FOREGROUND,
+                                                   0, false, delegate { _foreground.Sample(); });
+            _foreground.Sample();
 
             _saveTimer = new Timer();
             _saveTimer.Interval = 2000;
@@ -228,21 +233,91 @@ namespace DesktopSwitcher
 
         // MediaController's tile moves first and the strip follows it. Polled, the strip was
         // always a few frames behind a tile that is itself easing, so the tile sat over the
-        // strip. A location hook on the tile's process says when it moves; the poll above only
-        // notices the tile arriving or leaving, which is when the hook is (re)made.
-        LocationWatcher _tileWatch;
+        // strip. A location hook on the tile's process says when it moves; the tile arriving
+        // or leaving is heard by the show/hide hook in WatchTray, which is when this hook is
+        // (re)made.
+        WinEventWatcher _tileWatch;
 
         void WatchTile()
         {
             uint pid = _host.TileProcessId;
             if (_tileWatch != null && _tileWatch.ProcessId == pid) return;
             if (_tileWatch != null) { _tileWatch.Dispose(); _tileWatch = null; }
-            if (pid != 0) _tileWatch = new LocationWatcher(pid, OnTileMoved);
+            if (pid != 0)
+                _tileWatch = new WinEventWatcher(Native.EVENT_OBJECT_LOCATIONCHANGE, Native.EVENT_OBJECT_LOCATIONCHANGE,
+                                                 pid, false, delegate { OnAnchorEvent(); });
         }
 
-        void OnTileMoved()
+        // The tray's own two ways of moving the anchor, heard rather than polled. They replace
+        // a 40 ms timer that woke the process twenty-five times a second, all day, to find out
+        // something that happens a few times an hour.
+        //
+        // _trayWatch: Explorer moving a window of its own. A tray icon promoted out of the
+        // overflow widens TrayNotifyWnd, which Explorer does with SetWindowPos, which raises a
+        // location event for that child. Hooked on Explorer's process only - our strip is a
+        // child of the same taskbar but belongs to us, so placing it cannot echo back here -
+        // and filtered to the two windows the anchor is read from. Explorer moves plenty of
+        // other windows (a File Explorer window being dragged is a burst of them), and each
+        // of those costs two compares.
+        //
+        // _trayChildWatch: a window shown, hidden or destroyed anywhere, kept only when it is a
+        // child of the taskbar. That is MediaController's tile arriving or leaving: it lives in
+        // another process, so Explorer's hook cannot see it, and until it has arrived there is
+        // no process to hook. These are rare next to location changes, and our own windows -
+        // the hover panel above all - are skipped by the system before they reach us. Destroy
+        // is in the range because a visible child destroyed outright raises no hide (a probe
+        // creating and destroying one under Shell_TrayWnd saw the show and nothing else), and
+        // it is matched against the tile's handle rather than by parent, because the window
+        // has none left by the time the event is delivered.
+        //
+        // The watchdog still places the strip every second, and that stays the fallback for
+        // anything these miss.
+        WinEventWatcher _trayWatch;
+        WinEventWatcher _trayChildWatch;
+
+        void WatchTray()
         {
-            if (_strip != null && _host.AnchorMoved()) PlaceStrip();
+            uint pid = 0;
+            IntPtr tray = _host.TrayWindow;
+            if (tray != IntPtr.Zero) Native.GetWindowThreadProcessId(tray, out pid);
+
+            if (_trayWatch == null || _trayWatch.ProcessId != pid)
+            {
+                if (_trayWatch != null) { _trayWatch.Dispose(); _trayWatch = null; }
+                if (pid != 0)
+                    _trayWatch = new WinEventWatcher(Native.EVENT_OBJECT_LOCATIONCHANGE, Native.EVENT_OBJECT_LOCATIONCHANGE,
+                                                     pid, false, OnTrayMoved);
+            }
+
+            if (_trayChildWatch == null)
+                _trayChildWatch = new WinEventWatcher(Native.EVENT_OBJECT_DESTROY, Native.EVENT_OBJECT_HIDE,
+                                                      0, true, OnTrayChildEvent);
+        }
+
+        void OnTrayMoved(IntPtr hwnd)
+        {
+            if (hwnd != _host.NotifyArea && hwnd != _host.TrayWindow) return;
+            OnAnchorEvent();
+        }
+
+        void OnTrayChildEvent(IntPtr hwnd)
+        {
+            IntPtr tray = _host.TrayWindow;
+            if (tray == IntPtr.Zero) return;
+            if (hwnd != _host.TileWindow && Native.GetParent(hwnd) != tray) return;
+            OnAnchorEvent();
+        }
+
+        /// <summary>
+        /// Something the anchor is read from may have moved. Places the strip only if it did,
+        /// then makes sure the tile hook follows whichever window is now the anchor - in that
+        /// order, because it is the placement that finds out the tile has become the anchor.
+        /// </summary>
+        void OnAnchorEvent()
+        {
+            if (_strip == null) return;
+            if (_host.AnchorMoved()) PlaceStrip();
+            WatchTile();
         }
 
         void StartGlide()
@@ -1531,6 +1606,14 @@ namespace DesktopSwitcher
 
             // Cheap, and keeps the strip above sibling task buttons.
             PlaceStrip();
+
+            // The hooks are the fast path and this is the slow one behind them: it remakes
+            // them after an Explorer restart or a tile arriving under a new process, and picks
+            // up a focus change the hook dropped - a window that took the foreground before
+            // it had a caption fails the alt-tab test then and passes it now.
+            WatchTray();
+            WatchTile();
+            _foreground.Sample();
         }
 
         void HandleExplorerRestart()
@@ -1591,10 +1674,26 @@ namespace DesktopSwitcher
             {
                 QueueSettledRebuild("resumed from sleep");
             }
-            else if (_started && m.Msg == WM_WTSSESSION_CHANGE
-                     && (int)m.WParam == WTS_SESSION_UNLOCK)
+            else if (_started && m.Msg == WM_WTSSESSION_CHANGE)
             {
-                QueueSettledRebuild("session unlocked");
+                int change = (int)m.WParam;
+                if (change == WTS_SESSION_LOCK)
+                {
+                    Pause();
+                }
+                else if (change == WTS_SESSION_UNLOCK)
+                {
+                    Resume("session unlocked");
+                    QueueSettledRebuild("session unlocked");
+                }
+                else if (change == WTS_CONSOLE_CONNECT || change == WTS_REMOTE_CONNECT
+                         || change == WTS_SESSION_LOGON)
+                {
+                    // Not expected to be what ends a lock, but a model frozen because one
+                    // unlock went unheard would stay frozen for the rest of the session. Any
+                    // sign the session is in use again resumes; resuming twice is harmless.
+                    Resume("session reconnected");
+                }
             }
 
             base.WndProc(ref m);
@@ -1622,7 +1721,50 @@ namespace DesktopSwitcher
         const int PBT_APMRESUMEAUTOMATIC = 0x0012;
 
         const int WM_WTSSESSION_CHANGE = 0x02B1;
+        const int WTS_CONSOLE_CONNECT = 0x1;
+        const int WTS_REMOTE_CONNECT = 0x3;
+        const int WTS_SESSION_LOGON = 0x5;
+        const int WTS_SESSION_LOCK = 0x7;
         const int WTS_SESSION_UNLOCK = 0x8;
+
+        /// <summary>
+        /// Stops the reconcile and watchdog ticks while the session is locked.
+        ///
+        /// Nothing can change a desktop behind the lock screen and nobody can see the strip,
+        /// yet the reconcile tick went on walking every top-level window and asking the shell
+        /// about each one every two seconds, all night if the machine stayed locked. The
+        /// shell's own notifications are untouched - those cost nothing while nothing happens -
+        /// so the model still follows anything that does change, and TaskbarCreated still
+        /// rebuilds after an Explorer restart; the watchdog would have been the backup for
+        /// both, and Resume runs it at once.
+        /// </summary>
+        void Pause()
+        {
+            if (_paused) return;
+            _paused = true;
+            if (_reconcileTimer != null) _reconcileTimer.Stop();
+            if (_watchdogTimer != null) _watchdogTimer.Stop();
+            Log.Write("controller: session locked - ticks paused");
+        }
+
+        /// <summary>
+        /// Restarts the ticks and runs each once now, rather than leaving the model and the
+        /// strip's health to wait up to two seconds after the user is back. The stats sample is
+        /// not forced: the next tick takes it, and its rate covers the lock either way.
+        /// </summary>
+        void Resume(string reason)
+        {
+            if (!_paused) return;
+            _paused = false;
+            Log.Write("controller: " + reason + " - ticks resumed");
+
+            if (_reconcileTimer != null) _reconcileTimer.Start();
+            if (_watchdogTimer != null) _watchdogTimer.Start();
+
+            _service.Tick();
+            RefreshOccupancy();
+            Watchdog();
+        }
 
         /// <summary>
         /// Whether this WM_SETTINGCHANGE is the one that means the colours moved.
@@ -2169,9 +2311,10 @@ namespace DesktopSwitcher
             StopTimer(ref _reconcileTimer);
             StopTimer(ref _watchdogTimer);
             StopTimer(ref _glideTimer);
-            StopTimer(ref _anchorTimer);
             if (_tileWatch != null) { _tileWatch.Dispose(); _tileWatch = null; }
-            StopTimer(ref _focusTimer);
+            if (_trayWatch != null) { _trayWatch.Dispose(); _trayWatch = null; }
+            if (_trayChildWatch != null) { _trayChildWatch.Dispose(); _trayChildWatch = null; }
+            if (_foregroundWatch != null) { _foregroundWatch.Dispose(); _foregroundWatch = null; }
             StopTimer(ref _settleTimer);
             StopTimer(ref _settingsTimer);
 

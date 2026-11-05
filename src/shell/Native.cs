@@ -501,7 +501,7 @@ namespace DesktopSwitcher
         [DllImport("user32.dll", SetLastError = true)]
         public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 
-        // --- window location events ---------------------------------------------
+        // --- window events -------------------------------------------------------
 
         public delegate void WinEventProc(IntPtr hook, uint eventType, IntPtr hwnd, int idObject,
                                           int idChild, uint threadId, uint time);
@@ -513,9 +513,15 @@ namespace DesktopSwitcher
         [DllImport("user32.dll")]
         public static extern bool UnhookWinEvent(IntPtr hook);
 
+        public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+        public const uint EVENT_OBJECT_DESTROY = 0x8001;
+        public const uint EVENT_OBJECT_SHOW = 0x8002;
+        public const uint EVENT_OBJECT_HIDE = 0x8003;
         public const uint EVENT_OBJECT_LOCATIONCHANGE = 0x800B;
         public const uint WINEVENT_OUTOFCONTEXT = 0;
+        public const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
         public const int OBJID_WINDOW = 0;
+        public const int CHILDID_SELF = 0;
 
         [DllImport("kernel32.dll")]
         public static extern uint GetCurrentThreadId();

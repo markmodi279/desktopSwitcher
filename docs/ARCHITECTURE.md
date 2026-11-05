@@ -58,6 +58,7 @@ Everything undocumented lives here, and nothing above this folder knows a GUID.
 | [VirtualDesktopNotify.cs](../src/shell/VirtualDesktopNotify.cs) | The notification sink. Registers a COM object with the shell and turns its callbacks into .NET events. |
 | [Native.cs](../src/shell/Native.cs) | P/Invoke. Window enumeration, geometry, parenting, painting, DPI, process lookup. |
 | [Hotkeys.cs](../src/shell/Hotkeys.cs) | The desktop shortcuts: `RegisterHotKey` on the controller's window for Ctrl+Alt+1..9 and Ctrl+Alt+Left/Right (or whatever `jumpShortcut` and `stepShortcut` say), and the decoding of a `WM_HOTKEY` id back into "desktop N" or "one over". |
+| [WinEventWatcher.cs](../src/shell/WinEventWatcher.cs) | One out-of-context `SetWinEventHook` - a window moved, shown, hidden, destroyed or focused, in one process or all - delivered on the UI thread. What the controller listens with instead of polling: the tray edge, MediaController's tile, the foreground window. |
 | [ClickWatcher.cs](../src/shell/ClickWatcher.cs) | A low-level mouse hook on a thread of its own, posting every button press on the system to a window. Installed only while the stats panel is pinned, so a click elsewhere can close it. |
 
 Two rules hold this layer together. **`IVirtualDesktop` pointers are never held across
@@ -206,19 +207,32 @@ animation timer did not: a WinForms timer started from a thread with no message 
 which froze the strip's animation and is how this was found. Touching `Handle` in the constructor
 is what makes the marshalling real; do not remove it as dead code.
 
-`Controller` runs eight timers, all on the UI thread, and a ninth that only runs while the strip is gliding:
+`Controller` runs six timers, all on the UI thread, and a seventh that only runs while the strip is gliding:
 
 | Timer | Interval | Job |
 |---|---|---|
 | startup | 500 ms | waits for the taskbar to exist at login, then stops |
 | reconcile | `reconcileMs` (2000) | model safety net, the occupancy dot's cheap window sweep, and a stats reading |
-| watchdog | 1000 ms | is the taskbar still there, is the strip still in it |
-| anchor | 40 ms | reads where the tray edge is, and places the strip only if it has moved; also (re)makes the location hook on MediaController's tile |
+| watchdog | 1000 ms | is the taskbar still there, is the strip still in it; remakes the hooks below if their process changed, and re-samples the foreground window as a backstop |
 | glide | 15 ms | runs only while the strip eases to a moved tray edge; `--glide` checks the arithmetic |
-| focus | 300 ms | sample the foreground window |
 | save | 2000 ms | debounced config write |
 | theme | 600 ms | debounced rebuild after `WM_SETTINGCHANGE`/`ImmersiveColorSet` |
 | settings | 150 ms | debounced apply of the Settings window's latest change; created when the window first changes something |
+
+Reconcile and watchdog stop while the session is locked and restart, running once at once, on
+unlock. Nothing can change behind the lock screen and nobody can see the strip; the shell's
+notifications and `TaskbarCreated` keep working throughout, since they cost nothing idle.
+
+What used to be two more polls - a 40 ms one for the tray edge and a 300 ms one for the
+foreground window, which between them woke the process nearly thirty times a second - are
+WinEvent hooks ([WinEventWatcher.cs](../src/shell/WinEventWatcher.cs)), so idle means idle:
+
+| Hook | Scope | Job |
+|---|---|---|
+| tray | location changes in Explorer's process, kept for `TrayNotifyWnd` and `Shell_TrayWnd` | a tray icon shown or hidden moves the anchor; places the strip only if it did |
+| tray children | shows, hides and destroys in every other process, kept for children of `Shell_TrayWnd` and the tile | MediaController's tile arriving or leaving |
+| tile | location changes in MediaController's process, while its tile is the anchor | follows the tile frame by frame as it glides |
+| foreground | every foreground change | remembers the last real window for "send the active window here" |
 
 The strip's position follows the tray in two different ways. With no MediaController tile, a
 moved notification area is eased: `TaskbarHost` remembers how far the strip lags and `Motion`

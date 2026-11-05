@@ -24,6 +24,14 @@ namespace DesktopSwitcher
         double _dpiScale = 1.0;
 
         public IntPtr TrayWindow { get { return _tray; } }
+
+        /// <summary>
+        /// TrayNotifyWnd as last resolved, without re-resolving it: read from a WinEvent
+        /// callback that fires for every Explorer window that moves, so it has to cost one
+        /// field read. A stale handle only makes the comparison fail, and the watchdog
+        /// re-resolves it within the second.
+        /// </summary>
+        public IntPtr NotifyArea { get { return _notifyArea; } }
         public bool Located { get { return _tray != IntPtr.Zero; } }
 
         /// <summary>DPI scale of the taskbar's monitor. 1.0 at 96 DPI.</summary>
@@ -138,6 +146,7 @@ namespace DesktopSwitcher
                 x = t.Left;
                 tileUsed = true;
                 _anchorIsTile = true;
+                _tileWindow = tile;
                 Native.GetWindowThreadProcessId(tile, out _tilePid);
             }
 
@@ -186,9 +195,17 @@ namespace DesktopSwitcher
 
         bool _anchorIsTile;     // set by AnchorScreenX: the strip is against the tile, not the tray
         uint _tilePid;
+        IntPtr _tileWindow;     // the tile as last found, for recognising its destruction
 
         /// <summary>Process id of the tile's owner while it is the anchor, else 0.</summary>
         public uint TileProcessId { get { return _anchorIsTile ? _tilePid : 0; } }
+
+        /// <summary>
+        /// The tile's window while it is the anchor, else zero. Kept so a destroy event can be
+        /// matched against it: by the time an out-of-context destroy arrives the window is
+        /// gone, and asking it for its parent no longer says it was ever on the taskbar.
+        /// </summary>
+        public IntPtr TileWindow { get { return _anchorIsTile ? _tileWindow : IntPtr.Zero; } }
 
         int _glideLastRaw = int.MinValue;   // the anchor as last seen, before any glide
         float _glideOffset;                 // pixels the shown anchor still lags the real one
@@ -246,11 +263,13 @@ namespace DesktopSwitcher
 
         /// <summary>
         /// True when the anchor is not where the strip was last placed against it. A few
-        /// window-rect reads and no writes, so it is cheap enough to ask many times a second;
-        /// that is the point of it. The watchdog's once-per-second Reassert was the only thing
-        /// noticing a tray change, so MediaController's tile - which follows the notification
-        /// area on its own timer - moved left over the strip, and the strip only then went
-        /// after it. Asking this every few tens of milliseconds closes that gap.
+        /// window-rect reads and no writes, so it is cheap enough to ask on every event that
+        /// might mean the tray moved; that is the point of it. The watchdog's once-per-second
+        /// Reassert was the only thing noticing a tray change, so MediaController's tile -
+        /// which follows the notification area on its own timer - moved left over the strip,
+        /// and the strip only then went after it. Asking this every 40 ms closed that gap, and
+        /// asking it when Explorer reports the notification area moving closes it without
+        /// waking twenty-five times a second to ask.
         /// </summary>
         public bool AnchorMoved()
         {
