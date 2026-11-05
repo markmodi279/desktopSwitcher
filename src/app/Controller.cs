@@ -152,6 +152,10 @@ namespace DesktopSwitcher
             _service.CurrentChanged += OnCurrentChanged;
             _service.NamesChanged += OnNamesChanged;
 
+            // A window moved between desktops: the one change to which desktops have windows
+            // that no WinEvent reports, since nothing is shown, hidden or destroyed.
+            _service.WindowsMoved += delegate { _inventory.MarkChanged(); };
+
             RebuildStrip();
 
             // The baseline the first reconcile tick will measure against, so a hover in the
@@ -163,7 +167,7 @@ namespace DesktopSwitcher
             _reconcileTimer = StartTimer(_config.ReconcileMs, delegate
             {
                 _service.Tick();
-                RefreshOccupancy();
+                RefreshOccupancy(true);
                 SampleStats();
             });
             _watchdogTimer = StartTimer(1000, delegate { Watchdog(); });
@@ -260,10 +264,12 @@ namespace DesktopSwitcher
         // other windows (a File Explorer window being dragged is a burst of them), and each
         // of those costs two compares.
         //
-        // _trayChildWatch: a window shown, hidden or destroyed anywhere, kept only when it is a
-        // child of the taskbar. That is MediaController's tile arriving or leaving: it lives in
-        // another process, so Explorer's hook cannot see it, and until it has arrived there is
-        // no process to hook. These are rare next to location changes, and our own windows -
+        // _windowWatch: a window shown, hidden or destroyed anywhere. Two listeners share it.
+        // The occupancy dots hear every one (OnWindowEvent hands it to the inventory, which
+        // keeps only the windows its sweep would count). The anchor keeps only children of the
+        // taskbar: that is MediaController's tile arriving or leaving: it lives in another
+        // process, so Explorer's hook cannot see it, and until it has arrived there is no
+        // process to hook. These are rare next to location changes, and our own windows -
         // the hover panel above all - are skipped by the system before they reach us. Destroy
         // is in the range because a visible child destroyed outright raises no hide (a probe
         // creating and destroying one under Shell_TrayWnd saw the show and nothing else), and
@@ -273,7 +279,7 @@ namespace DesktopSwitcher
         // The watchdog still places the strip every second, and that stays the fallback for
         // anything these miss.
         WinEventWatcher _trayWatch;
-        WinEventWatcher _trayChildWatch;
+        WinEventWatcher _windowWatch;
 
         void WatchTray()
         {
@@ -289,19 +295,25 @@ namespace DesktopSwitcher
                                                      pid, false, OnTrayMoved);
             }
 
-            if (_trayChildWatch == null)
-                _trayChildWatch = new WinEventWatcher(Native.EVENT_OBJECT_DESTROY, Native.EVENT_OBJECT_HIDE,
-                                                      0, true, OnTrayChildEvent);
+            if (_windowWatch == null)
+                _windowWatch = new WinEventWatcher(Native.EVENT_OBJECT_DESTROY, Native.EVENT_OBJECT_HIDE,
+                                                   0, true, OnWindowEvent);
         }
 
-        void OnTrayMoved(IntPtr hwnd)
+        void OnTrayMoved(uint eventType, IntPtr hwnd)
         {
             if (hwnd != _host.NotifyArea && hwnd != _host.TrayWindow) return;
             OnAnchorEvent();
         }
 
-        void OnTrayChildEvent(IntPtr hwnd)
+        void OnWindowEvent(uint eventType, IntPtr hwnd)
         {
+            if (_inventory != null)
+            {
+                if (eventType == Native.EVENT_OBJECT_SHOW) _inventory.WindowShown(hwnd);
+                else _inventory.WindowGone(hwnd);
+            }
+
             IntPtr tray = _host.TrayWindow;
             if (tray == IntPtr.Zero) return;
             if (hwnd != _host.TileWindow && Native.GetParent(hwnd) != tray) return;
@@ -520,14 +532,26 @@ namespace DesktopSwitcher
         /// also right after every relayout - a rebuild or a desktop-set change - so the
         /// strip does not sit undotted for up to 2s after either.
         ///
+        /// The tick passes onlyIfStale, and then does nothing at all unless a window has
+        /// come, gone or moved since the last answer (see WindowInventory.MarkChanged): no
+        /// sweep, and no push, which would repaint the strip with the dots it already has.
+        /// A relayout pushes regardless, because a new strip has no dots yet; when nothing
+        /// changed that costs no sweep either, since the inventory hands back its last answer.
+        ///
         /// Skipped below two desktops, where the dot would only ever answer a question
         /// nobody is asking: with one desktop there is nowhere else for a window to be.
         /// </summary>
         void RefreshOccupancy()
         {
+            RefreshOccupancy(false);
+        }
+
+        void RefreshOccupancy(bool onlyIfStale)
+        {
             if (_strip == null || _service == null || _inventory == null) return;
             if (!_config.OccupancyDots) return;
             if (_service.Count < 2) return;
+            if (onlyIfStale && !_inventory.OccupancyStale(_service.Count)) return;
 
             _strip.SetOccupancy(_inventory.OccupiedDesktops(_service.Count));
         }
@@ -874,6 +898,7 @@ namespace DesktopSwitcher
                 // torn down, and a sweep to repaint it would only slow the exit.
                 if (_closeRun != run) return;
                 _closeRun = null;
+                _inventory.MarkChanged();
                 RefreshOccupancy();
             };
             _closeRun = run;
@@ -1632,6 +1657,12 @@ namespace DesktopSwitcher
             _api.Drop();
             _service.InvalidateNotifications();
             _service.Tick();
+
+            // Which window is on which desktop is Explorer's state, and this is a new Explorer.
+            // The occupancy answer is otherwise reused until a window event says it moved, and
+            // a restart says nothing of the kind - so it is swept again on the rebuild below.
+            _inventory.Invalidate();
+
             RebuildStrip();   // re-scales and re-samples on its own, after the strip is gone
 
             Log.Write("controller: recovered from Explorer restart");
@@ -1761,7 +1792,10 @@ namespace DesktopSwitcher
             if (_reconcileTimer != null) _reconcileTimer.Start();
             if (_watchdogTimer != null) _watchdogTimer.Start();
 
-            _service.Tick();
+            // Reconcile, not Tick: Tick waits out the 30 s backstop while the sink is live, and
+            // a lock is exactly the stretch nobody was watching. One check on the way back costs
+            // a few calls and settles it.
+            _service.Reconcile();
             RefreshOccupancy();
             Watchdog();
         }
@@ -2035,9 +2069,15 @@ namespace DesktopSwitcher
                 FlushSettings();
                 _settings.Dispose();
                 _settings = null;
+                if (_inventory != null) _inventory.MarkChanged();
             };
 
             _settings.Show();
+
+            // An alt-tab window like any other, so it counts towards its desktop's dot - but
+            // it is this process's, and the window hook skips this process, so nothing else
+            // would say it came or went. Null only if Settings opens before startup finished.
+            if (_inventory != null) _inventory.MarkChanged();
             _settings.Activate();
             Log.Write("controller: settings window opened");
         }
@@ -2313,7 +2353,7 @@ namespace DesktopSwitcher
             StopTimer(ref _glideTimer);
             if (_tileWatch != null) { _tileWatch.Dispose(); _tileWatch = null; }
             if (_trayWatch != null) { _trayWatch.Dispose(); _trayWatch = null; }
-            if (_trayChildWatch != null) { _trayChildWatch.Dispose(); _trayChildWatch = null; }
+            if (_windowWatch != null) { _windowWatch.Dispose(); _windowWatch = null; }
             if (_foregroundWatch != null) { _foregroundWatch.Dispose(); _foregroundWatch = null; }
             StopTimer(ref _settleTimer);
             StopTimer(ref _settingsTimer);

@@ -541,9 +541,23 @@ namespace DesktopSwitcher
         public void SetOccupancy(ICollection<Guid> occupied)
         {
             if (occupied == null) return;
+
+            // The same dots as already drawn: no repaint. A sweep usually finds what the last
+            // one did - a window closing on a desktop that still has others changes nothing
+            // the strip shows - and every push used to redraw the strip regardless.
+            if (_occupied != null && SameSet(_occupied, occupied)) return;
+
             _occupied = occupied;
             SyncVisuals();
             Invalidate();
+        }
+
+        static bool SameSet(ICollection<Guid> a, ICollection<Guid> b)
+        {
+            if (a.Count != b.Count) return false;
+            foreach (Guid g in b)
+                if (!a.Contains(g)) return false;
+            return true;
         }
 
         /// <summary>
@@ -566,9 +580,27 @@ namespace DesktopSwitcher
 
             _cpuLevelTarget = cpu;
             _memLevelTarget = memory;
+
+            // A small move lands at once, in one repaint, instead of easing there. Every
+            // reading moves the meters a little - an idle machine's CPU wanders a few percent
+            // between samples - and each move ran the frame timer for animationMs: about seven
+            // frames, a wakeup and a repaint of the strip apiece, every two seconds, all day,
+            // for a meter shifting a pixel or so. Under SnapLevel no style shows the ease as
+            // motion anyway: it is a pixel or two of a bar, a few degrees of a needle. A
+            // real jump - a build starting, memory filling - still eases, since that is the
+            // movement the animation is there to show.
+            if (Math.Abs(cpu - _cpuLevel) < SnapLevel && Math.Abs(memory - _memLevel) < SnapLevel)
+            {
+                _cpuLevel = cpu;
+                _memLevel = memory;
+            }
+
             Animate();
             Invalidate();
         }
+
+        /// <summary>A meter move smaller than this snaps rather than eases. 0..1, so 3%.</summary>
+        const float SnapLevel = 0.03f;
 
         /// <summary>
         /// The meters' size in physical pixels - already DPI-scaled, the way every width the

@@ -239,7 +239,7 @@ colour again.
 | `buttonWidth` | `34` | per-button width at 96 DPI |
 | `plusWidth` | `26` | width of the `+` button at 96 DPI |
 | `margin` | `6` | gap between the strip and the tray icons |
-| `reconcileMs` | `2000` | safety-net poll interval |
+| `reconcileMs` | `2000` | how often the stats are read and the occupancy dots checked; the desktop list is re-checked this often only while Explorer's notifications are down, otherwise every 30 s |
 | `contextMenu` | `true` | right-click menu; `false` puts right click back to sending the window |
 | `occupancyDots` | `true` | dot beside a number that has windows on it; `false` stops the sweep entirely |
 | `systemStats` | `true` | the system tile after `+` and its CPU / memory / network panel; `false` removes the tile and stops the sampling |

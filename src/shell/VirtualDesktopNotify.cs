@@ -62,6 +62,13 @@ namespace DesktopSwitcher
         /// <summary>The active desktop changed. Arguments are (from, to).</summary>
         public event Action<Guid, Guid> CurrentChanged;
 
+        /// <summary>
+        /// A window moved to another desktop, or was pinned or unpinned. No arguments: the
+        /// view it carries is an IApplicationView, and nothing here needs more than "which
+        /// desktops have windows may have changed", which the occupancy sweep then answers.
+        /// </summary>
+        public event Action ViewChanged;
+
         public bool IsRegistered { get { return _cookie != 0; } }
 
         /// <summary>
@@ -179,6 +186,16 @@ namespace DesktopSwitcher
             catch (Exception ex) { Log.Write("notify: CurrentChanged handler threw - " + ex.Message); }
         }
 
+        void RaiseViewChanged()
+        {
+            // Not logged: it fires once per window on some moves, and the sweep it causes
+            // logs what it found.
+            Action h = ViewChanged;
+            if (h == null) return;
+            try { h(); }
+            catch (Exception ex) { Log.Write("notify: ViewChanged handler threw - " + ex.Message); }
+        }
+
         static string Short(Guid id)
         {
             return id == Guid.Empty ? "(none)" : id.ToString().Substring(0, 8);
@@ -227,8 +244,10 @@ namespace DesktopSwitcher
 
             public void ViewVirtualDesktopChanged(IApplicationView view)
             {
-                // Fires when a window moves between desktops. Not needed for the strip:
-                // it changes neither the desktop set nor which one is active.
+                // Fires when a window moves between desktops. It changes neither the set
+                // nor which one is active, but it can change which desktops have windows,
+                // which is the occupancy dot's whole question.
+                _owner.RaiseViewChanged();
             }
 
             public void CurrentVirtualDesktopChanged(IVirtualDesktop oldDesktop, IVirtualDesktop newDesktop)

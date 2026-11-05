@@ -25,14 +25,14 @@ namespace DesktopSwitcher
     sealed class WinEventWatcher : IDisposable
     {
         readonly Native.WinEventProc _proc;   // held: native code keeps only a pointer to it
-        readonly Action<IntPtr> _changed;
+        readonly Action<uint, IntPtr> _changed;
         IntPtr _hook;
 
         /// <summary>The process being watched; 0 when the hook is system-wide.</summary>
         public uint ProcessId { get; private set; }
 
         public WinEventWatcher(uint eventMin, uint eventMax, uint processId, bool skipOwnProcess,
-                               Action<IntPtr> changed)
+                               Action<uint, IntPtr> changed)
         {
             ProcessId = processId;
             _changed = changed;
@@ -57,7 +57,7 @@ namespace DesktopSwitcher
             // An exception escaping here unwinds into user32's dispatch, not into anything of
             // ours that could report it. Logged and dropped: the watchdog's next tick covers
             // whatever this event would have done.
-            try { _changed(hwnd); }
+            try { _changed(eventType, hwnd); }
             catch (Exception ex) { Log.Write("winevent: handler failed - " + ex.Message); }
         }
 

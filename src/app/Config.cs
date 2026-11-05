@@ -28,7 +28,11 @@ namespace DesktopSwitcher
         public int Margin = 6;
 
         // --- behaviour --------------------------------------------------------
-        /// <summary>Reconcile watchdog interval. Notifications are the primary path.</summary>
+        /// <summary>
+        /// The reconcile tick's interval: a stats reading, and the occupancy dots if a window
+        /// came, went or moved. The desktop list itself is only re-checked this often while
+        /// notifications are down - see DesktopService.BackstopMs.
+        /// </summary>
         public int ReconcileMs = 2000;
         public bool Diagnostics = false;
 
@@ -435,8 +439,9 @@ namespace DesktopSwitcher
             // --- advanced
             Int(AdvancedSection, "reconcileMs", "Check interval", 250, 60000, "ms",
                 c => c.ReconcileMs, (c, v) => c.ReconcileMs = v,
-                "How often the desktop list is double-checked and the occupancy dots and stats "
-                + "refreshed. Shell notifications do the real work; this is the safety net."),
+                "How often the stats are read and the occupancy dots checked - the dots only "
+                + "re-sweep when a window has come, gone or moved. The desktop list is double-checked "
+                + "this often only while the shell's notifications are down; otherwise every 30 s."),
             Bool(AdvancedSection, "diagnostics", "Diagnostics log",
                 c => c.Diagnostics, (c, v) => c.Diagnostics = v,
                 "Write what the app is doing to log.txt beside this file. For tracking down a problem."),

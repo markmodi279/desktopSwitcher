@@ -180,10 +180,15 @@ A click travels the other way and is just as indirect. `SwitcherStrip` raises
 notification comes back around the loop above. The strip never paints a state it has
 merely assumed.
 
-Behind all of it, a reconcile tick (2s by default) compares the model against the shell and
-corrects any divergence. It exists for the cases notifications cannot cover: a sink that
-died, an event that never arrived, an Explorer that restarted. When the shell is
-unavailable — mid-restart — it holds the last known model rather than blanking the strip.
+Behind all of it, a reconcile compares the model against the shell and corrects any
+divergence. It exists for the cases notifications cannot cover: a sink that died, an event
+that never arrived, an Explorer that restarted. It runs on every tick (2s by default) while
+the sink is down, and only every 30 s (`DesktopService.BackstopMs`) while it is up, because
+it has never yet been needed then: six weeks of diagnostics log held 36 corrections to the
+current desktop and 558 to the set, and the matching notification was within 150 ms of
+every one - the tick had simply landed between Explorer switching and its notification
+arriving. When the shell is unavailable — mid-restart — it holds the last known model
+rather than blanking the strip.
 
 ## Threading
 
@@ -212,7 +217,7 @@ is what makes the marshalling real; do not remove it as dead code.
 | Timer | Interval | Job |
 |---|---|---|
 | startup | 500 ms | waits for the taskbar to exist at login, then stops |
-| reconcile | `reconcileMs` (2000) | model safety net, the occupancy dot's cheap window sweep, and a stats reading |
+| reconcile | `reconcileMs` (2000) | a stats reading; the occupancy sweep, only if a window came, went or moved since the last; and the model check, every tick while the notification sink is down and every 30 s while it is up |
 | watchdog | 1000 ms | is the taskbar still there, is the strip still in it; remakes the hooks below if their process changed, and re-samples the foreground window as a backstop |
 | glide | 15 ms | runs only while the strip eases to a moved tray edge; `--glide` checks the arithmetic |
 | save | 2000 ms | debounced config write |
@@ -230,7 +235,7 @@ WinEvent hooks ([WinEventWatcher.cs](../src/shell/WinEventWatcher.cs)), so idle 
 | Hook | Scope | Job |
 |---|---|---|
 | tray | location changes in Explorer's process, kept for `TrayNotifyWnd` and `Shell_TrayWnd` | a tray icon shown or hidden moves the anchor; places the strip only if it did |
-| tray children | shows, hides and destroys in every other process, kept for children of `Shell_TrayWnd` and the tile | MediaController's tile arriving or leaving |
+| windows | shows, hides and destroys in every other process | MediaController's tile arriving or leaving (children of `Shell_TrayWnd`, and the tile); and for the occupancy dots, an alt-tab window shown or one the last sweep counted hidden or destroyed |
 | tile | location changes in MediaController's process, while its tile is the anchor | follows the tile frame by frame as it glides |
 | foreground | every foreground change | remembers the last real window for "send the active window here" |
 
@@ -281,8 +286,14 @@ different desktop by the time it is used. Anything that mutates state takes a `G
 `Desktop.Index` is for drawing a number on a button and nothing else.
 
 **Updates are event-driven, with polling as a safety net.** Shell notifications drive the
-UI, so the highlight changes instantly. A slow reconcile tick covers a dead notification
-sink, missed events and Explorer restarts.
+UI, so the highlight changes instantly. A slow reconcile covers a dead notification sink,
+missed events and Explorer restarts. The tick it runs on still fires every two seconds, but
+does next to nothing on an idle machine: the reconcile waits 30 s while notifications are
+live, the occupancy sweep waits for a window to come, go or move, and a stats reading that
+moves a meter by less than 3% lands in one repaint rather than a run of animation frames.
+Measured on the main thread, idle wakeups went from 48.6/s to 13.5/s across this and
+replacing the 40 ms and 300 ms polls with hooks; most of what is left is the stats reading
+itself, with `statsCpu = utility` the dearer of the two counters.
 
 **The strip animates by easing toward targets, never by playing a tween.** `SyncVisuals`
 is the one place that decides what "current" and "hovered" look like, so it sets targets
@@ -331,8 +342,16 @@ is that the ghosts have no desktop at all. That sweep also resolves a process na
 window, which is the part a timer cannot be allowed to pay for repeatedly. The occupancy
 dot needs none of it: `WindowInventory.OccupiedDesktops` runs the same enumeration and the
 same `GetWindowDesktopId` calls, skips everything after, and stops early once every desktop
-passed in has turned up occupied — cheap enough for the reconcile tick to call it every
-couple of seconds, which is what feeds the dot.
+passed in has turned up occupied — cheap enough for the reconcile tick to call, which is what
+feeds the dot. Even so it only sweeps when something has said the answer may have moved: an
+alt-tab window shown, a window the last sweep counted hidden or destroyed (both from the
+WinEvent hook), a window moved between desktops (`ViewVirtualDesktopChanged`, which the sink
+now passes on as `WindowsMoved`), a desktop added or removed, or the Settings window - ours,
+so the hook, which skips this process, cannot see it - opening or closing. Otherwise it hands
+back its last answer, and every 30 s it sweeps regardless, for a window shown before it had a
+title, which fails the alt-tab test at the moment it is shown. A hidden window shown again
+lands on the current desktop, not the one it was hidden on - Windows' choice, and the sweep
+reports it there.
 
 **The stats tile is the panel's resting place when pinned, not a second panel.** It reuses
 the hover panel rather than opening a window of its own, so it slides, themes and places
@@ -349,8 +368,10 @@ an unlock is not the user closing the panel.
 
 **The tile is a reading too.** It draws two meters, CPU and memory, instead of a mark.
 `Controller.PushStatsLevels` hands them the latest reading wherever one is taken — the
-reconcile tick, or the open panel's once-a-second refresh — and `SetStatsLevels` only
-retargets, so the frame timer eases the bars like every other value on the strip. Network
+reconcile tick, or the open panel's once-a-second refresh — and `SetStatsLevels` retargets,
+so the frame timer eases the bars like every other value on the strip. A move under 3% snaps
+instead: an idle CPU wanders that much between readings, and easing it ran the frame timer
+for seven frames every two seconds to shift a meter by a pixel. Network
 has no meter because it has no top: any fixed scale would sit full on a fast link or flat on
 a slow one.
 

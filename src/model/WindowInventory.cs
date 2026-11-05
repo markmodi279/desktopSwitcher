@@ -41,7 +41,9 @@ namespace DesktopSwitcher
     /// returns GUID_NULL for them, which TryGetWindowDesktop already reports as false.
     ///
     /// Built on demand and cached briefly - never on a timer. A hover is the only thing
-    /// that asks, and this costs a COM call plus a process query per open window.
+    /// that asks, and this costs a COM call plus a process query per open window. The
+    /// occupancy dot's cheaper question is asked on the reconcile tick, but answered from
+    /// the last sweep unless a window has come, gone or moved since - see MarkChanged.
     /// </summary>
     sealed class WindowInventory
     {
@@ -56,6 +58,35 @@ namespace DesktopSwitcher
 
         Dictionary<Guid, List<WindowEntry>> _byDesktop = new Dictionary<Guid, List<WindowEntry>>();
 
+        // --- occupancy: swept when something changed, not on every tick ------------
+        //
+        // The occupancy sweep ran on every reconcile tick, every two seconds, and asked the
+        // shell about each open window: one cross-process call apiece, and with the
+        // reconcile beside it most of what the process did while idle. Nearly every one of
+        // those sweeps found what the last had. Which desktops have windows only changes
+        // when a window comes, goes or moves, and all three are announced - a WinEvent for
+        // the first two, the shell's ViewVirtualDesktopChanged for the third - so the
+        // controller marks the answer stale when one arrives (MarkChanged, WindowShown,
+        // WindowGone) and the tick sweeps only then.
+        //
+        // OccupancyBackstopMs is for what is not announced: a window that was shown before
+        // it had a title, which fails the alt-tab test when it is shown and passes it once
+        // titled, with no show in between. Thirty seconds is how late such a window's dot
+        // can be; everything announced is as prompt as the tick, as before.
+
+        /// <summary>Longest an occupancy answer is reused when nothing has said it changed.</summary>
+        public const int OccupancyBackstopMs = 30000;
+
+        bool _occupancyStale = true;
+        HashSet<Guid> _occupied;            // the last answer, reused while nothing has changed
+        int _occupiedFor = -1;              // the desktop count it was computed for
+        readonly System.Diagnostics.Stopwatch _occupiedAge = new System.Diagnostics.Stopwatch();
+
+        // Every alt-tab window the last sweep saw. A hide or destroy can only change the
+        // answer if it was one of these, and a destroyed window cannot be asked anything
+        // else - by the time the event arrives it is gone.
+        HashSet<IntPtr> _known = new HashSet<IntPtr>();
+
         public WindowInventory(VirtualDesktopApi api)
         {
             _api = api;
@@ -65,6 +96,44 @@ namespace DesktopSwitcher
         public void Invalidate()
         {
             _age.Reset();
+            _occupancyStale = true;
+        }
+
+        /// <summary>
+        /// Something has said which desktops have windows may be different now: a window
+        /// moved between desktops, or a close-all finished. The next OccupiedDesktops sweeps.
+        /// </summary>
+        public void MarkChanged()
+        {
+            _occupancyStale = true;
+        }
+
+        /// <summary>
+        /// A window was shown somewhere. Stale only if it is one the sweep would count; most
+        /// shows are tooltips, menus and other tool windows, and those change nothing.
+        /// </summary>
+        public void WindowShown(IntPtr hwnd)
+        {
+            if (!_occupancyStale && Native.IsAltTabWindow(hwnd)) _occupancyStale = true;
+        }
+
+        /// <summary>
+        /// A window was hidden or destroyed. Stale only if the last sweep counted it - which
+        /// also covers an app hiding its window to the tray, since that window was counted.
+        /// </summary>
+        public void WindowGone(IntPtr hwnd)
+        {
+            if (!_occupancyStale && _known.Contains(hwnd)) _occupancyStale = true;
+        }
+
+        /// <summary>
+        /// Whether OccupiedDesktops would sweep rather than hand back its last answer. For the
+        /// tick to skip the call - and the strip's repaint - when there is nothing new.
+        /// </summary>
+        public bool OccupancyStale(int desktopCount)
+        {
+            return _occupancyStale || _occupied == null || desktopCount != _occupiedFor
+                || !_occupiedAge.IsRunning || _occupiedAge.ElapsedMilliseconds >= OccupancyBackstopMs;
         }
 
         /// <summary>
@@ -118,13 +187,23 @@ namespace DesktopSwitcher
         /// </summary>
         public HashSet<Guid> OccupiedDesktops(int desktopCount)
         {
+            // Nothing has said the answer moved since it was worked out, so it has not. A
+            // copy, because the caller keeps it and this one may be handed out again.
+            if (!OccupancyStale(desktopCount))
+                return new HashSet<Guid>(_occupied);
+
+            // Cleared before the sweep rather than after it: an event arriving mid-sweep was
+            // not necessarily seen by it, and must leave the answer stale for the next tick.
+            _occupancyStale = false;
+
             if (_age.IsRunning && _age.ElapsedMilliseconds < CacheMs)
-                return new HashSet<Guid>(_byDesktop.Keys);
+                return Remember(new HashSet<Guid>(_byDesktop.Keys), desktopCount);
 
             var occupied = new HashSet<Guid>();
             try
             {
                 List<IntPtr> candidates = EnumerateAltTabWindows();
+                _known = new HashSet<IntPtr>(candidates);
                 for (int i = 0; i < candidates.Count && occupied.Count < desktopCount; i++)
                 {
                     Guid desktop;
@@ -135,15 +214,30 @@ namespace DesktopSwitcher
             catch (ShellUnavailableException)
             {
                 Log.Write("inventory: shell unavailable, occupancy sweep skipped");
+                _occupancyStale = true;
                 return null;
             }
             catch (Exception ex)
             {
                 Log.Write("inventory: occupancy sweep failed - " + ex.Message);
+                _occupancyStale = true;
                 return null;
             }
 
-            return occupied;
+            return Remember(occupied, desktopCount);
+        }
+
+        HashSet<Guid> Remember(HashSet<Guid> occupied, int desktopCount)
+        {
+            // Only a change is worth a line: it says when a dot came or went, which is the
+            // one thing about the occupancy sweep nobody can otherwise see after the fact.
+            if (Log.Enabled && (_occupied == null || !_occupied.SetEquals(occupied)))
+                Log.Write("inventory: " + occupied.Count + " of " + desktopCount + " desktops have windows");
+
+            _occupied = occupied;
+            _occupiedFor = desktopCount;
+            _occupiedAge.Restart();
+            return new HashSet<Guid>(occupied);
         }
 
         void EnsureFresh()
@@ -180,6 +274,7 @@ namespace DesktopSwitcher
             try
             {
                 List<IntPtr> candidates = EnumerateAltTabWindows();
+                _known = new HashSet<IntPtr>(candidates);
                 var uwp = new UwpPairs(candidates);
 
                 for (int i = 0; i < candidates.Count; i++)

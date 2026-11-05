@@ -36,6 +36,7 @@ namespace DesktopSwitcher
             _notify.DesktopCreated += OnDesktopCreated;
             _notify.DesktopDestroyed += OnDesktopDestroyed;
             _notify.CurrentChanged += OnCurrentChanged;
+            _notify.ViewChanged += OnViewChanged;
         }
 
         /// <summary>The desktop set changed - rebuild buttons and reposition.</summary>
@@ -46,6 +47,12 @@ namespace DesktopSwitcher
 
         /// <summary>A desktop was renamed - repaint, no relayout. The set is unchanged.</summary>
         public event EventHandler NamesChanged;
+
+        /// <summary>
+        /// A window moved between desktops. The model is unchanged; this is for whoever
+        /// tracks what is on each desktop. Raised on the UI thread like the rest.
+        /// </summary>
+        public event EventHandler WindowsMoved;
 
         /// <summary>Current model. Only valid on the UI thread.</summary>
         public IList<Desktop> Desktops { get { return _desktops; } }
@@ -81,16 +88,48 @@ namespace DesktopSwitcher
         }
 
         /// <summary>
+        /// Longest the model goes unchecked while the notification sink is live.
+        ///
+        /// The reconcile ran on every tick, every two seconds, and it is not free: listing the
+        /// desktops and asking which is current is a handful of cross-process calls into
+        /// Explorer, about a dozen context switches each time, which made it the largest thing
+        /// the process did while idle. And it never found anything. Six weeks of diagnostics
+        /// log - 138 starts - hold 36 corrections to the current desktop and 558 to the set,
+        /// and every one of them had the matching notification within 150 ms of it, often just
+        /// after: the tick had landed between Explorer switching and its notification arriving,
+        /// and applied the same answer a few milliseconds early. Not one missed notification.
+        ///
+        /// So with the sink live this is a backstop and runs every thirty seconds; with it
+        /// down - not registered yet, or lost to an Explorer restart - every tick reconciles,
+        /// as before, since then nothing else is keeping the model current.
+        /// </summary>
+        public const int BackstopMs = 30000;
+
+        readonly System.Diagnostics.Stopwatch _sinceReconcile = new System.Diagnostics.Stopwatch();
+
+        /// <summary>
         /// Watchdog tick. Re-registers a dead sink and reconciles the model against
-        /// reality. Cheap enough to run every couple of seconds.
+        /// reality - every time while the sink is down, and every BackstopMs while it is up.
         /// </summary>
         public void Tick()
         {
+            // A sink registered just now heard nothing from before it existed - an Explorer
+            // restart drops the old one and calls straight in here - so this tick reconciles
+            // whatever the clock says. Skipping on the clock alone would leave the model
+            // unchecked after a restart for up to BackstopMs.
+            bool fresh = false;
             if (!_notify.IsRegistered && !DisableNotifications)
             {
                 if (_notify.Register())
+                {
                     Log.Write("service: notification sink re-registered");
+                    fresh = true;
+                }
             }
+
+            if (!fresh && _notify.IsRegistered && _sinceReconcile.IsRunning
+                && _sinceReconcile.ElapsedMilliseconds < BackstopMs)
+                return;
 
             Reconcile();
         }
@@ -134,6 +173,10 @@ namespace DesktopSwitcher
                 Log.Write("service: reconcile failed - " + ex.Message);
                 return;
             }
+
+            // Only a reconcile that reached the shell counts: one that failed above leaves
+            // the clock where it was, so the next tick tries again rather than in 30 s.
+            _sinceReconcile.Restart();
 
             bool setChanged = !SameIds(ids, _desktops);
             bool currentChanged = current != _currentId;
@@ -190,6 +233,11 @@ namespace DesktopSwitcher
         void OnDesktopDestroyed(Guid destroyed, Guid fallback)
         {
             Post(Reconcile);
+        }
+
+        void OnViewChanged()
+        {
+            Post(delegate { Raise(WindowsMoved); });
         }
 
         void OnCurrentChanged(Guid from, Guid to)
