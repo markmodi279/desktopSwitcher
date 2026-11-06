@@ -207,6 +207,12 @@ namespace DesktopSwitcher
         // WM_PAINT BitBlts from for classic. See DibSurface.
         DibSurface _surface;
 
+        // What the modern panel's window was last given, so a frame that only moves it can
+        // skip the redraw. See Present.
+        List<Row> _presentedRows;
+        Size _presentedSize;
+        bool _presentedAccentAtTop;
+
         List<Row> _rows = new List<Row>();
         bool _accentAtTop;      // panel sits below the anchor, so the accent flips
         bool _visible;
@@ -919,6 +925,25 @@ namespace DesktopSwitcher
             int w = b.Width + _spread * 2;
             int h = b.Height + _spread * 2;
 
+            var dst = new Native.POINT();
+            dst.X = b.X - _spread;
+            dst.Y = b.Y - (_spread - _drop);
+
+            // Nothing drawn depends on where the panel is - only on its rows, its size and
+            // which edge it grows from - so a frame that changed none of those is a move,
+            // and the window already holds the right pixels. That is every frame of the
+            // common slide: MoveTo keeps the height, and the text only changes once, when
+            // the re-show lands. Redrawing anyway measured 2.0 ms a frame, where moving the
+            // layered window alone is 0.3 ms. Same List instance, not equal contents: Show
+            // always builds a new one, so a refresh with identical text still redraws, which
+            // is the safe direction to be wrong in.
+            if (_presentedRows == _rows && _presentedSize == b.Size && _presentedAccentAtTop == _accentAtTop)
+            {
+                Native.SetWindowPos(Handle, IntPtr.Zero, dst.X, dst.Y, 0, 0,
+                                    Native.SWP_NOSIZE | Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
+                return;
+            }
+
             try
             {
                 // Grown, never shrunk, and sized up front for where the height is heading -
@@ -938,9 +963,6 @@ namespace DesktopSwitcher
                     RenderModern(g, b.Width, b.Height);
                 }
 
-                var dst = new Native.POINT();
-                dst.X = b.X - _spread;
-                dst.Y = b.Y - (_spread - _drop);
                 var size = new Native.SIZE();
                 size.cx = w;
                 size.cy = h;
@@ -950,10 +972,21 @@ namespace DesktopSwitcher
                 blend.SourceConstantAlpha = 255;
                 blend.AlphaFormat = Native.AC_SRC_ALPHA;
 
-                if (!Native.UpdateLayeredWindow(Handle, IntPtr.Zero, ref dst, ref size, _surface.Dc, ref src,
-                                                0, ref blend, Native.ULW_ALPHA))
+                if (Native.UpdateLayeredWindow(Handle, IntPtr.Zero, ref dst, ref size, _surface.Dc, ref src,
+                                               0, ref blend, Native.ULW_ALPHA))
+                {
+                    // Only a frame the window actually took counts as presented; a failed one
+                    // must be redrawn on the next frame rather than moved.
+                    _presentedRows = _rows;
+                    _presentedSize = b.Size;
+                    _presentedAccentAtTop = _accentAtTop;
+                }
+                else
+                {
+                    _presentedRows = null;
                     Log.Write("tooltip: UpdateLayeredWindow failed (win32 "
                               + System.Runtime.InteropServices.Marshal.GetLastWin32Error() + ")");
+                }
             }
             catch (Exception ex)
             {
