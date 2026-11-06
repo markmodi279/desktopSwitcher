@@ -1010,6 +1010,36 @@ namespace DesktopSwitcher
             return exe;
         }
 
+        [DllImport("dwmapi.dll")]
+        static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
+
+        const int DWMWA_CLOAKED = 14;
+
+        /// <summary>
+        /// Whether DWM is hiding the window while it stays "visible" to user32. Windows on
+        /// other desktops are cloaked this way, so IsAltTabWindow deliberately does not
+        /// check it - the inventory wants them. But a cloaked window is never something to
+        /// give focus to: a suspended packaged app leaves its CoreWindow visible, titled and
+        /// cloaked, and IsWindowOnCurrentVirtualDesktop says yes for it on every desktop.
+        /// </summary>
+        public static bool IsCloaked(IntPtr hwnd)
+        {
+            int cloaked;
+            return DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, out cloaked, 4) == 0 && cloaked != 0;
+        }
+
+        [DllImport("user32.dll")]
+        static extern short GetAsyncKeyState(int vKey);
+
+        /// <summary>Whether Ctrl, Alt, Shift or either Win key is physically down right now.</summary>
+        public static bool ModifiersDown()
+        {
+            int[] keys = { 0x11, 0x12, 0x10, 0x5B, 0x5C };   // VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN
+            for (int i = 0; i < keys.Length; i++)
+                if ((GetAsyncKeyState(keys[i]) & 0x8000) != 0) return true;
+            return false;
+        }
+
         /// <summary>
         /// True for windows a user would consider "an open app window" - the same set
         /// that earns a taskbar button.

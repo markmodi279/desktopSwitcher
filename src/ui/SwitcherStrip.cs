@@ -1744,6 +1744,11 @@ namespace DesktopSwitcher
                 // be. The panel stays as it was: a copy is not a request to open or close it.
                 if (StatsCopyRequested != null && IsGesture(StatsCopyGesture, button))
                 {
+                    // The hover after this is the copy's only confirmation ("Copied ..."),
+                    // so an earlier click that put the panel away must not still be holding
+                    // it off. It was: open, close, Ctrl+click without leaving the tile copied
+                    // and said nothing, which reads as a copy that did not happen.
+                    _statsDismissed = false;
                     Raise(StatsCopyRequested);
                     RestOrHide();
                     return;
@@ -1952,6 +1957,9 @@ namespace DesktopSwitcher
             // front of it or behind it.
             if (_menuIndex >= 0) return;
 
+            // Nor over a question. See Asking.
+            if (_asking) return;
+
             TooltipContent content;
             try
             {
@@ -2041,6 +2049,27 @@ namespace DesktopSwitcher
         /// figure jumped about with it. One sampler keeps the window a steady second.
         /// </summary>
         public bool StatsShowing { get { return ShowingStats; } }
+
+        bool _asking;
+
+        /// <summary>
+        /// Set while a confirmation is up - Controller.Ask's - and the panel stays away until
+        /// it is cleared. Both sit just above the strip, and the panel is the topmost of the
+        /// two. A middle click on a desktop with windows asked "Remove?", the pointer was
+        /// still on the button, and 400 ms later the panel for that desktop opened squarely
+        /// over the question: seen live, and from the screen it looked as though the click
+        /// had done nothing at all. The dialog is modal but pumps messages, so the strip goes
+        /// on hovering underneath it; this is what stops it.
+        /// </summary>
+        public bool Asking
+        {
+            get { return _asking; }
+            set
+            {
+                _asking = value;
+                if (value) HideTooltip();
+            }
+        }
 
         /// <summary>
         /// Where the panel goes when nothing is asking for it: back to the tile when pinned,

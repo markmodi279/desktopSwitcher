@@ -173,6 +173,13 @@ namespace DesktopSwitcher
         const int NudgeDelayMs = 200;
         System.Windows.Forms.Timer _nudge;
 
+        /// <summary>
+        /// How many times in a row the nudge has waited for modifiers to come up - see
+        /// NudgeFocus. Capped, so a key wedged down cannot hold it off for ever.
+        /// </summary>
+        int _nudgeWaits;
+        const int MaxNudgeWaits = 15;
+
         // --- lifetime ---------------------------------------------------------
 
         /// <summary>Exposed so the notification sink (M3) can share the shell provider.</summary>
@@ -706,22 +713,45 @@ namespace DesktopSwitcher
                 _nudge.Interval = NudgeDelayMs;
                 _nudge.Tick += delegate { _nudge.Stop(); NudgeFocus(); };
             }
+            _nudgeWaits = 0;
             _nudge.Stop();
             _nudge.Start();
         }
 
         void NudgeFocus()
         {
+            // Not while a modifier is down. Quick Ctrl+Alt+arrows, each released before the
+            // next, put this tick just as the next chord is going down - and that key press
+            // goes to the taskbar, which then owns "the last input", so the forced
+            // SetForegroundWindow below is refused. A refused one flashes its target: the
+            // stuck orange button HandForegroundToShell exists to prevent. Measured on 19045:
+            // eight presses 200 ms apart gave seven "(refused)" in the log and, on one run of
+            // two, two VS Code buttons left orange on every desktop. A held chord tapping the
+            // arrow was never refused, and neither was a pause; this waits for the chord to
+            // come up instead, and a switch arriving meanwhile restarts the whole wait.
+            if (Native.ModifiersDown() && _nudgeWaits < MaxNudgeWaits)
+            {
+                _nudgeWaits++;
+                _nudge.Start();
+                return;
+            }
+
             try
             {
                 IntPtr fg = Native.GetForegroundWindow();
-                if (fg != IntPtr.Zero && Native.IsAltTabWindow(fg) && IsOnCurrentDesktop(fg))
+                if (fg != IntPtr.Zero && Native.IsAltTabWindow(fg) && !Native.IsCloaked(fg)
+                    && IsOnCurrentDesktop(fg))
                     return;
 
                 IntPtr hwnd = Native.GetTopWindow(IntPtr.Zero);
                 while (hwnd != IntPtr.Zero)
                 {
-                    if (Native.IsAltTabWindow(hwnd) && IsOnCurrentDesktop(hwnd))
+                    // Cloaked is never a target, though it passes both other tests: a
+                    // suspended packaged app's CoreWindow is visible, titled and reported on
+                    // the current desktop wherever you are. Seen on 19045 with Notepads
+                    // suspended: every switch to an empty desktop handed the keyboard to a
+                    // Notepads window nobody could see.
+                    if (Native.IsAltTabWindow(hwnd) && !Native.IsCloaked(hwnd) && IsOnCurrentDesktop(hwnd))
                     {
                         bool ok = Native.ForceForeground(hwnd);
                         Log.Write(delegate

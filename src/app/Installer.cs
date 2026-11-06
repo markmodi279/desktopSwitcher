@@ -184,11 +184,12 @@ namespace DesktopSwitcher
             int self = Process.GetCurrentProcess().Id;
             int remaining = 0;
             stopped = 0;
-            foreach (Process p in Process.GetProcessesByName("DesktopSwitcher"))
+            foreach (Process p in Process.GetProcesses())
             {
                 try
                 {
                     if (p.Id == self) continue;
+                    if (!IsThisApp(p)) continue;
                     if (onlyPath != null && !string.Equals(p.MainModule.FileName, onlyPath,
                                                            StringComparison.OrdinalIgnoreCase))
                         continue;
@@ -208,6 +209,36 @@ namespace DesktopSwitcher
                 finally { p.Dispose(); }
             }
             return remaining;
+        }
+
+        /// <summary>
+        /// Whether a process is a copy of this app, whatever its exe is called.
+        ///
+        /// By name alone a renamed copy was invisible here, yet it still held the
+        /// single-instance mutex. A browser saves a second download as
+        /// "DesktopSwitcher (1).exe"; run that, and neither --quit nor the installer's
+        /// update could stop it, and the installed copy they started then exited on the
+        /// mutex without a word. Found with a test build named DesktopSwitcher-test.exe:
+        /// --quit said nothing was running while it was. So a process with another name
+        /// counts too when its exe's version info says it is this product - the attributes
+        /// in AssemblyInfo.cs, which a rename does not touch.
+        ///
+        /// MainModule throws for processes we cannot open, elevated or protected ones,
+        /// which are not ours anyway.
+        /// </summary>
+        static bool IsThisApp(Process p)
+        {
+            if (string.Equals(p.ProcessName, "DesktopSwitcher", StringComparison.OrdinalIgnoreCase))
+                return true;
+            try
+            {
+                FileVersionInfo info = p.MainModule.FileVersionInfo;
+                return string.Equals(info.ProductName, "DesktopSwitcher", StringComparison.Ordinal);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
         }
 
         // The quit message to every top-level window the process owns, hidden ones included:

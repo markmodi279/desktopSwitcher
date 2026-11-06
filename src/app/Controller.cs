@@ -824,7 +824,18 @@ namespace DesktopSwitcher
             using (var dialog = new ConfirmDialog(title, body, buttons, _background,
                                                    _host.DpiScale, anchor))
             {
-                dialog.ShowDialog(this);
+                // The hover panel would otherwise open over the dialog; see SwitcherStrip.Asking.
+                if (_strip != null) _strip.Asking = true;
+                try
+                {
+                    dialog.ShowDialog(this);
+                }
+                finally
+                {
+                    // The strip can have been rebuilt while the dialog was up - a desktop
+                    // added or removed underneath it - so the field is read again.
+                    if (_strip != null) _strip.Asking = false;
+                }
                 return dialog.Choice;
             }
         }
@@ -1056,7 +1067,10 @@ namespace DesktopSwitcher
         static string Ellipsize(string text, int max)
         {
             if (string.IsNullOrEmpty(text) || text.Length <= max) return text;
-            return text.Substring(0, max - 3).TrimEnd() + "...";
+            // The cut can land on an ellipsis the text already had - VS Code shortens its
+            // own titles to "App stress testing and b\u2026" - and "..." after it read as
+            // "b......" in the menu. So whatever trails is trimmed first.
+            return text.Substring(0, max - 1).TrimEnd(' ', '.', '-', '\u2026') + "\u2026";
         }
 
         static void AddItem(ContextMenuStrip menu, string text, bool enabled, EventHandler click)

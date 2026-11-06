@@ -22,6 +22,7 @@ namespace DesktopSwitcher
         readonly VirtualDesktopApi _api;
         readonly VirtualDesktopNotify _notify;
         readonly ISynchronizeInvoke _marshaller;
+        readonly DesktopNameWatcher _names = new DesktopNameWatcher();
 
         List<Desktop> _desktops = new List<Desktop>();
         Guid _currentId = Guid.Empty;
@@ -127,6 +128,10 @@ namespace DesktopSwitcher
                 }
             }
 
+            // Ahead of the early return: a rename made outside this app arrives by no other
+            // road, and checking for one is a zero-wait on an event. See DesktopNameWatcher.
+            if (_names.Changed()) RereadNames();
+
             if (!fresh && _notify.IsRegistered && _sinceReconcile.IsRunning
                 && _sinceReconcile.ElapsedMilliseconds < BackstopMs)
                 return;
@@ -145,6 +150,7 @@ namespace DesktopSwitcher
             if (_disposed) return;
             _disposed = true;
             _notify.Dispose();
+            _names.Dispose();
         }
 
         // --- reconciliation ---------------------------------------------------
@@ -206,13 +212,43 @@ namespace DesktopSwitcher
             var list = new List<Desktop>(ids.Length);
             for (int i = 0; i < ids.Length; i++)
             {
-                // Names are read here and only here - on set changes, never on a timer.
+                // Names are read here on set changes, and in RereadNames when the registry
+                // says one was written - never on a plain timer.
                 string name = VirtualDesktopApi.GetName(ids[i]);
                 list.Add(new Desktop(ids[i], i, name, ids[i] == current));
             }
 
             _desktops = list;
             _currentId = current;
+        }
+
+        /// <summary>
+        /// Re-reads every desktop's name from the registry and raises NamesChanged if any
+        /// moved. Only on DesktopNameWatcher's say-so, which fires after Explorer's write,
+        /// so this cannot land before it the way ApplyName's comment warns of - our own
+        /// renames come back through here too, a tick later, and read what ApplyName set.
+        /// </summary>
+        void RereadNames()
+        {
+            List<Desktop> list = null;
+            for (int i = 0; i < _desktops.Count; i++)
+            {
+                Desktop d = _desktops[i];
+                string name = VirtualDesktopApi.GetName(d.Id);
+                // Blank and null are the same name: GetName returns null for a cleared one,
+                // where ApplyName may have stored the "" it was given.
+                if (name == d.Name || (string.IsNullOrEmpty(name) && string.IsNullOrEmpty(d.Name)))
+                    continue;
+
+                if (list == null) list = new List<Desktop>(_desktops);
+                list[i] = new Desktop(d.Id, d.Index, name, d.IsCurrent);
+            }
+
+            if (list == null) return;
+
+            Log.Write("service: a desktop was renamed outside the app, names re-read");
+            _desktops = list;
+            Raise(NamesChanged);
         }
 
         static bool SameIds(Guid[] ids, List<Desktop> desktops)
@@ -336,9 +372,9 @@ namespace DesktopSwitcher
         /// <summary>
         /// Renames a desktop, correcting the model as it goes.
         ///
-        /// Nothing re-reads names between set changes, so without the second half of this
-        /// the hover panel and the menu would go on saying the old name until the next
-        /// desktop switch - which is to say, a rename you cannot see.
+        /// DesktopNameWatcher would bring the new name in on the next tick, up to
+        /// reconcileMs later; the second half of this makes our own rename show at once,
+        /// while the menu that made it is still closing.
         /// </summary>
         public void Rename(Guid id, string name)
         {

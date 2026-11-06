@@ -717,6 +717,18 @@ namespace DesktopSwitcher
                         t, t == uiThread ? "  (UI)" : "  *** OFF UI THREAD ***"));
                 };
 
+                // A rename made elsewhere - Task View, or --rename from a second console - has
+                // no notification of its own; it arrives on the tick, via DesktopNameWatcher.
+                service.NamesChanged += delegate
+                {
+                    int t = System.Threading.Thread.CurrentThread.ManagedThreadId;
+                    if (t != uiThread) offThread++;
+                    Console.WriteLine(string.Format("  {0}  NamesChanged  thread={1}{2}",
+                        DateTime.Now.ToString("HH:mm:ss.fff"),
+                        t, t == uiThread ? "  (UI)" : "  *** OFF UI THREAD ***"));
+                    Dump(service);
+                };
+
                 service.Start();
 
                 Console.WriteLine("Service started. UI thread = " + uiThread);

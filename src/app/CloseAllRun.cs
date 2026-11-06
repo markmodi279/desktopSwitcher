@@ -463,7 +463,8 @@ namespace DesktopSwitcher
         {
             const int Max = 28;
             if (text.Length <= Max) return text;
-            return text.Substring(0, Max - 3).TrimEnd() + "...";
+            // Trailing dots and ellipses trimmed first, as Controller.Ellipsize does.
+            return text.Substring(0, Max - 1).TrimEnd(' ', '.', '-', '\u2026') + "\u2026";
         }
 
         void End()

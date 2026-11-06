@@ -836,11 +836,14 @@ namespace DesktopSwitcher
             if (string.IsNullOrEmpty(text)) return "";
             if (g.MeasureString(text, font).Width <= maxWidth) return text;
 
+            // Trailing dots and ellipses trimmed before the mark goes on, as
+            // Controller.Ellipsize does: a title VS Code has already shortened would
+            // otherwise end in two.
             string s = text;
-            while (s.Length > 4 && g.MeasureString(s + "...", font).Width > maxWidth)
+            while (s.Length > 4 && g.MeasureString(s + "\u2026", font).Width > maxWidth)
                 s = s.Substring(0, s.Length - 4);
 
-            return s + "...";
+            return s.TrimEnd(' ', '.', '-', '\u2026') + "\u2026";
         }
 
         // --- rendering --------------------------------------------------------
