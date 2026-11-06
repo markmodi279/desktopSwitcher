@@ -1835,9 +1835,14 @@ namespace DesktopSwitcher
 
         static int CmdQuit()
         {
-            int left = Installer.StopOtherInstances(null, false);
-            Console.WriteLine(left == 0 ? "no other DesktopSwitcher is running"
-                                        : left + " would not close; not killed, to avoid a stranded tray icon");
+            int closed;
+            int left = Installer.StopOtherInstances(null, false, out closed);
+            if (closed > 0)
+                Console.WriteLine("closed " + closed + " running " + (closed == 1 ? "copy" : "copies"));
+            if (left > 0)
+                Console.WriteLine(left + " would not close; not killed, to avoid a stranded tray icon");
+            if (closed == 0 && left == 0)
+                Console.WriteLine("no other DesktopSwitcher is running");
             return left == 0 ? 0 : 1;
         }
 

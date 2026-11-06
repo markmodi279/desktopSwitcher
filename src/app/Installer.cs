@@ -169,8 +169,21 @@ namespace DesktopSwitcher
         /// </summary>
         public static int StopOtherInstances(string onlyPath, bool allowKill)
         {
+            int stopped;
+            return StopOtherInstances(onlyPath, allowKill, out stopped);
+        }
+
+        /// <summary>
+        /// The same, also counting the copies that were running and are now gone, asked or
+        /// killed. The remaining count alone reads 0 both when nothing was running and when
+        /// a copy closed as asked, and --quit printed "no other DesktopSwitcher is running"
+        /// straight after closing one.
+        /// </summary>
+        public static int StopOtherInstances(string onlyPath, bool allowKill, out int stopped)
+        {
             int self = Process.GetCurrentProcess().Id;
             int remaining = 0;
+            stopped = 0;
             foreach (Process p in Process.GetProcessesByName("DesktopSwitcher"))
             {
                 try
@@ -181,13 +194,13 @@ namespace DesktopSwitcher
                         continue;
 
                     RequestClose(p.Id);
-                    if (p.WaitForExit(3000)) continue;
+                    if (p.WaitForExit(3000)) { stopped++; continue; }
 
                     if (allowKill)
                     {
                         Log.Write("installer: pid " + p.Id + " did not close when asked - killing");
                         p.Kill();
-                        p.WaitForExit(3000);
+                        if (p.WaitForExit(3000)) stopped++;
                     }
                     else remaining++;
                 }
