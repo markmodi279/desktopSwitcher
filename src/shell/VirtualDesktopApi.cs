@@ -167,6 +167,12 @@ namespace DesktopSwitcher
         /// <summary>Null when this shell cannot name desktops. Optional, unlike the four above.</summary>
         IVirtualDesktopManagerInternal2 _names;
 
+        // How long after a switch the focus fallback looks. Explorer's own activation
+        // lands within a few milliseconds; this leaves it ample room and is still too
+        // short for a person to start typing into nothing.
+        const int NudgeDelayMs = 200;
+        System.Windows.Forms.Timer _nudge;
+
         // --- lifetime ---------------------------------------------------------
 
         /// <summary>Exposed so the notification sink (M3) can share the shell provider.</summary>
@@ -370,6 +376,8 @@ namespace DesktopSwitcher
 
         public void SwitchTo(Guid id)
         {
+            HandForegroundToShell();
+
             Do(delegate
             {
                 Guid target = id;
@@ -382,7 +390,7 @@ namespace DesktopSwitcher
                 _manager.SwitchDesktop(desktop);
             }, "SwitchDesktop");
 
-            NudgeFocus();
+            ScheduleNudge();
         }
 
         public Guid Create()
@@ -616,19 +624,111 @@ namespace DesktopSwitcher
         // --- focus ------------------------------------------------------------
 
         /// <summary>
-        /// SwitchDesktop does not reliably move keyboard focus, which leaves the new
-        /// desktop with no active window. Activate the topmost real window there.
+        /// Gives the foreground to the taskbar before a switch, unless Explorer already
+        /// holds it.
+        ///
+        /// SwitchDesktop activates the new desktop's last active window itself. When
+        /// Explorer holds the foreground, as it does after any click on the strip because
+        /// the strip lives inside the taskbar, that activation is clean. When another
+        /// app's window holds it, as it does when a shortcut is pressed while typing in
+        /// VS Code, Explorer also flashes the window it activates (HSHELL_FLASH, then
+        /// HSHELL_RUDEAPPACTIVATED a moment later). The activation normally clears the
+        /// flash at once. But switch away again within about half a second, as quick
+        /// Ctrl+Alt+arrows do, and the flash keeps going and ends with the button stuck
+        /// orange. Windows 10 shows a flashing window's button on every desktop, so the
+        /// result is another desktop's window sitting orange on this desktop's taskbar,
+        /// and clicking it jumps over there. Measured on 19045: twelve hotkey switches
+        /// 0.4 s apart left one stuck every run, and none with this step in front.
+        ///
+        /// The step is allowed because the process that receives WM_HOTKEY may set the
+        /// foreground. Where it is refused, on a switch with no input behind it, the
+        /// switch goes ahead as before and may flash; nothing worse.
         /// </summary>
+        static void HandForegroundToShell()
+        {
+            try
+            {
+                IntPtr tray = Native.FindWindow("Shell_TrayWnd", null);
+                if (tray == IntPtr.Zero) return;
+                if (IsExplorers(Native.GetForegroundWindow(), tray)) return;
+
+                bool ok = Native.ForceForeground(tray);
+                if (!ok) Log.Write("switch: taskbar refused the foreground, switch may flash");
+            }
+            catch (Exception ex)
+            {
+                Log.Write("switch: foreground handoff failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Whether a window belongs to Explorer's process - the taskbar, a secondary
+        /// taskbar, the desktop (Progman). Any of them holding the foreground keeps the
+        /// switch's own activation clean.
+        /// </summary>
+        static bool IsExplorers(IntPtr hwnd, IntPtr tray)
+        {
+            if (hwnd == IntPtr.Zero) return false;
+            if (hwnd == tray) return true;
+            uint pid, trayPid;
+            Native.GetWindowThreadProcessId(hwnd, out pid);
+            Native.GetWindowThreadProcessId(tray, out trayPid);
+            return pid != 0 && pid == trayPid;
+        }
+
+        /// <summary>
+        /// A fallback for when the switch left focus behind on the old desktop, or nowhere:
+        /// activate the topmost real window on the new one.
+        ///
+        /// Only a fallback. SwitchDesktop activates the new desktop's last active window
+        /// itself, and an unconditional nudge got in its way twice over. It walks the
+        /// z-order while Explorer's activation is still landing, so it saw a stale order
+        /// and moved focus from VS Code, which Explorer had just picked, to the terminal
+        /// beside it. And a SetForegroundWindow that is refused flashes its target - the
+        /// stuck orange button HandForegroundToShell exists to prevent, by another road.
+        /// So it acts only when the foreground is not a window on the new desktop.
+        /// </summary>
+        void ScheduleNudge()
+        {
+            // The check cannot run the moment SwitchDesktop returns: Explorer's activation
+            // lands a few milliseconds later, so the foreground still reads as the taskbar
+            // HandForegroundToShell gave it to, and a nudge then overrides Explorer's pick.
+            // Seen on 19045 with the check inline: every switch to a desktop holding
+            // KeePassXC (last used) and a Chrome window (higher in z-order) ended on Chrome.
+            //
+            // A WinForms timer, so the tick comes back on this thread - the one the COM
+            // objects were created on. A selftest switching from a thread with no message
+            // loop never gets the tick, and needs no focus anyway. A switch inside the
+            // wait restarts it: only the last desktop's focus matters.
+            if (_nudge == null)
+            {
+                _nudge = new System.Windows.Forms.Timer();
+                _nudge.Interval = NudgeDelayMs;
+                _nudge.Tick += delegate { _nudge.Stop(); NudgeFocus(); };
+            }
+            _nudge.Stop();
+            _nudge.Start();
+        }
+
         void NudgeFocus()
         {
             try
             {
+                IntPtr fg = Native.GetForegroundWindow();
+                if (fg != IntPtr.Zero && Native.IsAltTabWindow(fg) && IsOnCurrentDesktop(fg))
+                    return;
+
                 IntPtr hwnd = Native.GetTopWindow(IntPtr.Zero);
                 while (hwnd != IntPtr.Zero)
                 {
                     if (Native.IsAltTabWindow(hwnd) && IsOnCurrentDesktop(hwnd))
                     {
-                        Native.ForceForeground(hwnd);
+                        bool ok = Native.ForceForeground(hwnd);
+                        Log.Write(delegate
+                        {
+                            return "switch: focus was not on the new desktop, nudged 0x"
+                                + hwnd.ToString("X") + (ok ? "" : " (refused)");
+                        });
                         return;
                     }
                     hwnd = Native.GetWindow(hwnd, Native.GW_HWNDNEXT);
