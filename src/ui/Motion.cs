@@ -70,10 +70,18 @@ namespace DesktopSwitcher
         /// down - which is exactly what stepping by elapsed time is for. The UI thread also
         /// carries the reconcile tick, the watchdog and the window-inventory sweep, so late
         /// frames are the normal case, not the pathological one.
+        ///
+        /// A frame with no time in it covers no distance. It used to return 1 - arrive at
+        /// once - which is right for animation switched off and wrong for this: a timer can
+        /// fire twice inside one TickCount step, and the second frame landed whatever it was
+        /// easing in a single jump. The strip's own frame loop happened to skip such frames;
+        /// the tray glide and the Settings tab slide did not, and a live run with the process
+        /// timer at 1 ms saw 26 of 66 glides end that way.
         /// </summary>
         public static float Rate(int elapsedMs, int animationMs)
         {
-            if (animationMs <= 0 || elapsedMs <= 0) return 1f;
+            if (animationMs <= 0) return 1f;
+            if (elapsedMs <= 0) return 0f;
 
             const double Settles = 5.5413;   // Math.Log(255)
 
