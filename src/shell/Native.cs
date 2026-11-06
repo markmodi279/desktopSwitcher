@@ -405,6 +405,15 @@ namespace DesktopSwitcher
         public static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER bmi, uint usage,
                                                      out IntPtr bits, IntPtr section, uint offset);
 
+        // How the strip and the classic panel put a finished frame on screen. GDI+'s
+        // DrawImage onto a window DC measured 7.4 ms for a 550x194 panel - most of a 15 ms
+        // frame - where BitBlt from a DIB section of the same pixels took 0.05 ms.
+        [DllImport("gdi32.dll")]
+        public static extern bool BitBlt(IntPtr hdcDest, int x, int y, int width, int height,
+                                         IntPtr hdcSrc, int srcX, int srcY, uint rop);
+
+        public const uint SRCCOPY = 0x00CC0020;
+
         // --- app icons ----------------------------------------------------------
 
         // PrivateExtractIcons rather than ExtractIconEx or Icon.ExtractAssociatedIcon: it is

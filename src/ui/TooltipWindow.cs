@@ -191,9 +191,9 @@ namespace DesktopSwitcher
 
         readonly int _padX, _padY, _accent, _gap, _width;
 
-        // The style, and what it costs. Modern is a layered window - see Present - so it
-        // carries a DIB section to draw into and a shadow to stretch; classic carries
-        // neither and paints on WM_PAINT exactly as it always has. Everything that differs
+        // The style, and what it costs. Modern is a layered window - see Present - and
+        // carries a shadow to stretch; classic paints on WM_PAINT. Both draw into the same
+        // kind of back buffer, _surface. Everything that differs
         // between the two keys off this one flag, set from the Look the panel was made with.
         readonly bool _layered;
         readonly Font _headFont;     // modern title
@@ -203,11 +203,10 @@ namespace DesktopSwitcher
         Bitmap _shadow;                // the nine-slice source, built once
         int _shadowCorner;             // corner slice size in it
 
-        IntPtr _memDC, _dib, _oldBitmap, _bits;
-        int _dibWidth, _dibHeight;
-        Bitmap _surface;               // GDI+ over _bits, premultiplied
+        // The back buffer for both styles: what UpdateLayeredWindow reads for modern, what
+        // WM_PAINT BitBlts from for classic. See DibSurface.
+        DibSurface _surface;
 
-        Bitmap _buffer;
         List<Row> _rows = new List<Row>();
         bool _accentAtTop;      // panel sits below the anchor, so the accent flips
         bool _visible;
@@ -868,24 +867,19 @@ namespace DesktopSwitcher
                 // and "grow only" alone does not help, because the growth is monotonic and
                 // fails the test every time. Taking the target height up front means one
                 // allocation for the whole slide.
-                int needH = Math.Max(h, TargetHeight());
-                if (_buffer == null || _buffer.Width < w || _buffer.Height < needH)
-                {
-                    if (_buffer != null) _buffer.Dispose();
-                    _buffer = new Bitmap(Math.Max(w, _width), needH);
-                }
+                //
+                // A DIB section and BitBlt rather than a Bitmap and DrawImage: the copy was
+                // 7.4 ms of a 10.7 ms frame. See DibSurface. Only w x h is drawn and copied,
+                // because the buffer is generally taller than the window and the surplus
+                // holds whatever the last larger frame left there.
+                EnsureSurface(Math.Max(w, _width), Math.Max(h, TargetHeight()));
 
-                using (var g = Graphics.FromImage(_buffer))
+                using (var g = Graphics.FromImage(_surface.Bitmap))
                 {
                     Render(g, w, h);
                 }
 
-                using (var target = Graphics.FromHdc(hdc))
-                {
-                    // Clipped, because the buffer is now generally taller than the window
-                    // and the surplus holds whatever the last larger frame left there.
-                    target.DrawImageUnscaledAndClipped(_buffer, new Rectangle(0, 0, w, h));
-                }
+                _surface.CopyTo(hdc, w, h);
             }
             catch (Exception ex)
             {
@@ -932,7 +926,7 @@ namespace DesktopSwitcher
                 EnsureSurface(Math.Max(w, _width + _spread * 2),
                               Math.Max(h, TargetHeight() + _spread * 2));
 
-                using (var g = Graphics.FromImage(_surface))
+                using (var g = Graphics.FromImage(_surface.Bitmap))
                 {
                     g.Clear(Color.Transparent);
 
@@ -956,7 +950,7 @@ namespace DesktopSwitcher
                 blend.SourceConstantAlpha = 255;
                 blend.AlphaFormat = Native.AC_SRC_ALPHA;
 
-                if (!Native.UpdateLayeredWindow(Handle, IntPtr.Zero, ref dst, ref size, _memDC, ref src,
+                if (!Native.UpdateLayeredWindow(Handle, IntPtr.Zero, ref dst, ref size, _surface.Dc, ref src,
                                                 0, ref blend, Native.ULW_ALPHA))
                     Log.Write("tooltip: UpdateLayeredWindow failed (win32 "
                               + System.Runtime.InteropServices.Marshal.GetLastWin32Error() + ")");
@@ -967,47 +961,10 @@ namespace DesktopSwitcher
             }
         }
 
-        /// <summary>
-        /// A 32bpp top-down DIB section selected into a memory DC, with a GDI+ Bitmap laid
-        /// over the very same bits. GDI+ draws premultiplied straight into the memory
-        /// UpdateLayeredWindow reads, so a frame is drawn once and copied by nobody.
-        /// </summary>
         void EnsureSurface(int width, int height)
         {
-            if (_surface != null && _dibWidth >= width && _dibHeight >= height) return;
-
-            ReleaseSurface();
-
-            var bi = new Native.BITMAPINFOHEADER();
-            bi.biSize = System.Runtime.InteropServices.Marshal.SizeOf(typeof(Native.BITMAPINFOHEADER));
-            bi.biWidth = width;
-            bi.biHeight = -height;     // negative: top-down, so row 0 is the top, as GDI+ expects
-            bi.biPlanes = 1;
-            bi.biBitCount = 32;
-
-            _memDC = Native.CreateCompatibleDC(IntPtr.Zero);
-            _dib = Native.CreateDIBSection(_memDC, ref bi, 0, out _bits, IntPtr.Zero, 0);
-            if (_memDC == IntPtr.Zero || _dib == IntPtr.Zero || _bits == IntPtr.Zero)
-            {
-                ReleaseSurface();
-                throw new InvalidOperationException("no DIB section for the panel");
-            }
-
-            _oldBitmap = Native.SelectObject(_memDC, _dib);
-            _surface = new Bitmap(width, height, width * 4,
-                                  System.Drawing.Imaging.PixelFormat.Format32bppPArgb, _bits);
-            _dibWidth = width;
-            _dibHeight = height;
-        }
-
-        void ReleaseSurface()
-        {
-            if (_surface != null) { _surface.Dispose(); _surface = null; }
-            if (_memDC != IntPtr.Zero && _oldBitmap != IntPtr.Zero) Native.SelectObject(_memDC, _oldBitmap);
-            if (_dib != IntPtr.Zero) Native.DeleteObject(_dib);
-            if (_memDC != IntPtr.Zero) Native.DeleteDC(_memDC);
-            _memDC = _dib = _oldBitmap = _bits = IntPtr.Zero;
-            _dibWidth = _dibHeight = 0;
+            if (_surface == null) _surface = new DibSurface();
+            _surface.Ensure(width, height);
         }
 
         /// <summary>
@@ -1653,8 +1610,7 @@ namespace DesktopSwitcher
 
             if (Handle != IntPtr.Zero) DestroyHandle();
 
-            if (_buffer != null) { _buffer.Dispose(); _buffer = null; }
-            ReleaseSurface();
+            if (_surface != null) { _surface.Dispose(); _surface = null; }
             if (_shadow != null) { _shadow.Dispose(); _shadow = null; }
             if (_headFont != null) _headFont.Dispose();
             if (_appFont != null) _appFont.Dispose();

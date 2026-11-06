@@ -241,7 +241,7 @@ namespace DesktopSwitcher
 
         Color _background;
         Color _highlight;
-        Bitmap _buffer;
+        DibSurface _buffer;
         Font _font;
         Font _currentFont;             // modern: the current desktop's number, semibold
         Font _glyphFont;               // modern: Segoe MDL2 Assets for the '+'; null if missing
@@ -853,21 +853,17 @@ namespace DesktopSwitcher
                 int w = client.Width, h = client.Height;
                 if (w <= 0 || h <= 0) return;
 
-                if (_buffer == null || _buffer.Width != w || _buffer.Height != h)
-                {
-                    if (_buffer != null) _buffer.Dispose();
-                    _buffer = new Bitmap(w, h);
-                }
+                // A DIB section and BitBlt rather than a Bitmap and DrawImage: the copy was
+                // most of the frame. See DibSurface.
+                if (_buffer == null) _buffer = new DibSurface();
+                _buffer.Ensure(w, h);
 
-                using (var g = Graphics.FromImage(_buffer))
+                using (var g = Graphics.FromImage(_buffer.Bitmap))
                 {
                     Render(g, w, h);
                 }
 
-                using (var target = Graphics.FromHdc(hdc))
-                {
-                    target.DrawImageUnscaled(_buffer, 0, 0);
-                }
+                _buffer.CopyTo(hdc, w, h);
             }
             catch (Exception ex)
             {
