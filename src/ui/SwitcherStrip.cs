@@ -244,6 +244,8 @@ namespace DesktopSwitcher
         int _topIndex = -1;            // drawn last, over its neighbours: the dragged or landing button
         int _landIndex = -1;           // set only while ReorderRequested runs - see OnDrop
         float _landOffset;
+        bool _swallowUp;               // the next left release ends a drag already let go - see LetGo
+        bool _leftDown;                // this window saw the left press the next release belongs to
         int _menuIndex = -1;           // button whose context menu is open, by the same index
         bool _trackingMouse;
         bool _disposed;
@@ -468,7 +470,11 @@ namespace DesktopSwitcher
             // leaves the drag pointing at positions that no longer mean what they did. Let
             // it go rather than drop something somewhere nobody chose. Our own drop never
             // gets here dragging: OnDrop ends the drag before it asks for the reorder.
-            if (!sameSet && _pressIndex >= 0) EndDrag();
+            if (!sameSet && _pressIndex >= 0)
+            {
+                Log.Write("strip: desktops changed under a press, letting go");
+                LetGo();
+            }
 
             _desktops = new List<Desktop>(desktops);
 
@@ -1944,6 +1950,7 @@ namespace DesktopSwitcher
         void OnPress(int x, int y)
         {
             _pressIndex = -1;
+            _swallowUp = false;
             if (ReorderRequested == null || _desktops.Count < 2) return;
 
             int index = HitTest(x, y);
@@ -2082,9 +2089,25 @@ namespace DesktopSwitcher
         void CancelDrag()
         {
             Log.Write("strip: drag cancelled");
-            EndDrag();
+            LetGo();
             SyncVisuals();
             Invalidate();
+        }
+
+        /// <summary>
+        /// Ends a press or drag that is being abandoned while the button may still be down,
+        /// and arranges for the release, when it comes, to be nothing.
+        ///
+        /// Found by driving the live strip: a desktop created elsewhere mid-drag let the drag
+        /// go, as it should, and the release a second later then arrived as an ordinary left
+        /// click and switched to whichever desktop the shifted strip now had under the
+        /// pointer. The user was holding a button, not clicking one. Cleared by the next
+        /// press too, in case the release went to some other window and never came here.
+        /// </summary>
+        void LetGo()
+        {
+            if (_pressIndex >= 0 && (Control.MouseButtons & MouseButtons.Left) != 0) _swallowUp = true;
+            EndDrag();
         }
 
         /// <summary>
@@ -2714,6 +2737,7 @@ namespace DesktopSwitcher
 
                 case Native.WM_LBUTTONDOWN:
                     // On to DefWindowProc afterwards, as before this case existed.
+                    _leftDown = true;
                     OnPress(Native.LoWord(m.LParam), Native.HiWord(m.LParam));
                     break;
 
@@ -2732,20 +2756,43 @@ namespace DesktopSwitcher
                     // otherwise also be switched to.
                     if (_dragging)
                     {
+                        _leftDown = false;
                         OnDrop(Native.LoWord(m.LParam), Native.HiWord(m.LParam));
                         return;
                     }
+                    if (_swallowUp)
+                    {
+                        _swallowUp = false;
+                        _leftDown = false;
+                        return;
+                    }
+
+                    // A release with no press behind it is the end of a gesture that began
+                    // somewhere else, and is not a click. Found by driving the live strip: a
+                    // config change mid-drag rebuilt the strip, and the new one - which never
+                    // saw the press - switched to whatever desktop the drag was let go over.
+                    // An Explorer restart or a theme change rebuilds it just the same.
+                    if (!_leftDown) return;
+                    _leftDown = false;
                     _pressIndex = -1;
                     OnClick(Native.LoWord(m.LParam), Native.HiWord(m.LParam),
                             MouseButtons.Left, Shift(m.WParam));
                     return;
 
                 case Native.WM_RBUTTONUP:
+                    // Not mid-drag, nor middle below. Both were live, and both found by driving
+                    // the strip: a right click opened the menu of whichever button the pointer
+                    // was crossing, over a drag frozen in place, and a middle click removed the
+                    // desktop under the pointer - an empty one without even asking. A second
+                    // button pressed while one is already held is far likelier a slip than a
+                    // request.
+                    if (_dragging) return;
                     OnClick(Native.LoWord(m.LParam), Native.HiWord(m.LParam),
                             MouseButtons.Right, Shift(m.WParam));
                     return;
 
                 case Native.WM_MBUTTONUP:
+                    if (_dragging) return;
                     OnClick(Native.LoWord(m.LParam), Native.HiWord(m.LParam),
                             MouseButtons.Middle, Shift(m.WParam));
                     return;
