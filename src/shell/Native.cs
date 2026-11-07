@@ -311,6 +311,21 @@ namespace DesktopSwitcher
         /// the handler happens to run.
         /// </summary>
         public const int MK_SHIFT = 0x0004;
+        public const int MK_LBUTTON = 0x0001;
+        public const int WM_CAPTURECHANGED = 0x0215;
+
+        // Mouse capture, for the strip's drag to reorder: once a drag starts the pointer
+        // routinely leaves the 40-odd pixels of taskbar, and without capture the release
+        // would land on whatever window is under it and the drag would never end.
+        [DllImport("user32.dll")]
+        public static extern IntPtr SetCapture(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool ReleaseCapture();
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetCapture();
 
         public static int LoWord(IntPtr value)
         {

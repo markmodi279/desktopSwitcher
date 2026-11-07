@@ -143,6 +143,9 @@ namespace DesktopSwitcher
                                   + (fine ? ", the current desktop  OK" : ", wanted the current one, " + expected));
                 Console.WriteLine();
                 ok &= fine;
+
+                Console.WriteLine("== through DesktopService, as the app does it  (C B A -> A C B)");
+                ok &= ServiceSeesOneChange(api, c, a);
             }
             catch (Exception ex)
             {
@@ -276,6 +279,69 @@ namespace DesktopSwitcher
             Console.WriteLine(ok ? "  OK" : "  FAILED");
             Console.WriteLine();
             return ok;
+        }
+
+        /// <summary>
+        /// The claim the strip's drag is built on: a reorder made on the UI thread reaches
+        /// the strip as one DesktopsChanged carrying the final order, never as the run of
+        /// intermediate rows - one desktop more, then one less, per step - that another
+        /// process watching sees. The notifications for each step arrive on RPC threads and
+        /// are posted to the UI thread, so they should queue behind the reorder and find
+        /// nothing left to change. Unless COM's modal loop, which pumps messages while an
+        /// STA thread waits on a cross-process call, dispatches them mid-run; this is what
+        /// would catch that.
+        /// </summary>
+        static bool ServiceSeesOneChange(VirtualDesktopApi api, int from, int to)
+        {
+            using (var form = new System.Windows.Forms.Form())
+            {
+                IntPtr handle = form.Handle;   // the marshaller needs a real window
+                var service = new DesktopService(api, form);
+                var counts = new List<int>();
+                service.DesktopsChanged += delegate { counts.Add(service.Count); };
+                service.Start();
+                Pump(300);
+                counts.Clear();
+
+                Guid[] before = api.GetDesktopIds();
+                var names = new string[before.Length];
+                for (int i = 0; i < before.Length; i++) names[i] = VirtualDesktopApi.GetName(before[i]);
+
+                service.Reorder(from, to);
+                Pump(800);
+
+                var order = new List<int>();
+                for (int i = 0; i < before.Length; i++) order.Add(i);
+                order.RemoveAt(from);
+                order.Insert(to, from);
+
+                bool ok = true;
+                IList<Desktop> model = service.Desktops;
+                for (int i = 0; i < model.Count; i++)
+                    if (!SameName(model[i].Name, names[order[i]])) ok = false;
+                if (model.Count != before.Length) ok = false;
+
+                Console.WriteLine("  DesktopsChanged raised " + counts.Count + " time(s), with counts ["
+                                  + string.Join(", ", counts.ConvertAll(n => n.ToString()).ToArray()) + "]");
+                Console.WriteLine("  model order " + (ok ? "matches" : "DOES NOT match") + " the new order");
+
+                bool one = counts.Count == 1 && counts[0] == before.Length;
+                Console.WriteLine(one && ok ? "  OK" : "  FAILED - the strip would see intermediate rows");
+                Console.WriteLine();
+
+                service.Dispose();
+                return one && ok;
+            }
+        }
+
+        static void Pump(int ms)
+        {
+            var clock = Stopwatch.StartNew();
+            while (clock.ElapsedMilliseconds < ms)
+            {
+                System.Windows.Forms.Application.DoEvents();
+                Thread.Sleep(10);
+            }
         }
 
         static Dictionary<IntPtr, int> SnapshotWindows(VirtualDesktopApi api, Guid[] ids)

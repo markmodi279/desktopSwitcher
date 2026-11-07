@@ -167,7 +167,9 @@ test window on each and a hidden one beside the first, then four moves - last to
 first to last, a swap, and the current desktop recreated under the user - each checked
 for names, kept GUIDs, every window's desktop and the current desktop, with the time of
 every call printed. It never reaches the user's desktops, since a reorder only recreates
-from the target position onward. `--reorder N M` runs the same check on real desktops.
+from the target position onward. A fifth move goes through a real `DesktopService` with a
+message loop and checks that `DesktopsChanged` fires exactly once, with the final order.
+`--reorder N M` runs the same check on real desktops.
 
 ## How a change reaches the screen
 
@@ -492,7 +494,10 @@ halfway loses no window. Only desktops at or after the target position are touch
 any leading run already in place. Recreated desktops have new GUIDs, which is why a reorder
 is refused while a close-all holds one. It runs to completion on the UI thread, so the
 created and destroyed notifications queue behind it and the strip goes straight to the
-final order. Each call costs about 1 ms on 19045. A hidden window turned out to belong to no
+final order - which is what the strip's drag relies on: `OnDrop` ends the drag, raises
+`ReorderRequested`, and the new order arrives in `SetDesktops` before that call returns,
+so the dropped button can be started from under the pointer and glide into its slot rather
+than jump. Each call costs about 1 ms on 19045. A hidden window turned out to belong to no
 desktop at all - it comes back on whichever is current when shown - so it needs no carrying
 either way.
 

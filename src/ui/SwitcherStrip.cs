@@ -122,6 +122,12 @@ namespace DesktopSwitcher
             public float HighlightTarget;
             public float HoverTarget;
             public float DotTarget;
+
+            // Pixels this button is drawn away from its own slot: the button being dragged
+            // follows the pointer, the ones it passes step aside by a button's width, and a
+            // dropped one glides from where it was let go into its new slot. Zero at rest.
+            public float Offset;
+            public float OffsetTarget;
         }
 
         /// <summary>
@@ -226,6 +232,18 @@ namespace DesktopSwitcher
         int _lastFrame;                // Environment.TickCount at the last stepped frame
 
         int _hoverIndex = -1;          // == _desktops.Count means '+', one past it the stats tile
+
+        // Drag to reorder. A press on a desktop button only arms it; the drag starts once
+        // the pointer has gone DragThreshold from where it went down, so a click with a
+        // little wobble in it is still a click. See OnPressMove.
+        int _pressIndex = -1;          // desktop button the left button went down on, or -1
+        int _pressX;                   // where, in client x
+        bool _dragging;                // past the threshold: the button is following the pointer
+        int _dragGrab;                 // pointer x minus the dragged button's left edge, kept as it moves
+        int _dropIndex = -1;           // the slot the dragged button would land in now
+        int _topIndex = -1;            // drawn last, over its neighbours: the dragged or landing button
+        int _landIndex = -1;           // set only while ReorderRequested runs - see OnDrop
+        float _landOffset;
         int _menuIndex = -1;           // button whose context menu is open, by the same index
         bool _trackingMouse;
         bool _disposed;
@@ -291,6 +309,15 @@ namespace DesktopSwitcher
 
         /// <summary>Left click on the '+' button.</summary>
         public event EventHandler CreateRequested;
+
+        /// <summary>
+        /// A desktop button was dragged to a new place: (from, to), both 0-based positions
+        /// in the row. The handler reorders and the new order comes back through
+        /// SetDesktops, while the handler is still running - see OnDrop for why that
+        /// matters. A handler that declines, or a reorder that fails, simply never calls
+        /// SetDesktops, and the buttons ease back to where they were.
+        /// </summary>
+        public event Action<int, int> ReorderRequested;
 
         /// <summary>
         /// Right click on any button: the index HitTest returned, and that button in screen
@@ -437,6 +464,12 @@ namespace DesktopSwitcher
             // already correct rather than sliding in from the left edge.
             bool sameSet = SameSet(_desktops, desktops);
 
+            // A desktop added or removed under a drag - from Task View, a hotkey, the shell -
+            // leaves the drag pointing at positions that no longer mean what they did. Let
+            // it go rather than drop something somewhere nobody chose. Our own drop never
+            // gets here dragging: OnDrop ends the drag before it asks for the reorder.
+            if (!sameSet && _pressIndex >= 0) EndDrag();
+
             _desktops = new List<Desktop>(desktops);
 
             if (_visuals.Length != SlotCount)
@@ -456,8 +489,22 @@ namespace DesktopSwitcher
             // the window rect AnchorFor reads is still the old one.)
             if (!ShowingStats) RestOrHide();
 
+            if (_topIndex >= _desktops.Count) _topIndex = -1;
+
             SyncVisuals();
             if (!sameSet) Settle();
+
+            // The drop that asked for this order. Settle has just put every button in its
+            // slot, which for the dropped one means jumping from under the pointer; start it
+            // back where it was let go and let it glide the rest of the way - and the bar
+            // with it, when it is the current desktop, so the two do not part company.
+            if (!sameSet && _landIndex >= 0 && _landIndex < _desktops.Count)
+            {
+                _visuals[_landIndex].Offset = _landOffset;
+                _topIndex = _landIndex;
+                if (_desktops[_landIndex].IsCurrent) _barX += _landOffset;
+                Animate();
+            }
 
             Invalidate();
         }
@@ -471,6 +518,24 @@ namespace DesktopSwitcher
                 if (a[i].Id != b[i].Id) return false;
 
             return true;
+        }
+
+        /// <summary>
+        /// Where button <paramref name="i"/> should be drawn relative to its own slot.
+        /// Mid-drag, the dragged button is wherever the pointer has it - its target is set
+        /// by OnPressMove and returned untouched - and every button between its old slot and
+        /// the one it would land in steps one place toward the gap it left. Otherwise zero,
+        /// which is what eases everything home after a drop or a cancel.
+        /// </summary>
+        float DragOffset(int i)
+        {
+            if (!_dragging || i >= _desktops.Count) return 0f;
+            if (i == _pressIndex) return _visuals[i].OffsetTarget;
+
+            int slot = i;
+            if (_pressIndex < _dropIndex && i > _pressIndex && i <= _dropIndex) slot = i - 1;
+            else if (_pressIndex > _dropIndex && i >= _dropIndex && i < _pressIndex) slot = i + 1;
+            return (slot - i) * _buttonWidth;
         }
 
         /// <summary>
@@ -497,6 +562,12 @@ namespace DesktopSwitcher
                 bool pinned = _statsPinned && i == StatsIndex;
                 _visuals[i].HoverTarget = (i == _hoverIndex || i == _menuIndex || pinned) ? 1f : 0f;
 
+                // Mid-drag the only lit button is the one in hand, so it reads as picked up
+                // and the buttons sliding under the pointer do not flash as it crosses them.
+                if (_dragging) _visuals[i].HoverTarget = i == _pressIndex ? 1f : 0f;
+
+                _visuals[i].OffsetTarget = DragOffset(i);
+
                 // '+' and the stats tile have no desktop and so are never in _occupied - i
                 // at or beyond _desktops.Count reads false here the same way isCurrent does.
                 bool occupied = i < _desktops.Count && _occupied.Contains(_desktops[i].Id);
@@ -505,8 +576,10 @@ namespace DesktopSwitcher
 
             if (current >= 0)
             {
+                // Under the current desktop wherever it is being drawn, so a drag that moves
+                // it - or moves a neighbour past it - carries the bar along.
                 Rectangle bounds = ButtonBounds(current, 0);
-                _barXTarget = bounds.X;
+                _barXTarget = bounds.X + _visuals[current].OffsetTarget;
                 _barWidthTarget = bounds.Width;
                 _barLevelTarget = 1f;
             }
@@ -790,6 +863,7 @@ namespace DesktopSwitcher
                 moved |= Motion.Ease(ref _visuals[i].Highlight, _visuals[i].HighlightTarget, rate, Motion.ToneEpsilon);
                 moved |= Motion.Ease(ref _visuals[i].Hover, _visuals[i].HoverTarget, rate, Motion.ToneEpsilon);
                 moved |= Motion.Ease(ref _visuals[i].Dot, _visuals[i].DotTarget, rate, Motion.ToneEpsilon);
+                moved |= Motion.Ease(ref _visuals[i].Offset, _visuals[i].OffsetTarget, rate, Motion.PixelEpsilon);
             }
 
             moved |= Motion.Ease(ref _barX, _barXTarget, rate, Motion.PixelEpsilon);
@@ -811,6 +885,7 @@ namespace DesktopSwitcher
                 if (_visuals[i].Highlight != _visuals[i].HighlightTarget) return false;
                 if (_visuals[i].Hover != _visuals[i].HoverTarget) return false;
                 if (_visuals[i].Dot != _visuals[i].DotTarget) return false;
+                if (_visuals[i].Offset != _visuals[i].OffsetTarget) return false;
             }
 
             if (_tooltip != null && !_tooltip.Settled) return false;
@@ -891,7 +966,10 @@ namespace DesktopSwitcher
             EnsureFont(height);
 
             for (int i = 0; i < _desktops.Count; i++)
-                DrawButton(g, ButtonBounds(i, height), _desktops[i].Number.ToString(), _visuals[i]);
+                if (i != _topIndex) DrawDesktopButton(g, i, height);
+
+            // The button in hand, or settling after a drop, goes over the ones it is passing.
+            if (_topIndex >= 0 && _topIndex < _desktops.Count) DrawDesktopButton(g, _topIndex, height);
 
             int plusIndex = _desktops.Count;
             if (plusIndex < _visuals.Length)
@@ -902,6 +980,24 @@ namespace DesktopSwitcher
                 DrawStatsButton(g, ButtonBounds(statsIndex, height), _visuals[statsIndex]);
 
             DrawBar(g, height);
+        }
+
+        /// <summary>
+        /// A desktop button where it is being drawn, which mid-drag is not its slot. One
+        /// away from its slot is laid on the taskbar's own colour first, so a button in hand
+        /// covers the neighbour it is passing over instead of mixing numbers with it.
+        /// </summary>
+        void DrawDesktopButton(Graphics g, int i, int height)
+        {
+            Rectangle bounds = ButtonBounds(i, height);
+            int offset = (int)Math.Round(_visuals[i].Offset);
+            if (offset != 0)
+            {
+                bounds.Offset(offset, 0);
+                using (var back = new SolidBrush(_background))
+                    g.FillRectangle(back, bounds);
+            }
+            DrawButton(g, bounds, _desktops[i].Number.ToString(), _visuals[i]);
         }
 
         /// <summary>
@@ -1676,8 +1772,10 @@ namespace DesktopSwitcher
             _trackingMouse = true;
         }
 
-        void OnMouseMove(int x, int y)
+        void OnMouseMove(int x, int y, IntPtr wParam)
         {
+            if (_pressIndex >= 0 && OnPressMove(x, y, wParam)) return;
+
             if (!_trackingMouse) ArmTracking();
 
             int index = HitTest(x, y);
@@ -1704,6 +1802,12 @@ namespace DesktopSwitcher
         void OnMouseLeave()
         {
             _trackingMouse = false;
+
+            // Captured, the pointer is still ours wherever it goes; the drag owns the hover
+            // state until it ends. A press not yet a drag is disarmed: its release will land
+            // on another window and never come here.
+            if (_dragging) return;
+            _pressIndex = -1;
 
             // Cleared before RestOrHide, not after: a pinned panel's refresh decides whether
             // to keep going by where the pointer is, and it has to see the pointer as gone.
@@ -1814,6 +1918,188 @@ namespace DesktopSwitcher
             // a click that changes nothing, like the current desktop's own button, would
             // otherwise leave it dark until the pointer next left the strip.
             RestOrHide();
+        }
+
+        // --- drag to reorder -------------------------------------------------
+
+        /// <summary>
+        /// How far the pointer must travel with the button down before a press becomes a
+        /// drag. The system's own drag rectangle, which is what Explorer uses for the same
+        /// decision - but never less than six pixels at 96 DPI: the system figure is four,
+        /// and a touchpad tap with that much drift in it is common enough that a strip of
+        /// buttons people mostly click must not read it as a drag.
+        /// </summary>
+        int DragThreshold()
+        {
+            return Math.Max(SystemInformation.DragSize.Width, Scale(6));
+        }
+
+        /// <summary>
+        /// Left button down. Only arms a drag - nothing moves and nothing is captured yet,
+        /// so a press that goes nowhere is the click it always was, and a press that
+        /// slides off the top of the strip before the threshold leaves nothing behind
+        /// (OnMouseLeave disarms it). Not on '+' or the tile, which have no place in the
+        /// order, and not with one desktop, which has nowhere to go.
+        /// </summary>
+        void OnPress(int x, int y)
+        {
+            _pressIndex = -1;
+            if (ReorderRequested == null || _desktops.Count < 2) return;
+
+            int index = HitTest(x, y);
+            if (index < 0 || index >= _desktops.Count) return;
+
+            _pressIndex = index;
+            _pressX = x;
+        }
+
+        /// <summary>
+        /// A move with a press armed. True when the drag has the move, false to let it be an
+        /// ordinary hover - which it is until the threshold is crossed.
+        ///
+        /// The capture is taken here rather than on the press, for the sake of the press
+        /// that never becomes a drag: captured, its release would come to the strip from
+        /// anywhere on screen, and a release far above a button would switch to it.
+        /// </summary>
+        bool OnPressMove(int x, int y, IntPtr wParam)
+        {
+            // The button came up somewhere this window was not told about - over another
+            // window, before there was a capture to bring the release here.
+            if (((int)(long)wParam & Native.MK_LBUTTON) == 0)
+            {
+                if (_dragging) CancelDrag();
+                else _pressIndex = -1;
+                return false;
+            }
+
+            if (!_dragging)
+            {
+                if (Math.Abs(x - _pressX) < DragThreshold()) return false;
+
+                _dragging = true;
+                _dragGrab = _pressX - _pressIndex * _buttonWidth;
+                _dropIndex = _pressIndex;
+                _topIndex = _pressIndex;
+
+                // The panel describes the desktop under a resting pointer; a moving one
+                // carrying a button wants nothing in the way. A pinned stats panel goes back
+                // to its tile, as it does whenever the pointer leaves the buttons.
+                CancelReshow();
+                _hoverIndex = -1;
+                RestOrHide();
+
+                Native.SetCapture(Handle);
+                Log.Write(delegate { return "strip: dragging desktop " + (_pressIndex + 1); });
+            }
+
+            // The button follows the pointer, kept inside the row of desktop buttons: it can
+            // be put first or last, not onto '+' or past the end.
+            float left = x - _dragGrab;
+            float last = (_desktops.Count - 1) * _buttonWidth;
+            left = Math.Max(0f, Math.Min(last, left));
+
+            // It lands in whichever slot holds more than half of it.
+            _dropIndex = Math.Max(0, Math.Min(_desktops.Count - 1, (int)Math.Floor(left / _buttonWidth + 0.5f)));
+
+            // Exactly under the pointer, no easing: a button that trails the hand holding it
+            // feels like it is being pulled through something.
+            float offset = left - _pressIndex * _buttonWidth;
+            _visuals[_pressIndex].Offset = offset;
+            _visuals[_pressIndex].OffsetTarget = offset;
+
+            SyncVisuals();
+
+            // The bar likewise, when the button in hand is the current desktop - otherwise it
+            // eases along behind at animation speed and visibly lets go of its button.
+            if (_desktops[_pressIndex].IsCurrent) _barX = _barXTarget;
+
+            Invalidate();
+            return true;
+        }
+
+        /// <summary>
+        /// The button came up with a drag on. Ends the drag first and asks for the reorder
+        /// after, so that by the time the new order comes back through SetDesktops - which
+        /// it does inside the ReorderRequested call, the whole reorder being a few
+        /// milliseconds on this thread - the strip is no longer dragging and takes it as a
+        /// plain set change.
+        ///
+        /// The dropped button would then jump from under the pointer to its slot, since a
+        /// set change settles everything. _landIndex and _landOffset are how SetDesktops
+        /// knows to start it back where it was let go instead; they mean anything only for
+        /// the length of the call.
+        ///
+        /// Released far above or below the strip - a full strip's height off it - is a
+        /// cancel: the one gesture for "never mind" that a window which never has the
+        /// keyboard can offer, Escape being out of reach.
+        /// </summary>
+        void OnDrop(int x, int y)
+        {
+            int from = _pressIndex;
+            int to = _dropIndex;
+            float offset = _visuals[from].Offset;
+
+            Native.RECT client;
+            int height = Native.GetWindowRect(Handle, out client) ? client.Height : 0;
+            bool cancel = height > 0 && (y < -height || y >= 2 * height);
+
+            EndDrag();
+
+            if (!cancel && to != from && to >= 0)
+            {
+                Log.Write(delegate { return "strip: dropped desktop " + (from + 1) + " at " + (to + 1); });
+
+                _landIndex = to;
+                _landOffset = from * _buttonWidth + offset - to * _buttonWidth;
+                try
+                {
+                    ReorderRequested(from, to);
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("strip: reorder handler threw - " + ex.Message);
+                }
+                finally
+                {
+                    _landIndex = -1;
+                }
+            }
+            else if (cancel)
+            {
+                Log.Write("strip: drag cancelled");
+            }
+
+            // Whatever happened, light whatever the pointer is over now, as after a menu.
+            _hoverIndex = HitTestScreen(Cursor.Position);
+            _trackingMouse = false;
+            if (_hoverIndex >= 0) ArmTracking();
+
+            SyncVisuals();
+            Invalidate();
+        }
+
+        /// <summary>The drag is off without a drop: the capture was taken, or the button came up unseen.</summary>
+        void CancelDrag()
+        {
+            Log.Write("strip: drag cancelled");
+            EndDrag();
+            SyncVisuals();
+            Invalidate();
+        }
+
+        /// <summary>
+        /// Forgets the drag. Every offset target goes back to zero on the next SyncVisuals,
+        /// so whatever was displaced eases home - the dragged button included, still drawn
+        /// on top until it gets there. _dragging is cleared before the capture is released,
+        /// because releasing it sends WM_CAPTURECHANGED, which must not read as a cancel.
+        /// </summary>
+        void EndDrag()
+        {
+            bool captured = _dragging;
+            _dragging = false;
+            _pressIndex = -1;
+            _dropIndex = -1;
+            if (captured && Native.GetCapture() == Handle) Native.ReleaseCapture();
         }
 
         // --- context menu -----------------------------------------------------
@@ -2419,11 +2705,22 @@ namespace DesktopSwitcher
                     return;
 
                 case Native.WM_MOUSEMOVE:
-                    OnMouseMove(Native.LoWord(m.LParam), Native.HiWord(m.LParam));
+                    OnMouseMove(Native.LoWord(m.LParam), Native.HiWord(m.LParam), m.WParam);
                     return;
 
                 case Native.WM_MOUSEHOVER:
-                    ShowTooltip();
+                    if (!_dragging) ShowTooltip();
+                    return;
+
+                case Native.WM_LBUTTONDOWN:
+                    // On to DefWindowProc afterwards, as before this case existed.
+                    OnPress(Native.LoWord(m.LParam), Native.HiWord(m.LParam));
+                    break;
+
+                case Native.WM_CAPTURECHANGED:
+                    // Someone else took the mouse mid-drag - a menu, a dialog, the shell.
+                    // Our own release clears _dragging first, so it never lands here.
+                    if (_dragging) CancelDrag();
                     return;
 
                 case Native.WM_MOUSELEAVE:
@@ -2431,6 +2728,14 @@ namespace DesktopSwitcher
                     return;
 
                 case Native.WM_LBUTTONUP:
+                    // A drag ends in a drop, never a click: the button it started on would
+                    // otherwise also be switched to.
+                    if (_dragging)
+                    {
+                        OnDrop(Native.LoWord(m.LParam), Native.HiWord(m.LParam));
+                        return;
+                    }
+                    _pressIndex = -1;
                     OnClick(Native.LoWord(m.LParam), Native.HiWord(m.LParam),
                             MouseButtons.Left, Shift(m.WParam));
                     return;

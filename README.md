@@ -65,6 +65,7 @@ Run the exe with no arguments. Then, on the strip:
 | Action | Effect |
 |---|---|
 | Left click a number | switch to that desktop |
+| Drag a number along the strip | move that desktop to a new place; let go well above or below the strip to cancel |
 | Right click a number | menu of everything that button can do |
 | Shift + right click a number | send the window you were last using to that desktop |
 | Middle click a number | remove that desktop |
@@ -96,8 +97,8 @@ leaving what closed closed. The desktop is removed the moment it is empty, never
 Windows pinned with Task View's **Show this window on all desktops** are left alone, since
 closing one would take it off every desktop.
 
-**Move left** and **Move right** change a desktop's place in the row, and Task View's order
-changes with it. Windows 10 has no way to reorder desktops, so this rebuilds the row: the
+Dragging a number, or **Move left** and **Move right** on its menu, changes a desktop's
+place in the row, and Task View's order changes with it. Windows 10 has no way to reorder desktops, so this rebuilds the row: the
 desktops from the new position onward are recreated in order, and Windows carries each
 one's windows and name across. It takes a few milliseconds. If you are on one of the
 desktops that moves, you stay on it.

@@ -473,6 +473,7 @@ namespace DesktopSwitcher
             _strip.CreateRequested += delegate { _service.Create(); };
             _strip.RemoveRequested += delegate(Guid id) { RequestRemove(id); };
             _strip.MoveWindowRequested += OnMoveWindowRequested;
+            _strip.ReorderRequested += delegate(int from, int to) { Reorder(from, to, "drag"); };
             _strip.TooltipProvider = BuildTooltip;
             _strip.StatsProvider = BuildStats;
             _strip.SetStatsMeter(_host.Scale(_config.StatsBarWidth), _host.Scale(_config.StatsBarGap),
@@ -932,22 +933,33 @@ namespace DesktopSwitcher
         /// <summary>
         /// Moves a desktop one place left or right. The position is looked up again from
         /// the GUID the menu was built with, not carried from it, so a desktop added or
-        /// removed while the menu was open moves the desktop the item named; and a close-all
-        /// that started since the menu opened still refuses it, for the reason the menu
-        /// greys the items out.
+        /// removed while the menu was open moves the desktop the item named.
         /// </summary>
         void RequestReorder(Guid id, int delta)
         {
-            if (_closeRun != null) return;
-
             Desktop desktop = Find(id);
             if (desktop == null) return;
 
-            int from = desktop.Index;
-            int to = from + delta;
-            if (to < 0 || to >= _service.Count) return;
+            Reorder(desktop.Index, desktop.Index + delta, "menu");
+        }
 
-            Log.Write(delegate { return "controller: menu moving desktop " + (from + 1) + " to " + (to + 1); });
+        /// <summary>
+        /// The one way into a reorder, for the menu's Move left and right and for a drag on
+        /// the strip. Refused while a close-all runs, for the reason the menu greys its items
+        /// out: that run holds its desktop by GUID, and a reorder can give it a new one. A
+        /// refused drag needs nothing more from here - the strip eases its buttons back by
+        /// itself when no new order arrives.
+        /// </summary>
+        void Reorder(int from, int to, string how)
+        {
+            if (_closeRun != null)
+            {
+                Log.Write("controller: " + how + " reorder refused, a close-all is running");
+                return;
+            }
+            if (from == to || from < 0 || to < 0 || from >= _service.Count || to >= _service.Count) return;
+
+            Log.Write(delegate { return "controller: " + how + " moving desktop " + (from + 1) + " to " + (to + 1); });
             _service.Reorder(from, to);
 
             // The recreated desktops are new GUIDs, so whatever the inventory holds per
@@ -2195,7 +2207,16 @@ namespace DesktopSwitcher
 
         void QueueSave(int count)
         {
-            if (count == _config.LastCount) return;
+            // Back to what is already saved: drop whatever is pending, not just decline to
+            // queue more. Returning alone left an excursion's count waiting - three scratch
+            // desktops from a selftest, 4 -> 7 -> 4 inside the debounce - so 7 was written,
+            // and the next start "restored" three empty desktops nobody wanted.
+            if (count == _config.LastCount)
+            {
+                _pendingCount = -1;
+                if (_saveTimer != null) _saveTimer.Stop();
+                return;
+            }
             _pendingCount = count;
 
             if (_saveTimer == null) return;
