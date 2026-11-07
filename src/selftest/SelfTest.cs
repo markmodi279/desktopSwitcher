@@ -48,6 +48,8 @@ namespace DesktopSwitcher
                     case "--remove":  return CmdRemove(api, args);
                     case "--rename":  return CmdRename(api, args);
                     case "--move":    return CmdMove(api, args);
+                    case "--reorder": return ReorderTest.RunLive(api, args);
+                    case "--reordertest": return ReorderTest.RunScratch(api);
                     case "--where":   return CmdWhere(api, args);
                     case "--soak":    return CmdSoak(api, args);
                     case "--watch":   return CmdWatch(api, args);
@@ -99,6 +101,8 @@ namespace DesktopSwitcher
             Console.WriteLine("  --remove N             remove desktop N");
             Console.WriteLine("  --rename N <name>      rename desktop N; no name clears it");
             Console.WriteLine("  --move N <title>       move a window whose title contains <title>");
+            Console.WriteLine("  --reorder N M          move desktop N to position M, timing each step and checking every window");
+            Console.WriteLine("  --reordertest          reorder three scratch desktops it creates, with a hidden window aboard");
             Console.WriteLine("  --where <title>        report whether that window is on the current desktop");
             Console.WriteLine("  --soak N               poll for N seconds; survives an Explorer restart");
             Console.WriteLine("  --watch N              listen for change notifications for N seconds");

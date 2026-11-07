@@ -443,6 +443,144 @@ namespace DesktopSwitcher
             }, "RemoveDesktop");
         }
 
+        // --- reordering -------------------------------------------------------
+
+        /// <summary>
+        /// One desktop sent to the end of the row by Reorder: the desktop it was, the one
+        /// that replaced it, and what each of the three calls cost. Kept so --reorder can
+        /// print where the time went, which is the question that decides whether a drop
+        /// feels instant.
+        /// </summary>
+        public sealed class ReorderStep
+        {
+            public Guid OldId;
+            public Guid NewId;
+            public string Name;
+            public bool WasCurrent;
+            public double CreateMs;
+            public double RemoveMs;
+            public double RenameMs;
+        }
+
+        /// <summary>
+        /// Moves the desktop at <paramref name="from"/> to <paramref name="to"/> (both
+        /// 0-based), shifting the ones between along by one. Returns the steps taken -
+        /// empty when there was nothing to do - or null if the indices are out of range.
+        ///
+        /// Windows 10 has no call for this. The interface on 19045 can only list, switch,
+        /// create and remove; Windows 11 added MoveDesktop, and 10 will never get it. So the
+        /// order is rebuilt instead, out of the one placement the shell does offer: a new
+        /// desktop always goes on the end. Sending a desktop to the end is three calls -
+        /// create a new one, remove the old one with the new one as its fallback, give the
+        /// new one the old one's name - and any order is a run of those.
+        ///
+        /// The fallback is the whole reason this is safe. RemoveDesktop has the shell itself
+        /// carry every window on the removed desktop over to the fallback, in one call, with
+        /// nothing for us to enumerate or miss. The alternative - leaving the desktops where
+        /// they are and moving their windows between them - costs a call per window, and a
+        /// window that refuses its move (or opens mid-run) leaves a desktop holding half of
+        /// two desktops' windows, which nothing can sort back out. Done this way, every
+        /// window is on a real desktop at every moment; a run that fails halfway leaves a
+        /// half-applied order and possibly one empty desktop on the end, and loses nothing.
+        /// Hidden windows need no carrying either way: on 19045 a hidden window belongs to
+        /// no desktop and comes back on whichever is current when shown (--reordertest
+        /// checks this against a control every run).
+        ///
+        /// Measured on 19045 by --reordertest: about 1 ms per call, so a step is 2-4 ms and
+        /// even a nine-desktop rotation is well under a frame's worth of a person noticing.
+        ///
+        /// The cost is that the desktops sent to the end come back with new GUIDs. Explorer
+        /// keys names by GUID, hence the rename; anything else holding an old GUID - a
+        /// close-all run, a menu built a moment ago - must be dropped or refused around a
+        /// reorder. Windows 10 has no per-desktop wallpaper, so nothing else breaks.
+        ///
+        /// Only desktops at or after the target position in the final order are touched,
+        /// and of those, the leading run that is already in place is skipped: the kept
+        /// desktops stay in front in their own order, so the most that can be kept is the
+        /// longest start of the final order that the current order already contains in
+        /// sequence. Moving the last two desktops past each other is two steps however many
+        /// desktops there are.
+        ///
+        /// When the current desktop is among those recreated, removing it makes the shell
+        /// switch to the fallback - its own replacement, with its own windows on it - so the
+        /// user ends up where they were, under a new GUID.
+        /// </summary>
+        public List<ReorderStep> Reorder(int from, int to)
+        {
+            Guid[] ids = GetDesktopIds();
+            if (from < 0 || from >= ids.Length || to < 0 || to >= ids.Length) return null;
+
+            var steps = new List<ReorderStep>();
+            if (from == to) return steps;
+
+            var final = new List<Guid>(ids);
+            Guid moving = final[from];
+            final.RemoveAt(from);
+            final.Insert(to, moving);
+
+            // The longest start of the final order that the current order holds as a
+            // subsequence: those stay, everything after them goes to the end in turn.
+            int kept = 0;
+            for (int i = 0; i < ids.Length && kept < final.Count; i++)
+                if (ids[i] == final[kept]) kept++;
+
+            Guid current = GetCurrentId();
+            var clock = new System.Diagnostics.Stopwatch();
+
+            Log.Write(delegate
+            {
+                return "reorder: " + (from + 1) + " -> " + (to + 1) + ", keeping " + kept
+                       + " of " + ids.Length + ", " + (ids.Length - kept) + " to recreate";
+            });
+
+            for (int i = kept; i < final.Count; i++)
+            {
+                var step = new ReorderStep();
+                step.OldId = final[i];
+                step.Name = GetName(step.OldId);
+                step.WasCurrent = step.OldId == current;
+
+                clock.Restart();
+                step.NewId = Create();
+                step.CreateMs = clock.Elapsed.TotalMilliseconds;
+
+                clock.Restart();
+                Guid oldId = step.OldId, newId = step.NewId;
+                bool removed = Do(delegate
+                {
+                    Guid a = oldId, b = newId;
+                    IVirtualDesktop old = _manager.FindDesktop(ref a);
+                    IVirtualDesktop replacement = _manager.FindDesktop(ref b);
+                    if (old == null || replacement == null) return false;
+                    _manager.RemoveDesktop(old, replacement);
+                    return true;
+                }, "RemoveDesktop");
+                step.RemoveMs = clock.Elapsed.TotalMilliseconds;
+
+                if (!removed)
+                {
+                    // The new desktop is already on the end and empty. Take it back off
+                    // rather than leave a stray behind, and stop: the order is half-applied
+                    // but every window is where it was.
+                    Log.Write("reorder: old desktop vanished mid-run, stopping");
+                    Remove(newId);
+                    steps.Add(step);
+                    return steps;
+                }
+
+                // Only a name that was set: an unnamed desktop is "Desktop N" by position,
+                // and should stay unnamed so it takes its new position's number.
+                clock.Restart();
+                if (step.Name != null) SetName(step.NewId, step.Name);
+                step.RenameMs = clock.Elapsed.TotalMilliseconds;
+
+                steps.Add(step);
+            }
+
+            Log.Write("reorder: done");
+            return steps;
+        }
+
         /// <summary>
         /// Moves a window to a desktop. Prefers the documented API (no vtable risk),
         /// falling back to the internal one for windows it refuses.

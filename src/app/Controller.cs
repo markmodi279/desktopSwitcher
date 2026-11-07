@@ -770,6 +770,17 @@ namespace DesktopSwitcher
                         _service.MoveWindow(target, id);
                     });
 
+            // Reordering, one place at a time. Windows 10 has no call for it, so it is rebuilt
+            // out of create and remove - see VirtualDesktopApi.Reorder - which is about 1 ms a
+            // call on 19045 and so reads as instant. Greyed out while a close-all is running:
+            // that run holds its desktop by GUID, and a reorder can hand the desktop a new one
+            // underneath it.
+            bool canReorder = _closeRun == null;
+            AddItem(menu, "Move left", canReorder && index > 0,
+                    delegate { RequestReorder(id, -1); });
+            AddItem(menu, "Move right", canReorder && index < desktops.Count - 1,
+                    delegate { RequestReorder(id, +1); });
+
             menu.Items.Add(new ToolStripSeparator());
 
             // Greyed out on an empty desktop, where it would only be Remove again. Pinned
@@ -916,6 +927,33 @@ namespace DesktopSwitcher
 
             Rectangle anchor = _strip != null ? _strip.ScreenBounds() : Rectangle.Empty;
             run.Start(this, _background, _host.DpiScale, anchor);
+        }
+
+        /// <summary>
+        /// Moves a desktop one place left or right. The position is looked up again from
+        /// the GUID the menu was built with, not carried from it, so a desktop added or
+        /// removed while the menu was open moves the desktop the item named; and a close-all
+        /// that started since the menu opened still refuses it, for the reason the menu
+        /// greys the items out.
+        /// </summary>
+        void RequestReorder(Guid id, int delta)
+        {
+            if (_closeRun != null) return;
+
+            Desktop desktop = Find(id);
+            if (desktop == null) return;
+
+            int from = desktop.Index;
+            int to = from + delta;
+            if (to < 0 || to >= _service.Count) return;
+
+            Log.Write(delegate { return "controller: menu moving desktop " + (from + 1) + " to " + (to + 1); });
+            _service.Reorder(from, to);
+
+            // The recreated desktops are new GUIDs, so whatever the inventory holds per
+            // desktop is keyed to ones that no longer exist.
+            _inventory.MarkChanged();
+            RefreshOccupancy();
         }
 
         Desktop Find(Guid id)

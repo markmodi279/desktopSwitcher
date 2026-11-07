@@ -366,6 +366,24 @@ namespace DesktopSwitcher
             Guarded(delegate { _api.MoveWindow(hwnd, id); }, "move window");
         }
 
+        /// <summary>
+        /// Moves the desktop at <paramref name="from"/> to <paramref name="to"/>, 0-based.
+        /// See VirtualDesktopApi.Reorder for how, and why the moved desktops come back
+        /// with new GUIDs.
+        ///
+        /// Runs to the end on the UI thread, and that is what keeps the strip from
+        /// flickering through every intermediate order: each step's created and destroyed
+        /// notifications arrive on RPC threads and are posted here, so they queue up behind
+        /// this call and only run once the order is final. The reconcile below then brings
+        /// the model to the final order in one DesktopsChanged, and the queued ones find
+        /// nothing left to change.
+        /// </summary>
+        public void Reorder(int from, int to)
+        {
+            Guarded(delegate { _api.Reorder(from, to); }, "reorder");
+            Reconcile();
+        }
+
         /// <summary>Whether the shell will accept a rename. False also means "not right now".</summary>
         public bool CanRename { get { return _api.CanRename; } }
 

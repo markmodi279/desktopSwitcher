@@ -54,7 +54,7 @@ Everything undocumented lives here, and nothing above this folder knows a GUID.
 
 | File | Purpose |
 |---|---|
-| [VirtualDesktopApi.cs](../src/shell/VirtualDesktopApi.cs) | The COM interfaces and every operation on a desktop: list, switch, create, remove, rename, move a window. No caching, no policy. |
+| [VirtualDesktopApi.cs](../src/shell/VirtualDesktopApi.cs) | The COM interfaces and every operation on a desktop: list, switch, create, remove, rename, reorder, move a window. No caching, no policy. |
 | [VirtualDesktopNotify.cs](../src/shell/VirtualDesktopNotify.cs) | The notification sink. Registers a COM object with the shell and turns its callbacks into .NET events. |
 | [Native.cs](../src/shell/Native.cs) | P/Invoke. Window enumeration, geometry, parenting, painting, DPI, process lookup. |
 | [Hotkeys.cs](../src/shell/Hotkeys.cs) | The desktop shortcuts: `RegisterHotKey` on the controller's window for Ctrl+Alt+1..9 and Ctrl+Alt+Left/Right (or whatever `jumpShortcut` and `stepShortcut` say), and the decoding of a `WM_HOTKEY` id back into "desktop N" or "one over". |
@@ -161,6 +161,13 @@ that arrives mid-run, the harness's own window, the desktop being closed while i
 current one, and twenty at once. A `finally` kills its processes, removes its desktop and
 switches back. What it cannot reach: elevated windows, and a packaged app's CoreWindow that
 the inventory failed to pair.
+
+`--reordertest` does the same for reordering: three named scratch desktops on the end, a
+test window on each and a hidden one beside the first, then four moves - last to first,
+first to last, a swap, and the current desktop recreated under the user - each checked
+for names, kept GUIDs, every window's desktop and the current desktop, with the time of
+every call printed. It never reaches the user's desktops, since a reorder only recreates
+from the target position onward. `--reorder N M` runs the same check on real desktops.
 
 ## How a change reaches the screen
 
@@ -474,6 +481,20 @@ Hence sampling on a timer.
 coordinates silently scaled — on a 125% display a strip positioned at x=1110 lands at
 x=888, correct in every log and wrong on screen. Every size in `config.ini` is authored for
 96 DPI and scaled through `TaskbarHost.Scale`.
+
+**Reordering recreates desktops, because 19045 cannot move one.** The interface has no
+`MoveDesktop` (Windows 11 added it) and `CreateDesktop` only ever appends. So
+`VirtualDesktopApi.Reorder` sends desktops to the end one at a time - create a new one,
+`RemoveDesktop` the old one with the new one as fallback, copy the name - until the row is
+in the new order. The fallback is what makes it safe: the shell moves every window across
+in one call, so nothing is enumerated and nothing can be missed, and a run that fails
+halfway loses no window. Only desktops at or after the target position are touched, minus
+any leading run already in place. Recreated desktops have new GUIDs, which is why a reorder
+is refused while a close-all holds one. It runs to completion on the UI thread, so the
+created and destroyed notifications queue behind it and the strip goes straight to the
+final order. Each call costs about 1 ms on 19045. A hidden window turned out to belong to no
+desktop at all - it comes back on whichever is current when shown - so it needs no carrying
+either way.
 
 **Renames go through the shell, not the registry.** `VirtualDesktopApi.GetName` reads the
 name out of the registry, but `SetName` reaches an undocumented vtable slot instead of

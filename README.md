@@ -96,6 +96,12 @@ leaving what closed closed. The desktop is removed the moment it is empty, never
 Windows pinned with Task View's **Show this window on all desktops** are left alone, since
 closing one would take it off every desktop.
 
+**Move left** and **Move right** change a desktop's place in the row, and Task View's order
+changes with it. Windows 10 has no way to reorder desktops, so this rebuilds the row: the
+desktops from the new position onward are recreated in order, and Windows carries each
+one's windows and name across. It takes a few milliseconds. If you are on one of the
+desktops that moves, you stay on it.
+
 The desktop's name titles the menu. Click it to rename — Enter saves, Escape or clicking
 anywhere else leaves it alone, and an empty name puts the desktop back to **Desktop N**.
 The name is set through the shell, so Task View shows it too.
