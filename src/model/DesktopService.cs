@@ -380,9 +380,28 @@ namespace DesktopSwitcher
         /// </summary>
         public void Reorder(int from, int to)
         {
-            Guarded(delegate { _api.Reorder(from, to); }, "reorder");
+            var steps = new List<VirtualDesktopApi.ReorderStep>();
+            Guarded(delegate { _api.Reorder(from, to, steps); }, "reorder");
+
+            // Before the reconcile, so whatever is keyed by GUID has moved to the new ones by
+            // the time DesktopsChanged hands the new order to the strip - a marked desktop
+            // would otherwise draw one relayout unmarked, at the wrong width. Every step that
+            // got as far as its swap, even when a later one threw.
+            Action<Guid, Guid> recreated = Recreated;
+            if (recreated != null)
+                foreach (VirtualDesktopApi.ReorderStep step in steps)
+                    if (step.Carried) recreated(step.OldId, step.NewId);
+
             Reconcile();
         }
+
+        /// <summary>
+        /// A reorder recreated a desktop: (old GUID, new GUID). Raised on the UI thread, inside
+        /// Reorder, after the shell has finished and before the new order reaches
+        /// DesktopsChanged. Explorer's names are carried across by the reorder itself; this is
+        /// for the state that is ours - the desktop marks.
+        /// </summary>
+        public event Action<Guid, Guid> Recreated;
 
         /// <summary>Whether the shell will accept a rename. False also means "not right now".</summary>
         public bool CanRename { get { return _api.CanRename; } }

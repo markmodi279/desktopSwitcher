@@ -79,6 +79,7 @@ commented `do not reorder`. They are not stable across Windows versions; see
 | [Desktop.cs](../src/model/Desktop.cs) | Immutable snapshot of one desktop: id, index, name, whether it is current. |
 | [WindowInventory.cs](../src/model/WindowInventory.cs) | Which windows are on which desktop, and which app owns each one. Built on demand, cached for a second. Also answers the cheaper question of which desktops merely *have* windows, for the occupancy dot. |
 | [WindowCloser.cs](../src/model/WindowCloser.cs) | The mechanism behind close-all: which windows on a desktop to close (less pinned ones and our own), `WM_CLOSE` posted to each, whether one is gone or has a save prompt up (a real dialog disables its owner; a question drawn inside the window cannot be seen, and reads as still open), and ending the processes behind the ones that will not go. Never forces Explorer or ApplicationFrameHost. |
+| [DesktopMark.cs](../src/model/DesktopMark.cs) | One desktop's mark - letters, a glyph or a colour - immutable and compared by value, with the text form `marks.ini` stores it in. |
 | [ForegroundTracker.cs](../src/model/ForegroundTracker.cs) | Remembers the last real window to hold focus, so "send the active window here" has something to send. |
 | [SystemStats.cs](../src/model/SystemStats.cs) | CPU, memory and network throughput for the stats tile. Rates from the difference between two readings, network adapters cached between change notifications. |
 | [PublicIp.cs](../src/model/PublicIp.cs) | The public IPv4 address, for the stats panel's top right and the tile's copy gesture and menu item. Asked of Cloudflare on a pool thread when the panel opens, cached ten minutes or until the network changes. Off unless `statsPublicIp`. |
@@ -98,6 +99,8 @@ commented `do not reorder`. They are not stable across Windows versions; see
 | [SettingsControls.cs](../src/ui/SettingsControls.cs) | The window's owner-drawn controls — toggle, slider, number box, segmented choice for two options, a drop-down for more, colour swatch, sliding tab row, the setting row — and the shared, mutable `SettingsTheme` they all draw from. |
 | [ConfirmDialog.cs](../src/ui/ConfirmDialog.cs) | The themed confirmation: a title, a body and any row of buttons, the last one the safe default. Removing a desktop with windows on it, and closing every window on one. |
 | [CloseProgressWindow.cs](../src/ui/CloseProgressWindow.cs) | The live panel of a close-all: one row per window, ticked off or marked as asking to save, with Go there, Force close and Cancel. Modeless, so the prompts can be answered while it is up, and a tool window, so it shows on every desktop. Draws what it is handed; decides nothing. |
+| [MarkPainter.cs](../src/ui/MarkPainter.cs) | Draws a mark, for the strip and the picker alike, and holds what the picker offers: 32 Segoe MDL2 Assets glyphs and ten colours. |
+| [MarkPicker.cs](../src/ui/MarkPicker.cs) | "Set mark...": a modal, themed picker - letters box, glyph grid, colours with a custom cell, Recent, Clear/Cancel/OK - raising every edit through `Previewed` so the strip shows it live. Its grid is `MarkGrid`, a `ThemedControl` from the Settings window's family. |
 | [Palette.cs](../src/ui/Palette.cs) | The one place that knows which way "away from the background" is. Lifts a surface off the taskbar colour and picks text tones for it, in whichever direction that colour demands. |
 
 Note what is *not* here: neither the strip nor the tooltip knows what a desktop is called or
@@ -116,6 +119,8 @@ only `Controller` holds all three.
 | [Setting.cs](../src/app/Setting.cs) | One entry in that table: key, section, label, help text, kind, range, accessors, and the parse/format/describe for its kind. |
 | [ConfigWatcher.cs](../src/app/ConfigWatcher.cs) | Applies a hand edit to `config.ini` as soon as it is saved. Debounces an editor's burst of events, retries a locked file, and ignores the app's own writes by comparing against `Config.LastWritten`. |
 | [CloseAllRun.cs](../src/app/CloseAllRun.cs) | One "Close all and remove": asks every window to close, watches on a short tick, feeds the panel, carries out its buttons, and removes the desktop on the tick it empties - never past an open window. |
+| [MarkSync.cs](../src/app/MarkSync.cs) | The rules that keep marks in step with the desktops: carry on `Recreated`, no pruning during a reorder, adoption only in the startup window, write on change. Apart from the controller so `--markstress` drives the same code. |
+| [MarkStore.cs](../src/app/MarkStore.cs) | Every desktop's mark by GUID, plus Recent, in `%APPDATA%\DesktopSwitcher\marks.ini` - its own file so `config.ini`'s table-driven rewrite and watcher stay untouched. `Carry` follows a reorder's new GUIDs, `Prune` lets a removed desktop's mark go to Recent, `Adopt` hands a vanished desktop's mark to the one at its old position, at startup only. |
 | [Log.cs](../src/app/Log.cs) | Rolling diagnostic log, off by default, thread-safe because notifications are not. |
 | [AssemblyInfo.cs](../src/app/AssemblyInfo.cs) | Name, description and version. Attributes only; `csc` stamps the Win32 version resource from them, which is how an exe with no project file gets a Details tab. |
 
@@ -169,7 +174,50 @@ for names, kept GUIDs, every window's desktop and the current desktop, with the 
 every call printed. It never reaches the user's desktops, since a reorder only recreates
 from the target position onward. A fifth move goes through a real `DesktopService` with a
 message loop and checks that `DesktopsChanged` fires exactly once, with the final order.
-`--reorder N M` runs the same check on real desktops.
+`--reorder N M` runs the same check on real desktops. That fifth move also checks
+`DesktopService.Recreated`, which the desktop marks are carried by: every desktop in the new
+row must be either one that stayed or the replacement `Recreated` named for it, and every
+replacement must be named before `DesktopsChanged` hands the new row on.
+
+`--marks` ([MarksTest.cs](../src/selftest/MarksTest.cs)) needs no shell beyond a read of the
+desktop list. It round-trips every mark through its text form, drives `MarkStore` against
+synthetic GUIDs - carry, prune, startup adoption, Recent's cap - and checks the strip's
+arithmetic over buttons of mixed widths: for every move in several rows, that the slot the
+dragged button aims at is where the new row lays it out, that every button stepped aside is
+exactly where the new row puts it, and that the drop slot never runs backwards as the pointer
+crosses the strip. Marks made buttons different widths, and a step-aside a few pixels out
+draws a row that looks nearly right and then jumps on the drop. Then it lists what
+`marks.ini` holds against the live desktops, without writing it.
+
+`--markstress [seed]` ([MarkStress.cs](../src/selftest/MarkStress.cs)) is the rough
+version of `--marks`. It parents real strips to a test window rather than the taskbar and
+drives them with synthetic mouse messages over forty random rows of marked and unmarked
+buttons at three DPI scales: clicks on every button's first and last pixel, right clicks,
+hundreds of drags to every slot and past both ends, drags cancelled off the strip, right
+and middle clicks mid-drag, and the marks or the row changing under a drag. Each drag's
+outcome is checked against an oracle that lays the row out afresh for every slot instead of
+using the strip's helpers, and the row's geometry is read back through `AnchorFor` after
+every change. It reads the settled underline back off the screen, saves a rendering sheet
+of awkward rows for an eye to check, and runs `MarkSync` against the real shell on scratch
+desktops - random reorders, bursts of three with nothing pumped between, removals and
+additions - checking every mark is still on its desktop by name. A seed reproduces a run.
+
+### Desktop marks and GUIDs
+
+A mark is keyed by the desktop's GUID, its only stable identity, and a reorder changes GUIDs:
+`VirtualDesktopApi.Reorder` recreates the desktops it moves. So the API records each step the
+moment its swap is done, and `DesktopService.Reorder` raises `Recreated(old, new)` for each,
+on the UI thread, before its reconcile raises `DesktopsChanged`. The controller carries the
+marks there, so when the strip lays out the new row every moved desktop already has its mark
+and its width. Pruning - letting a removed desktop's mark go - is held off for the length of
+a reorder, in case COM's modal loop delivers a notification mid-run that shows an old GUID
+gone and its replacement not yet carried.
+
+The strip reads marks through `MarkProvider` and caches them per button in `Layout`, which
+also gives every button its own width and left edge. Everything that used to multiply an
+index by the button width reads those instead - hit testing, the bar, and the drag, whose
+step-aside, drop slot and landing glide are static functions (`PassOffset`, `DropSlot`,
+`SlotLeft`) so `--marks` can check them.
 
 ## How a change reaches the screen
 

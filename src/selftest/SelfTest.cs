@@ -41,6 +41,8 @@ namespace DesktopSwitcher
                     case "--list":    return CmdList(api);
                     case "--desktops": return CmdDesktops(api);
                     case "--occupancy": return CmdOccupancy(api);
+                    case "--marks":   return MarksTest.Run(api);
+                    case "--markstress": return MarkStress.Run(api, args);
                     case "--stats":   return CmdStats(args);
                     case "--publicip": return CmdPublicIp();
                     case "--switch":  return CmdSwitch(api, args);
@@ -94,6 +96,7 @@ namespace DesktopSwitcher
             Console.WriteLine("  --list                 show all desktops");
             Console.WriteLine("  --desktops             show all desktops with the windows on each, pinned ones tagged");
             Console.WriteLine("  --occupancy            check the occupancy dot's cheap sweep against the full sweep");
+            Console.WriteLine("  --marks                check desktop marks: text form, store, mixed-width drag arithmetic; list saved ones");
             Console.WriteLine("  --stats [N]            print the stats panel N times, a second apart, and which adapters count");
             Console.WriteLine("  --publicip             ask each public IP service once and print what it says (goes online)");
             Console.WriteLine("  --switch N             switch to desktop N (1-based)");
@@ -118,6 +121,7 @@ namespace DesktopSwitcher
             Console.WriteLine("  --winver               print the Windows build and whether startup would accept it");
             Console.WriteLine("  --hotkeys              print the desktop shortcuts and whether each one is free to register");
             Console.WriteLine("  --settings [light|dark|#RRGGBB]  open the Settings window on its own; saves nothing");
+            Console.WriteLine("  --markstress [seed]    drive marked strips with synthetic input, render a sheet, and reorder marked scratch desktops");
             Console.WriteLine("  --closeall             stress \"Close all and remove\" against its own test windows, on desktops it creates");
             Console.WriteLine();
         }
@@ -990,7 +994,8 @@ namespace DesktopSwitcher
                 host.TryComputeBounds(initialWidth, margin, out bounds);
 
                 var strip = new SwitcherStrip(host.TrayWindow, bounds,
-                                              buttonWidth, plusWidth, statsWidth, barHeight,
+                                              buttonWidth, host.Scale(SwitcherStrip.MarkedWidthFor(cfg.ButtonWidth)),
+                                              plusWidth, statsWidth, barHeight,
                                               background, cfg.HighlightColor,
                                               (uint)cfg.TooltipDelayMs, cfg.TooltipWidth,
                                               cfg.AnimationMs, host.DpiScale, cfg.StripLook, cfg.PanelLook);
@@ -999,6 +1004,12 @@ namespace DesktopSwitcher
                                     cfg.StatsWarnPercent, cfg.StatsAlertPercent, cfg.StatsStyle,
                                     host.Scale(cfg.StatsIconSize), cfg.StatsFanSpin,
                                     cfg.StatsFanSpeed);
+
+                // The saved marks, read-only, so --strip draws the row the app would. Nothing
+                // here writes marks.ini; a reorder in the harness leaves them on the old GUIDs.
+                MarkStore marks = MarkStore.Load();
+                strip.MarkProvider = marks.Get;
+                strip.OccupancyShown = false;
 
                 // Hover panels, so --strip exercises them too. A compact echo of
                 // Controller.BuildTooltip - enough to check placement, delay and content.

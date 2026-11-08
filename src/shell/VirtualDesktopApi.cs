@@ -457,6 +457,12 @@ namespace DesktopSwitcher
             public Guid NewId;
             public string Name;
             public bool WasCurrent;
+
+            // The old desktop is gone and its windows are on NewId: from here on anything
+            // keyed to OldId belongs to NewId instead. False only for the step a run stopped
+            // on, whose new desktop was taken back off again.
+            public bool Carried;
+
             public double CreateMs;
             public double RemoveMs;
             public double RenameMs;
@@ -507,11 +513,24 @@ namespace DesktopSwitcher
         /// </summary>
         public List<ReorderStep> Reorder(int from, int to)
         {
-            Guid[] ids = GetDesktopIds();
-            if (from < 0 || from >= ids.Length || to < 0 || to >= ids.Length) return null;
-
             var steps = new List<ReorderStep>();
-            if (from == to) return steps;
+            return Reorder(from, to, steps) ? steps : null;
+        }
+
+        /// <summary>
+        /// Reorder, adding each step to <paramref name="steps"/> the moment its old desktop is
+        /// gone rather than handing back a list at the end. False if the indices are out of
+        /// range. For DesktopService, which has to tell the marks about every desktop that was
+        /// recreated even when a later step throws - a run that dies in its third step has
+        /// still given two desktops new GUIDs, and a list returned at the end would never
+        /// arrive to say so.
+        /// </summary>
+        public bool Reorder(int from, int to, List<ReorderStep> steps)
+        {
+            Guid[] ids = GetDesktopIds();
+            if (from < 0 || from >= ids.Length || to < 0 || to >= ids.Length) return false;
+
+            if (from == to) return true;
 
             var final = new List<Guid>(ids);
             Guid moving = final[from];
@@ -565,20 +584,22 @@ namespace DesktopSwitcher
                     Log.Write("reorder: old desktop vanished mid-run, stopping");
                     Remove(newId);
                     steps.Add(step);
-                    return steps;
+                    return true;
                 }
+
+                // Recorded before the rename, which can throw: by now the swap has happened.
+                step.Carried = true;
+                steps.Add(step);
 
                 // Only a name that was set: an unnamed desktop is "Desktop N" by position,
                 // and should stay unnamed so it takes its new position's number.
                 clock.Restart();
                 if (step.Name != null) SetName(step.NewId, step.Name);
                 step.RenameMs = clock.Elapsed.TotalMilliseconds;
-
-                steps.Add(step);
             }
 
             Log.Write("reorder: done");
-            return steps;
+            return true;
         }
 
         /// <summary>

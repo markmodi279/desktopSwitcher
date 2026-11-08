@@ -107,6 +107,34 @@ The desktop's name titles the menu. Click it to rename — Enter saves, Escape o
 anywhere else leaves it alone, and an empty name puts the desktop back to **Desktop N**.
 The name is set through the shell, so Task View shows it too.
 
+### Marks
+
+When every desktop holds the same apps - Chrome and VS Code on all of them, say, each on a
+different project - the hover panel reads the same on every button, and after a drag the
+numbers no longer say which desktop is which. A **mark** fixes that: something you choose
+for a desktop, drawn beside its number so you recognise it at a glance.
+
+**Set mark...** on a desktop's right-click menu opens a small picker over its button. A mark
+is one of three things:
+
+- **Letters**: one or two, such as a project's initials (`CW`, `DS`).
+- **A symbol**: one of 32 from Windows' own icon font, in rows by what a desktop is for -
+  meetings (calendar, chat, video call), projects (`{ }` for an API, a browser window for
+  the web, layers for fullstack, database, bug), other work, and personal.
+- **A colour**: one of ten, or any other through **+**, shown as a small rounded square.
+
+Each change shows on the strip as you make it; **OK** keeps it, **Cancel** - or a click
+anywhere outside the picker - puts the button back, and **Clear** takes the mark off. A
+marked button is a little wider (44 px rather than 34 at 100% scale), with the number
+shrunk to its left - the number stays because `Ctrl+Alt+3` still means the third button. An
+empty marked desktop dims its mark instead of showing the occupancy dot. Desktops you have
+not marked stay plain numbers.
+
+A mark belongs to its desktop, not its position: drag the desktop along the strip and the
+mark goes with it. Remove the desktop and the mark is let go, but it stays in the picker's
+**Recent** row, along with marks you have used lately, so putting it on a new desktop is one
+click. Marks are kept in `%APPDATA%\DesktopSwitcher\marks.ini`.
+
 The button count follows your actual desktops: create one in Task View and a button
 appears; remove one and it disappears. The strip is right-anchored, so the gap to the
 clock never changes as it grows.
@@ -149,6 +177,7 @@ title after it in a softer tone, and the window count sits at the right of the t
 stats panel follows the panel's style. Both are classic by default for now.
 
 A dim dot beside a number means that desktop has windows on it; no dot means it is empty —
+a marked desktop says the same by dimming its mark —
 the same thing the hover panel tells you, without having to hover. It follows the desktops
 themselves, refreshed every couple of seconds, so a window opened or closed elsewhere
 catches up shortly rather than only at the next hover.

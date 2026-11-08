@@ -67,6 +67,17 @@ namespace DesktopSwitcher
         string _settleReason = "";    // what queued the pending rebuild, for the log
         int _pendingCount = -1;
 
+        // Desktop marks. The store is loaded once, here, and written on every change; the
+        // rules that keep it in step with the desktops are MarkSync's.
+        readonly MarkSync _markSync = new MarkSync(MarkStore.Load());
+        MarkStore _marks { get { return _markSync.Store; } }
+        int _markedWidth;             // a marked button's width, DPI-scaled
+        MarkPicker _picker;           // the open one, or null - there is only ever one
+        int _asking;                  // dialogs open over the strip - see BeginAsking
+        Guid _pickerId;               // the desktop the open picker marks; follows a reorder
+        DesktopMark _preview;         // what the open picker shows on that desktop
+        bool _previewing;
+
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         const string RunValue = "DesktopSwitcher";
 
@@ -145,6 +156,13 @@ namespace DesktopSwitcher
             if (_config.LastCount > _service.Count)
                 _service.EnsureCount(_config.LastCount);
 
+            // Before the first strip, so it comes up already marked. Recreated is subscribed
+            // here rather than with the events below because it is about the marks, not the
+            // strip, and has to be in place before any reorder can run.
+            _service.Recreated += OnRecreated;
+            _markSync.Start(MarkSync.AdoptMs);
+            SyncMarks();
+
             // Subscribed only after the initial model settles, so the first
             // DesktopsChanged does not build a strip that RebuildStrip immediately
             // replaces.
@@ -169,6 +187,7 @@ namespace DesktopSwitcher
                 _service.Tick();
                 RefreshOccupancy(true);
                 SampleStats();
+                if (SyncMarks()) ApplyMarks();
             });
             _watchdogTimer = StartTimer(1000, delegate { Watchdog(); });
 
@@ -380,6 +399,7 @@ namespace DesktopSwitcher
         void ComputeMetrics(int desktopCount)
         {
             _buttonWidth = _host.Scale(_config.ButtonWidth);
+            _markedWidth = _host.Scale(SwitcherStrip.MarkedWidthFor(_config.ButtonWidth));
             _plusWidth = _host.Scale(_config.PlusWidth);
             _statsWidth = _config.StatsTile ? _host.Scale(_config.StatsWidth) : 0;
             _margin = _host.Scale(_config.Margin);
@@ -391,8 +411,11 @@ namespace DesktopSwitcher
                 return;
             }
 
+            // The marked buttons counted in: the probe sits just off the strip's left edge,
+            // and marks make the strip wider than the count alone says.
             Color sampled;
-            int probe = SwitcherStrip.MeasureWidth(desktopCount, _buttonWidth, _plusWidth, _statsWidth);
+            int probe = SwitcherStrip.MeasureWidth(desktopCount, MarkedCount(), _buttonWidth, _markedWidth,
+                                                   _plusWidth, _statsWidth);
 
             if (_host.TrySampleBackground(probe, _margin, out sampled))
                 _background = sampled;
@@ -429,7 +452,8 @@ namespace DesktopSwitcher
             // the one beside it was never ours.
             ComputeMetrics(count);
 
-            int width = SwitcherStrip.MeasureWidth(count, _buttonWidth, _plusWidth, _statsWidth);
+            int width = SwitcherStrip.MeasureWidth(count, MarkedCount(), _buttonWidth, _markedWidth,
+                                                   _plusWidth, _statsWidth);
 
             Rectangle bounds;
             if (!_host.TryComputeBounds(width, _margin, out bounds))
@@ -455,7 +479,7 @@ namespace DesktopSwitcher
             try
             {
                 _strip = new SwitcherStrip(_host.TrayWindow, bounds,
-                                           _buttonWidth, _plusWidth, _statsWidth, _barHeight,
+                                           _buttonWidth, _markedWidth, _plusWidth, _statsWidth, _barHeight,
                                            _background, _config.HighlightColor,
                                            (uint)_config.TooltipDelayMs, _config.TooltipWidth,
                                            _config.AnimationMs, _host.DpiScale,
@@ -476,6 +500,12 @@ namespace DesktopSwitcher
             _strip.ReorderRequested += delegate(int from, int to) { Reorder(from, to, "drag"); };
             _strip.TooltipProvider = BuildTooltip;
             _strip.StatsProvider = BuildStats;
+            _strip.MarkProvider = MarkFor;
+            _strip.OccupancyShown = _config.OccupancyDots;
+
+            // A strip rebuilt under an open dialog - an Explorer restart, a theme change -
+            // keeps its panel away like the one it replaced.
+            _strip.Asking = _asking > 0;
             _strip.SetStatsMeter(_host.Scale(_config.StatsBarWidth), _host.Scale(_config.StatsBarGap),
                                  _host.Scale(_config.StatsBarHeight), _config.StatsBarLabels, _config.StatsBarRounded,
                                  _config.StatsWarnPercent, _config.StatsAlertPercent, _config.StatsStyle,
@@ -756,6 +786,12 @@ namespace DesktopSwitcher
             // titles the rest rather than sitting among the actions.
             AddRenameBox(menu, desktop);
 
+            // The mark is the desktop's identity too, so it sits with the name rather than
+            // among the actions.
+            // Greyed while a picker is open, for any desktop - see RequestMark.
+            AddItem(menu, _marks.Get(id) != null ? "Change mark..." : "Set mark...", _picker == null,
+                    delegate { RequestMark(id); });
+
             AddItem(menu, "Switch here", !desktop.IsCurrent, delegate { _service.SwitchTo(id); });
 
             // Resolved now, not when the item is clicked, so the window that moves is the
@@ -837,16 +873,14 @@ namespace DesktopSwitcher
                                                    _host.DpiScale, anchor))
             {
                 // The hover panel would otherwise open over the dialog; see SwitcherStrip.Asking.
-                if (_strip != null) _strip.Asking = true;
+                BeginAsking();
                 try
                 {
                     dialog.ShowDialog(this);
                 }
                 finally
                 {
-                    // The strip can have been rebuilt while the dialog was up - a desktop
-                    // added or removed underneath it - so the field is read again.
-                    if (_strip != null) _strip.Asking = false;
+                    EndAsking();
                 }
                 return dialog.Choice;
             }
@@ -960,7 +994,18 @@ namespace DesktopSwitcher
             if (from == to || from < 0 || to < 0 || from >= _service.Count || to >= _service.Count) return;
 
             Log.Write(delegate { return "controller: " + how + " moving desktop " + (from + 1) + " to " + (to + 1); });
-            _service.Reorder(from, to);
+
+            // Pruning held off for the length of it - see MarkSync.BeginReorder.
+            _markSync.BeginReorder();
+            try
+            {
+                _service.Reorder(from, to);
+            }
+            finally
+            {
+                _markSync.EndReorder();
+            }
+            SyncMarks();
 
             // The recreated desktops are new GUIDs, so whatever the inventory holds per
             // desktop is keyed to ones that no longer exist.
@@ -1153,6 +1198,137 @@ namespace DesktopSwitcher
             }
 
             if (_strip != null) _strip.MenuClosed();
+        }
+
+        // --- marks ------------------------------------------------------------
+
+        /// <summary>
+        /// A dialog is opening over the strip: the hover panel stays away until the last one
+        /// closes. Counted, because the strip keeps taking clicks under a modal dialog and a
+        /// second can open over the first - a Remove confirmation over the mark picker - and a
+        /// plain flag set back to false by the inner one let the panel open over the outer.
+        /// </summary>
+        void BeginAsking()
+        {
+            _asking++;
+            if (_strip != null) _strip.Asking = true;
+        }
+
+        void EndAsking()
+        {
+            if (_asking > 0) _asking--;
+
+            // The strip can have been rebuilt while the dialog was up - a desktop added or
+            // removed underneath it - so the field is read again.
+            if (_strip != null) _strip.Asking = _asking > 0;
+        }
+
+        /// <summary>What the strip draws for a desktop: the picker's preview while it is open, else the saved mark.</summary>
+        DesktopMark MarkFor(Guid id)
+        {
+            if (_previewing && id == _pickerId) return _preview;
+            return _marks.Get(id);
+        }
+
+        int MarkedCount()
+        {
+            if (_service == null) return 0;
+            int n = 0;
+            foreach (Desktop d in _service.Desktops)
+                if (MarkFor(d.Id) != null) n++;
+            return n;
+        }
+
+        /// <summary>
+        /// The marks brought into line with the desktops there are - see MarkSync.Sync. True
+        /// when a live desktop's mark changed and the strip wants telling.
+        /// </summary>
+        bool SyncMarks()
+        {
+            if (_service == null) return false;
+            return _markSync.Sync(_service.Desktops);
+        }
+
+        /// <summary>A reorder recreated a desktop: its mark, and an open picker, follow it to the new GUID.</summary>
+        void OnRecreated(Guid oldId, Guid newId)
+        {
+            _markSync.Recreated(oldId, newId);
+            if (_pickerId == oldId) _pickerId = newId;
+        }
+
+        /// <summary>The marks changed: the strip re-reads them, and is re-placed if that changed its width.</summary>
+        void ApplyMarks()
+        {
+            if (_strip == null) return;
+            if (_strip.RefreshMarks()) PlaceStrip();
+        }
+
+        /// <summary>
+        /// The menu's "Set mark...": the picker over the desktop's button, showing each change
+        /// on the strip as it is made, and keeping it only on OK.
+        ///
+        /// The desktop is followed by GUID through _pickerId, which OnRecreated moves along if
+        /// a drag reorders the row while the picker is up - the strip is a child of the taskbar,
+        /// so a modal dialog on this form does not stop it taking a drag.
+        /// </summary>
+        void RequestMark(Guid id)
+        {
+            // One picker at a time. The strip still takes clicks while one is up - it is a
+            // child of the taskbar, not of the form the dialog is modal over - and a second
+            // "Set mark..." used to open a second picker over the first. Both previewed
+            // through the one _pickerId, which the second overwrote, so OK in the first then
+            // saved its mark onto the second desktop. The menu greys the item while a picker
+            // is open; this is the guard behind it.
+            if (_picker != null)
+            {
+                _picker.Activate();
+                return;
+            }
+
+            Desktop desktop = Find(id);
+            if (desktop == null || _strip == null) return;
+
+            Rectangle anchor = _strip.AnchorFor(desktop.Index);
+            _pickerId = id;
+            _preview = _marks.Get(id);
+
+            DialogResult result;
+            DesktopMark chosen;
+            using (var picker = new MarkPicker(desktop.DisplayName, _preview, _marks.Recent,
+                                               _background, _config.HighlightColor, _host.DpiScale, anchor))
+            {
+                _picker = picker;
+                picker.Previewed += delegate(DesktopMark mark)
+                {
+                    _preview = mark;
+                    _previewing = true;
+                    ApplyMarks();
+                };
+
+                // The hover panel would otherwise open over the picker; see SwitcherStrip.Asking.
+                BeginAsking();
+                try
+                {
+                    result = picker.ShowDialog(this);
+                }
+                finally
+                {
+                    _previewing = false;
+                    _picker = null;
+                    EndAsking();
+                }
+                chosen = picker.Mark;
+            }
+
+            if (result == DialogResult.OK)
+            {
+                desktop = Find(_pickerId);
+                if (desktop != null && _markSync.Set(_pickerId, chosen, desktop.Index))
+                    Log.Write(delegate { return "controller: desktop " + desktop.Number + " mark " + (chosen == null ? "cleared" : chosen.Format()); });
+            }
+
+            // Either way: OK shows the saved mark, Cancel takes the preview back off.
+            ApplyMarks();
         }
 
         // --- tooltips ---------------------------------------------------------
@@ -1643,6 +1819,10 @@ namespace DesktopSwitcher
                 RebuildStrip();
                 return;
             }
+
+            // Before the strip lays itself out: a removed desktop's mark is let go now, and a
+            // reorder's were carried already, so the row it reads is the row it draws.
+            SyncMarks();
 
             _strip.SetDesktops(_service.Desktops);
             PlaceStrip();

@@ -156,6 +156,29 @@ namespace DesktopSwitcher
         public const int ReshowMs = 80;
 
         /// <summary>
+        /// How much wider a marked desktop button is than buttonWidth, at 96 DPI: 34 becomes
+        /// 44, room for a two-thirds number, a small gap and two semibold letters. A fixed
+        /// amount for now; a button sized to its own mark - one letter narrower than two - is
+        /// a later step, and Layout already gives every button its own width for it.
+        /// </summary>
+        public const int MarkExtra = 10;
+
+        /// <summary>
+        /// The narrowest a marked button may be, at 96 DPI: a two-digit number shrunk, the gap,
+        /// and "WW", with a little air either side. buttonWidth goes down to 16, and 16 + 10 put
+        /// the number and mark of one button over its neighbours - found by --markstress's
+        /// rendering sheet. Below this the mark would not fit, so a marked button is never
+        /// narrower than it, however narrow the unmarked ones are.
+        /// </summary>
+        public const int MarkMinWidth = 40;
+
+        /// <summary>A marked button's width at 96 DPI, for a given buttonWidth.</summary>
+        public static int MarkedWidthFor(int buttonWidth)
+        {
+            return Math.Max(buttonWidth + MarkExtra, MarkMinWidth);
+        }
+
+        /// <summary>
         /// How often an open stats panel re-reads its figures. A second is what Task Manager
         /// uses at its normal speed, and it is slow enough that a figure can be read before
         /// it changes. The timer behind it runs only while the stats panel is on screen.
@@ -176,7 +199,8 @@ namespace DesktopSwitcher
         /// </summary>
         const int WM_CLICK_ANYWHERE = Native.WM_APP + 1;
 
-        readonly int _buttonWidth;
+        readonly int _buttonWidth;     // an unmarked desktop button
+        readonly int _markedWidth;     // a marked one: room for the shrunk number and the mark
         readonly int _plusWidth;
         readonly int _statsWidth;      // 0 means no stats tile at all
         readonly int _barHeight;
@@ -189,6 +213,16 @@ namespace DesktopSwitcher
 
         List<Desktop> _desktops = new List<Desktop>();
         ButtonVisual[] _visuals = new ButtonVisual[0];
+
+        // Desktop buttons are not all one width since marks: a marked one is _markedWidth,
+        // the rest _buttonWidth. These are the row laid out, by position - each button's
+        // mark, width and left edge - and the total, which is where '+' starts. Rebuilt by
+        // Layout whenever the list or the marks change; everything that used to multiply an
+        // index by the button width reads these instead.
+        DesktopMark[] _marks = new DesktopMark[0];
+        int[] _widths = new int[0];
+        int[] _lefts = new int[0];
+        int _buttonsWidth;
 
         // Which desktops have windows, by Guid - keyed the same way _desktops is read in
         // SyncVisuals, so a set change and an occupancy refresh landing in either order
@@ -265,17 +299,21 @@ namespace DesktopSwitcher
         Font _font;
         Font _currentFont;             // modern: the current desktop's number, semibold
         Font _glyphFont;               // modern: Segoe MDL2 Assets for the '+'; null if missing
+        Font _numberFont;              // a marked button's number, shrunk beside its mark
+        Font _markFont;                // a mark's letters
+        Font _markGlyphFont;           // a mark's symbol; null if the font is missing
 
         TooltipWindow _tooltip;
         Timer _reshowTimer;            // runs only between a button change and the follow
 
         public SwitcherStrip(IntPtr parent, Rectangle bounds,
-                             int buttonWidth, int plusWidth, int statsWidth, int barHeight,
+                             int buttonWidth, int markedWidth, int plusWidth, int statsWidth, int barHeight,
                              Color background, Color highlight,
                              uint hoverDelay, int tooltipWidth, int animationMs,
                              double dpiScale, Look look, Look panelLook)
         {
             _buttonWidth = buttonWidth;
+            _markedWidth = Math.Max(buttonWidth, markedWidth);
             _plusWidth = plusWidth;
             _statsWidth = Math.Max(0, statsWidth);
             _barHeight = barHeight;
@@ -351,6 +389,23 @@ namespace DesktopSwitcher
         public Func<bool, TooltipContent> StatsProvider { get; set; }
 
         /// <summary>
+        /// A desktop's mark, by GUID, or null for none. Read by Layout - when the list is set
+        /// and when RefreshMarks says the marks changed - and cached per button there, so a
+        /// paint never asks. A provider rather than a pushed table for the sake of a reorder:
+        /// the marks have already been carried to the new GUIDs when SetDesktops arrives with
+        /// them, so the one Layout that follows sees each moved desktop with its mark, and
+        /// there is no in-between relayout with the old GUIDs' marks and the new GUIDs' list.
+        /// </summary>
+        public Func<Guid, DesktopMark> MarkProvider { get; set; }
+
+        /// <summary>
+        /// Whether the occupancy sweep is running, so an empty marked desktop can be dimmed.
+        /// Off - occupancyDots off, or one desktop, where nothing sweeps - every mark draws at
+        /// full strength rather than every mark reading as empty.
+        /// </summary>
+        public bool OccupancyShown { get; set; }
+
+        /// <summary>
         /// The stats panel was pinned, kept or closed - (pinned, kept) - from a click on the
         /// tile, a click elsewhere, or SetStatsPinned. The strip is rebuilt from scratch after
         /// an Explorer restart, a theme change or an unlock, and the state would die with it;
@@ -384,7 +439,133 @@ namespace DesktopSwitcher
             return desktopCount * buttonWidth + plusWidth + Math.Max(0, statsWidth);
         }
 
-        public int Width { get { return MeasureWidth(_desktops.Count, _buttonWidth, _plusWidth, _statsWidth); } }
+        /// <summary>The same with <paramref name="markedCount"/> of the desktops marked, and so wider.</summary>
+        public static int MeasureWidth(int desktopCount, int markedCount, int buttonWidth, int markedWidth,
+                                       int plusWidth, int statsWidth)
+        {
+            int marked = Math.Max(0, Math.Min(desktopCount, markedCount));
+            return (desktopCount - marked) * buttonWidth + marked * Math.Max(buttonWidth, markedWidth)
+                   + plusWidth + Math.Max(0, statsWidth);
+        }
+
+        public int Width { get { return _buttonsWidth + _plusWidth + _statsWidth; } }
+
+        /// <summary>
+        /// Lays the row out from _desktops and the marks: each button's mark, width and left
+        /// edge. True if any button's width changed - which moves '+' and the tile, and
+        /// changes Width, so the caller has the strip re-placed.
+        /// </summary>
+        bool Layout()
+        {
+            int n = _desktops.Count;
+            var marks = new DesktopMark[n];
+            var widths = new int[n];
+            var lefts = new int[n];
+
+            int x = 0;
+            for (int i = 0; i < n; i++)
+            {
+                DesktopMark mark = null;
+                if (MarkProvider != null)
+                {
+                    try { mark = MarkProvider(_desktops[i].Id); }
+                    catch (Exception ex) { Log.Write("strip: mark provider threw - " + ex.Message); }
+                }
+
+                marks[i] = mark;
+                widths[i] = mark != null ? _markedWidth : _buttonWidth;
+                lefts[i] = x;
+                x += widths[i];
+            }
+
+            bool resized = x != _buttonsWidth || !SameWidths(widths, _widths);
+            _marks = marks;
+            _widths = widths;
+            _lefts = lefts;
+            _buttonsWidth = x;
+            return resized;
+        }
+
+        static bool SameWidths(int[] a, int[] b)
+        {
+            if (a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++)
+                if (a[i] != b[i]) return false;
+            return true;
+        }
+
+        /// <summary>
+        /// The marks changed - set, cleared, or previewed from the picker. Re-reads them and
+        /// redraws. True when the strip's width changed with them, which the caller answers by
+        /// re-placing the strip; until it does, '+' and the tile are drawn past the window's
+        /// edge.
+        ///
+        /// A press or drag in progress is let go first: its arithmetic was done against the
+        /// old widths. Nothing should change marks under a drag - the picker is modal - so
+        /// this is a guard, not a path anyone is expected to take.
+        /// </summary>
+        public bool RefreshMarks()
+        {
+            if (_pressIndex >= 0) LetGo();
+
+            bool resized = Layout();
+            SyncVisuals();
+            if (resized) Settle();
+            Invalidate();
+            return resized;
+        }
+
+        /// <summary>
+        /// Where a dragged button's left edge sits if it lands at <paramref name="to"/>: the
+        /// widths of the others that would then be in front of it. Static and public for
+        /// --marks, which checks the drag arithmetic over mixed widths without a strip.
+        /// </summary>
+        public static int SlotLeft(int[] widths, int from, int to)
+        {
+            int x = 0, slot = 0;
+            for (int i = 0; i < widths.Length && slot < to; i++)
+            {
+                if (i == from) continue;
+                x += widths[i];
+                slot++;
+            }
+            return x;
+        }
+
+        /// <summary>
+        /// How far button <paramref name="i"/> steps aside while the button dragged from
+        /// <paramref name="from"/> would land at <paramref name="drop"/>. Each one passed
+        /// moves by the width of the button in hand, not its own: that is the gap that opens
+        /// when the button leaves, and the room it needs where it lands. Equal only while every
+        /// button was the same width. Static and public for --marks, which checks that every
+        /// button ends up exactly where the new order lays it out.
+        /// </summary>
+        public static int PassOffset(int[] widths, int from, int drop, int i)
+        {
+            int carried = widths[from];
+            if (from < drop && i > from && i <= drop) return -carried;
+            if (from > drop && i >= drop && i < from) return carried;
+            return 0;
+        }
+
+        /// <summary>
+        /// The slot a button dragged from <paramref name="from"/> lands in with its left edge
+        /// at <paramref name="left"/>: whichever slot's left edge it is nearest. With every
+        /// width equal this is the old "more than half over the next slot" rule; with a
+        /// narrow button passing a wide one, it is what keeps the swap point where the two
+        /// buttons' edges actually meet rather than a fixed button-width along.
+        /// </summary>
+        public static int DropSlot(int[] widths, int from, float left)
+        {
+            int best = from;
+            float bestDistance = float.MaxValue;
+            for (int slot = 0; slot < widths.Length; slot++)
+            {
+                float distance = Math.Abs(left - SlotLeft(widths, from, slot));
+                if (distance < bestDistance) { bestDistance = distance; best = slot; }
+            }
+            return best;
+        }
 
         /// <summary>
         /// The stats tile's index, by the same numbering HitTest uses, or -1 when there is no
@@ -398,9 +579,9 @@ namespace DesktopSwitcher
         Rectangle ButtonBounds(int index, int height)
         {
             if (index < _desktops.Count)
-                return new Rectangle(index * _buttonWidth, 0, _buttonWidth, height);
+                return new Rectangle(_lefts[index], 0, _widths[index], height);
 
-            int plusX = _desktops.Count * _buttonWidth;
+            int plusX = _buttonsWidth;
             if (index == _desktops.Count || _statsWidth <= 0)
                 return new Rectangle(plusX, 0, _plusWidth, height);
 
@@ -411,8 +592,13 @@ namespace DesktopSwitcher
         {
             if (x < 0) return -1;
 
-            int buttonsWidth = _desktops.Count * _buttonWidth;
-            if (x < buttonsWidth) return x / _buttonWidth;
+            int buttonsWidth = _buttonsWidth;
+            if (x < buttonsWidth)
+            {
+                for (int i = _desktops.Count - 1; i >= 0; i--)
+                    if (x >= _lefts[i]) return i;
+                return 0;
+            }
             if (x < buttonsWidth + _plusWidth) return _desktops.Count;
             if (x < buttonsWidth + _plusWidth + _statsWidth) return _desktops.Count + 1;
             return -1;
@@ -424,8 +610,9 @@ namespace DesktopSwitcher
         /// out of the same edge of the same rectangle.
         ///
         /// Empty when the strip has no window rect, which means it is being torn down.
+        /// Public for the mark picker, which opens over the button it marks.
         /// </summary>
-        Rectangle AnchorFor(int index)
+        public Rectangle AnchorFor(int index)
         {
             Native.RECT strip;
             if (!Native.GetWindowRect(Handle, out strip)) return Rectangle.Empty;
@@ -477,6 +664,7 @@ namespace DesktopSwitcher
             }
 
             _desktops = new List<Desktop>(desktops);
+            Layout();
 
             if (_visuals.Length != SlotCount)
                 _visuals = new ButtonVisual[SlotCount];
@@ -538,10 +726,7 @@ namespace DesktopSwitcher
             if (!_dragging || i >= _desktops.Count) return 0f;
             if (i == _pressIndex) return _visuals[i].OffsetTarget;
 
-            int slot = i;
-            if (_pressIndex < _dropIndex && i > _pressIndex && i <= _dropIndex) slot = i - 1;
-            else if (_pressIndex > _dropIndex && i >= _dropIndex && i < _pressIndex) slot = i + 1;
-            return (slot - i) * _buttonWidth;
+            return PassOffset(_widths, _pressIndex, _dropIndex, i);
         }
 
         /// <summary>
@@ -1001,9 +1186,74 @@ namespace DesktopSwitcher
             {
                 bounds.Offset(offset, 0);
                 using (var back = new SolidBrush(_background))
-                    g.FillRectangle(back, bounds);
+                    FillCrisp(g, back, bounds);
             }
-            DrawButton(g, bounds, _desktops[i].Number.ToString(), _visuals[i]);
+            if (_marks[i] != null) DrawMarkedButton(g, bounds, _desktops[i].Number.ToString(), _marks[i], _visuals[i]);
+            else DrawButton(g, bounds, _desktops[i].Number.ToString(), _visuals[i]);
+        }
+
+        /// <summary>
+        /// A marked desktop: its number shrunk and softened on the left, the mark beside it,
+        /// the pair centred in the button. The number stays because Ctrl+Alt+N and "the third
+        /// button" still mean position; the mark is what says which desktop it is.
+        ///
+        /// No occupancy dot. The mark carries that instead, dimmed to 40% while the desktop is
+        /// empty - eased through the same Dot value the dot fades on, so a desktop emptying
+        /// fades its mark rather than snapping it.
+        /// </summary>
+        void DrawMarkedButton(Graphics g, Rectangle bounds, string number, DesktopMark mark, ButtonVisual visual)
+        {
+            DrawCell(g, bounds, visual);
+
+            // Held inside its own button. MarkMinWidth is what makes the pair fit; this is the
+            // backstop, so a mark that somehow does not fit is cut short rather than drawn
+            // over the number next door.
+            Region clip = g.Clip;
+            g.SetClip(bounds);
+            try
+            {
+                DrawMarkContent(g, bounds, number, mark, visual);
+            }
+            finally
+            {
+                g.Clip = clip;
+                clip.Dispose();
+            }
+        }
+
+        void DrawMarkContent(Graphics g, Rectangle bounds, string number, DesktopMark mark, ButtonVisual visual)
+        {
+            var area = new RectangleF(bounds.X, bounds.Y, bounds.Width, bounds.Height - _barHeight);
+            Color ink = Palette.RampText(_background, Emphasis(visual));
+
+            // Softer than the mark at rest, catching up with it as the button lights: the
+            // current desktop's number reads as clearly as anything else on it.
+            Color numberInk = Palette.Blend(Palette.MutedText(_background), ink, 0.35f + 0.65f * visual.Highlight);
+
+            float alpha = 1f;
+            if (OccupancyShown && _desktops.Count > 1) alpha = 0.4f + 0.6f * visual.Dot;
+
+            float numberWidth = g.MeasureString(number, _numberFont, PointF.Empty, StringFormat.GenericTypographic).Width;
+            float markWidth = MarkPainter.Measure(g, mark, _markFont, _markGlyphFont);
+            float gap = Scale(3);
+            float total = numberWidth + gap + markWidth;
+            float x = (float)Math.Round(area.X + (area.Width - total) / 2f);
+
+            using (var brush = new SolidBrush(numberInk))
+            using (var format = (StringFormat)StringFormat.GenericTypographic.Clone())
+            {
+                format.Alignment = StringAlignment.Center;
+                format.LineAlignment = StringAlignment.Center;
+                format.FormatFlags |= StringFormatFlags.NoWrap | StringFormatFlags.NoClip;
+
+                // A pixel lower than true centre, so the small number sits nearer the mark's
+                // baseline than its middle and the pair reads as one label.
+                g.DrawString(number, _numberFont, brush,
+                             new RectangleF(x, area.Y + Scale(1), numberWidth, area.Height), format);
+            }
+
+            MarkPainter.Draw(g, mark, new RectangleF(x + numberWidth + gap, area.Y, markWidth, area.Height),
+                             ink, _markFont, _markGlyphFont, alpha);
         }
 
         /// <summary>
@@ -1038,8 +1288,22 @@ namespace DesktopSwitcher
             var bar = new Rectangle((int)Math.Round(_barX), height - barHeight,
                                     (int)Math.Round(_barWidth), barHeight);
 
+            // Without antialiasing: Render turns it on for the curves, and under it GDI+
+            // centres pixels on integer coordinates, so a whole-pixel rectangle covers half
+            // of the pixel either side of it. The bar was drawn half a pixel soft at both
+            // ends, blending into the neighbours - found by --markstress reading the settled
+            // bar back off the screen and finding its first and last columns half-tone.
             using (var brush = new SolidBrush(_highlight))
-                g.FillRectangle(brush, bar);
+                FillCrisp(g, brush, bar);
+        }
+
+        /// <summary>A whole-pixel rectangle, filled exactly - antialiasing off for the one call. See DrawBar.</summary>
+        static void FillCrisp(Graphics g, Brush brush, Rectangle r)
+        {
+            SmoothingMode was = g.SmoothingMode;
+            g.SmoothingMode = SmoothingMode.None;
+            g.FillRectangle(brush, r);
+            g.SmoothingMode = was;
         }
 
         int Scale(int value)
@@ -1107,7 +1371,9 @@ namespace DesktopSwitcher
                     }
                     else
                     {
-                        g.FillRectangle(fill, bounds);
+                        // Crisp, for the bar's reason: antialiased, a lit cell bled half a
+                        // pixel into the buttons either side.
+                        FillCrisp(g, fill, bounds);
                     }
                 }
             }
@@ -1744,6 +2010,17 @@ namespace DesktopSwitcher
             if (_labelFont != null) _labelFont.Dispose();
             _labelFont = new Font("Segoe UI Semibold", Math.Max(7f, size * 0.70f), FontStyle.Regular, GraphicsUnit.Pixel);
 
+            // A marked button's three faces, for either look. The number at two thirds - small
+            // enough to give the mark the button, large enough still to read for Ctrl+Alt+N -
+            // and the mark at the number's usual size, semibold so two letters hold their own
+            // against the full-size numbers on the buttons either side.
+            if (_numberFont != null) _numberFont.Dispose();
+            _numberFont = new Font("Segoe UI", Math.Max(7f, size * 0.66f), FontStyle.Regular, GraphicsUnit.Pixel);
+            if (_markFont != null) _markFont.Dispose();
+            _markFont = new Font("Segoe UI Semibold", size, FontStyle.Regular, GraphicsUnit.Pixel);
+            if (_markGlyphFont != null) _markGlyphFont.Dispose();
+            _markGlyphFont = MarkPainter.GlyphFont(size * 1.05f);
+
             if (_currentFont != null) { _currentFont.Dispose(); _currentFont = null; }
             if (_glyphFont != null) { _glyphFont.Dispose(); _glyphFont = null; }
             if (_look != Look.Modern) return;
@@ -1984,7 +2261,7 @@ namespace DesktopSwitcher
                 if (Math.Abs(x - _pressX) < DragThreshold()) return false;
 
                 _dragging = true;
-                _dragGrab = _pressX - _pressIndex * _buttonWidth;
+                _dragGrab = _pressX - _lefts[_pressIndex];
                 _dropIndex = _pressIndex;
                 _topIndex = _pressIndex;
 
@@ -2002,15 +2279,15 @@ namespace DesktopSwitcher
             // The button follows the pointer, kept inside the row of desktop buttons: it can
             // be put first or last, not onto '+' or past the end.
             float left = x - _dragGrab;
-            float last = (_desktops.Count - 1) * _buttonWidth;
+            float last = _buttonsWidth - _widths[_pressIndex];
             left = Math.Max(0f, Math.Min(last, left));
 
-            // It lands in whichever slot holds more than half of it.
-            _dropIndex = Math.Max(0, Math.Min(_desktops.Count - 1, (int)Math.Floor(left / _buttonWidth + 0.5f)));
+            // It lands in whichever slot's left edge it is nearest - see DropSlot.
+            _dropIndex = DropSlot(_widths, _pressIndex, left);
 
             // Exactly under the pointer, no easing: a button that trails the hand holding it
             // feels like it is being pulled through something.
-            float offset = left - _pressIndex * _buttonWidth;
+            float offset = left - _lefts[_pressIndex];
             _visuals[_pressIndex].Offset = offset;
             _visuals[_pressIndex].OffsetTarget = offset;
 
@@ -2057,7 +2334,10 @@ namespace DesktopSwitcher
                 Log.Write(delegate { return "strip: dropped desktop " + (from + 1) + " at " + (to + 1); });
 
                 _landIndex = to;
-                _landOffset = from * _buttonWidth + offset - to * _buttonWidth;
+                // From where it was let go to where it will be laid out in the new order. The
+                // marks travel with their desktops, so the new row has the same widths in the
+                // new order and the slot's left edge is the others' widths in front of it.
+                _landOffset = _lefts[from] + offset - SlotLeft(_widths, from, to);
                 try
                 {
                     ReorderRequested(from, to);
@@ -2842,6 +3122,9 @@ namespace DesktopSwitcher
             if (_currentFont != null) { _currentFont.Dispose(); _currentFont = null; }
             if (_glyphFont != null) { _glyphFont.Dispose(); _glyphFont = null; }
             if (_labelFont != null) { _labelFont.Dispose(); _labelFont = null; }
+            if (_numberFont != null) { _numberFont.Dispose(); _numberFont = null; }
+            if (_markFont != null) { _markFont.Dispose(); _markFont = null; }
+            if (_markGlyphFont != null) { _markGlyphFont.Dispose(); _markGlyphFont = null; }
         }
     }
 }

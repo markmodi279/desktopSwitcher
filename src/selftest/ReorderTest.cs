@@ -299,6 +299,16 @@ namespace DesktopSwitcher
                 var service = new DesktopService(api, form);
                 var counts = new List<int>();
                 service.DesktopsChanged += delegate { counts.Add(service.Count); };
+
+                // What the marks are carried by: each recreated desktop, old GUID to new, and
+                // whether it was reported before the new order reached DesktopsChanged.
+                var carried = new Dictionary<Guid, Guid>();
+                bool carriedLate = false;
+                service.Recreated += delegate(Guid oldId, Guid newId)
+                {
+                    carried[oldId] = newId;
+                    if (counts.Count > 0) carriedLate = true;
+                };
                 service.Start();
                 Pump(300);
                 counts.Clear();
@@ -321,16 +331,33 @@ namespace DesktopSwitcher
                     if (!SameName(model[i].Name, names[order[i]])) ok = false;
                 if (model.Count != before.Length) ok = false;
 
+                // Recreated must account for every GUID: each desktop in the new row is either
+                // one that stayed, or the one Recreated named as its replacement.
+                bool mapped = carried.Count > 0;
+                for (int i = 0; i < model.Count && i < order.Count; i++)
+                {
+                    Guid was = before[order[i]];
+                    Guid expect;
+                    if (!carried.TryGetValue(was, out expect)) expect = was;
+                    if (model[i].Id != expect) mapped = false;
+                }
+
                 Console.WriteLine("  DesktopsChanged raised " + counts.Count + " time(s), with counts ["
                                   + string.Join(", ", counts.ConvertAll(n => n.ToString()).ToArray()) + "]");
                 Console.WriteLine("  model order " + (ok ? "matches" : "DOES NOT match") + " the new order");
+                Console.WriteLine("  Recreated named " + carried.Count + " replacement(s), "
+                                  + (mapped ? "accounting for every desktop" : "NOT accounting for every desktop")
+                                  + (carriedLate ? ", some AFTER DesktopsChanged" : ", all before DesktopsChanged"));
 
                 bool one = counts.Count == 1 && counts[0] == before.Length;
-                Console.WriteLine(one && ok ? "  OK" : "  FAILED - the strip would see intermediate rows");
+                bool marksOk = mapped && !carriedLate;
+                Console.WriteLine(one && ok && marksOk ? "  OK"
+                                  : !marksOk ? "  FAILED - marks would not follow their desktops"
+                                  : "  FAILED - the strip would see intermediate rows");
                 Console.WriteLine();
 
                 service.Dispose();
-                return one && ok;
+                return one && ok && marksOk;
             }
         }
 
