@@ -190,6 +190,23 @@ namespace DesktopSwitcher
         /// </summary>
         public bool StepWrap = true;
 
+        /// <summary>
+        /// Held with P, pins the active window to every desktop, or unpins it - Task View's
+        /// "Show this window on all desktops", which Windows 10 gives no key for. Ctrl+Alt
+        /// by default, to match the others; on an AltGr layout AltGr+P types a character in
+        /// a few (Polish, for one), and Alt+Shift is the way out there too.
+        /// </summary>
+        public HotkeyModifiers PinHotkeys = HotkeyModifiers.CtrlAlt;
+
+        /// <summary>
+        /// A balloon after each pin or unpin, naming the window. On by default because
+        /// pinning has nothing to show for itself until the next switch, and a key that
+        /// seems to do nothing gets pressed twice - which unpins it again. Off for someone
+        /// who has learnt to trust it: on Windows 10 every balloon also lands in the
+        /// Action Center.
+        /// </summary>
+        public bool PinNotify = true;
+
         // --- tooltips ---------------------------------------------------------
         public bool Tooltips = true;
         /// <summary>Hover delay before the panel appears. 400ms is the Windows default.</summary>
@@ -435,6 +452,16 @@ namespace DesktopSwitcher
                 "Next on the last desktop goes back to the first, and previous on the first "
                 + "goes to the last. Off stops at the ends.")
                 .When(c => c.StepHotkeys != HotkeyModifiers.Off),
+            Choice(ShortcutsSection, "pinShortcut", "Pin to all desktops",
+                HotkeyChoices, HotkeyCaptions,
+                c => (int)c.PinHotkeys, (c, v) => c.PinHotkeys = (HotkeyModifiers)v,
+                "Hold these and press P to show the active window on every desktop, or to stop. "
+                + "A window of an app pinned from Task View stops alone; the app's other windows stay."),
+            Bool(ShortcutsSection, "pinNotify", "Say when pinned",
+                c => c.PinNotify, (c, v) => c.PinNotify = v,
+                "A notification naming the window after each pin or unpin. Pinning shows nothing "
+                + "until you switch desktops, so this is how you know it took.")
+                .When(c => c.PinHotkeys != HotkeyModifiers.Off),
 
             // --- advanced
             Int(AdvancedSection, "reconcileMs", "Check interval", 250, 60000, "ms",

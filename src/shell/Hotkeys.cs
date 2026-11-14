@@ -6,7 +6,7 @@ namespace DesktopSwitcher
 {
     /// <summary>
     /// The modifiers the desktop shortcuts are held under - jumpShortcut for the digits,
-    /// stepShortcut for the arrows, one each.
+    /// stepShortcut for the arrows, pinShortcut for P, one each.
     ///
     /// A fixed list rather than free text, because a free-text binding is a parser, an
     /// editor control and a list of the ways it can be spelt wrong, and every combination
@@ -28,7 +28,8 @@ namespace DesktopSwitcher
     /// <summary>
     /// Global shortcuts that switch desktops, claimed with RegisterHotKey on the
     /// controller's hidden window: Ctrl+Alt+1..9 jumps to a desktop, Ctrl+Alt+Left and
-    /// Right step through them.
+    /// Right step through them, and Ctrl+Alt+P pins the active window to every desktop or
+    /// unpins it.
     ///
     /// The point is the switch rather than the keys. Windows' own Ctrl+Win+arrows slides
     /// the whole screen across, and that slide belongs to Explorer's keyboard path, not to
@@ -59,10 +60,12 @@ namespace DesktopSwitcher
         const int JumpCount = 9;
         const int PreviousId = 10;
         const int NextId = 11;
+        const int PinId = 12;
 
         const uint VK_LEFT = 0x25;
         const uint VK_RIGHT = 0x27;
         const uint VK_1 = 0x31;
+        const uint VK_P = 0x50;
 
         const int ERROR_HOTKEY_ALREADY_REGISTERED = 1409;
 
@@ -79,12 +82,12 @@ namespace DesktopSwitcher
         /// ones that could not be had - empty when everything registered. Each key stands or
         /// falls alone: one taken digit does not cost the other eight.
         /// </summary>
-        public List<string> Register(HotkeyModifiers jump, HotkeyModifiers step)
+        public List<string> Register(HotkeyModifiers jump, HotkeyModifiers step, HotkeyModifiers pin)
         {
             Unregister();
 
             var failed = new List<string>();
-            foreach (Binding b in Bindings(jump, step))
+            foreach (Binding b in Bindings(jump, step, pin))
             {
                 if (Native.RegisterHotKey(_window, b.Id, b.Modifiers | Native.MOD_NOREPEAT, b.Key))
                 {
@@ -115,6 +118,15 @@ namespace DesktopSwitcher
         }
 
         /// <summary>
+        /// A WM_HOTKEY's id is the pin toggle. Apart from TryDecode, which stays about
+        /// switching: pinning acts on a window, not a desktop, and has nothing to decode.
+        /// </summary>
+        public static bool IsPin(int id)
+        {
+            return id == PinId;
+        }
+
+        /// <summary>
         /// What a WM_HOTKEY's id asks for: a desktop by its zero-based position
         /// (<paramref name="jumpIndex"/>, with <paramref name="step"/> 0), or a step of -1 or
         /// +1 (with <paramref name="jumpIndex"/> -1). False for an id that is not ours.
@@ -139,10 +151,10 @@ namespace DesktopSwitcher
         /// once, for --hotkeys: one line per key, "free" or why not. A null window ties the
         /// registration to the thread, so no window is needed to ask.
         /// </summary>
-        public static List<string> Probe(HotkeyModifiers jump, HotkeyModifiers step)
+        public static List<string> Probe(HotkeyModifiers jump, HotkeyModifiers step, HotkeyModifiers pin)
         {
             var lines = new List<string>();
-            foreach (Binding b in Bindings(jump, step))
+            foreach (Binding b in Bindings(jump, step, pin))
             {
                 if (Native.RegisterHotKey(IntPtr.Zero, b.Id, b.Modifiers | Native.MOD_NOREPEAT, b.Key))
                 {
@@ -197,7 +209,7 @@ namespace DesktopSwitcher
             public string Name;
         }
 
-        static List<Binding> Bindings(HotkeyModifiers jump, HotkeyModifiers step)
+        static List<Binding> Bindings(HotkeyModifiers jump, HotkeyModifiers step, HotkeyModifiers pin)
         {
             var list = new List<Binding>();
 
@@ -215,6 +227,15 @@ namespace DesktopSwitcher
                                        Key = VK_LEFT, Name = ModifierName(step) + "+Left" });
                 list.Add(new Binding { Id = NextId, Modifiers = ModifierFlags(step),
                                        Key = VK_RIGHT, Name = ModifierName(step) + "+Right" });
+            }
+
+            // P for pin. MOD_NOREPEAT matters more here than on the arrows: a held key
+            // repeating a toggle would flicker the window between pinned and not and leave
+            // it on whichever the repeat happened to stop at.
+            if (pin != HotkeyModifiers.Off)
+            {
+                list.Add(new Binding { Id = PinId, Modifiers = ModifierFlags(pin),
+                                       Key = VK_P, Name = ModifierName(pin) + "+P" });
             }
 
             return list;

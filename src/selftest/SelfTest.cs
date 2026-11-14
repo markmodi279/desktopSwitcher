@@ -1992,7 +1992,8 @@ namespace DesktopSwitcher
         {
             Config cfg = Config.Load();
             Console.WriteLine("jumpShortcut = " + Describe(cfg.JumpHotkeys) + ", stepShortcut = "
-                              + Describe(cfg.StepHotkeys) + ", stepWrap = " + (cfg.StepWrap ? "true" : "false"));
+                              + Describe(cfg.StepHotkeys) + ", stepWrap = " + (cfg.StepWrap ? "true" : "false")
+                              + ", pinShortcut = " + Describe(cfg.PinHotkeys));
 
             int running = 0;
             int self = System.Diagnostics.Process.GetCurrentProcess().Id;
@@ -2005,8 +2006,8 @@ namespace DesktopSwitcher
                 Console.WriteLine("DesktopSwitcher is running: the keys it holds read as taken below.");
             Console.WriteLine();
 
-            List<string> lines = Hotkeys.Probe(cfg.JumpHotkeys, cfg.StepHotkeys);
-            if (lines.Count == 0) Console.WriteLine("  both shortcuts are off");
+            List<string> lines = Hotkeys.Probe(cfg.JumpHotkeys, cfg.StepHotkeys, cfg.PinHotkeys);
+            if (lines.Count == 0) Console.WriteLine("  every shortcut is off");
             foreach (string line in lines) Console.WriteLine("  " + line);
             return 0;
         }

@@ -2187,7 +2187,8 @@ namespace DesktopSwitcher
             }
 
             bool keysChanged = next.JumpHotkeys != _config.JumpHotkeys
-                               || next.StepHotkeys != _config.StepHotkeys;
+                               || next.StepHotkeys != _config.StepHotkeys
+                               || next.PinHotkeys != _config.PinHotkeys;
 
             _config = next;
             if (save || _config.LastCount != written) _config.Save();
@@ -2232,7 +2233,7 @@ namespace DesktopSwitcher
         /// </summary>
         void RegisterHotkeys()
         {
-            List<string> failed = _hotkeys.Register(_config.JumpHotkeys, _config.StepHotkeys);
+            List<string> failed = _hotkeys.Register(_config.JumpHotkeys, _config.StepHotkeys, _config.PinHotkeys);
             if (failed.Count == 0 || _tray == null) return;
 
             string keys = failed.Count <= 3
@@ -2255,6 +2256,12 @@ namespace DesktopSwitcher
         /// </summary>
         void OnHotkey(int id)
         {
+            if (Hotkeys.IsPin(id))
+            {
+                TogglePin();
+                return;
+            }
+
             int jumpIndex, step;
             if (_service == null || !Hotkeys.TryDecode(id, out jumpIndex, out step)) return;
 
@@ -2311,6 +2318,83 @@ namespace DesktopSwitcher
             Log.Write(delegate { return "hotkeys: id " + id + " -> desktop " + (target + 1); });
             _service.SwitchTo(desktops[target].Id);
         }
+
+        /// <summary>
+        /// The pin shortcut: pins the active window to every desktop, or unpins it if it is
+        /// shown on every desktop already - however that came about.
+        ///
+        /// The window comes from ForegroundTracker, as Send here's does, though a hotkey
+        /// does not take the focus the way a click on the taskbar does: what holds the
+        /// focus at the press is normally the answer. The tracker earns its place when it
+        /// is not an alt-tab window - a dialog, the desktop, the Start menu - and the last
+        /// real window is the better guess than doing nothing.
+        ///
+        /// Asked fresh which way to go rather than remembered, because a pin set from Task
+        /// View in between is invisible to us otherwise. A window pinned as an app (PinKind
+        /// App) unpins too: UnpinView exempts it alone and leaves the app pinned, which
+        /// --pin proved on 19045. The balloon says so, or the app's next window opening
+        /// pinned would read as the shortcut not having worked.
+        /// </summary>
+        void TogglePin()
+        {
+            IntPtr target = _foreground.Resolve();
+            if (target == IntPtr.Zero)
+            {
+                Log.Write("hotkeys: pin pressed but no candidate window");
+                return;
+            }
+
+            PinKind before;
+            bool ok;
+            try
+            {
+                before = _api.GetPinKind(target);
+                ok = _api.SetViewPinned(target, before == PinKind.None);
+            }
+            catch (ShellUnavailableException ex)
+            {
+                // Mid-restart. Said nowhere but the log: a balloon about a shell that is
+                // visibly redrawing itself tells nobody anything.
+                Log.Write("hotkeys: pin skipped, shell unavailable - " + ex.Message);
+                return;
+            }
+
+            bool pinning = before == PinKind.None;
+            string what = Ellipsize(Describe(WindowInventory.Describe(target)), PinTextMax);
+            Log.Write(delegate
+            {
+                return "hotkeys: " + (pinning ? "pin" : "unpin") + " (was " + before + ") \""
+                       + what + "\" - " + (ok ? "done" : "refused");
+            });
+
+            if (_tray == null) return;
+
+            // A refusal is said whatever pinNotify says: the setting quiets news that it
+            // worked, not news that it did not.
+            if (!ok)
+            {
+                _tray.ShowBalloonTip(5000, pinning ? "Could not pin" : "Could not unpin",
+                    what + " - Windows refused. Task View (Win+Tab) may still manage it.",
+                    ToolTipIcon.Warning);
+                return;
+            }
+            if (!_config.PinNotify) return;
+
+            string text;
+            if (pinning)
+                text = what + " now shows on every desktop.";
+            else if (before == PinKind.App)
+                text = what + " is back to one desktop. Other windows of this app stay on every "
+                       + "desktop - the app is pinned in Task View (Win+Tab).";
+            else
+                text = what + " is back to one desktop.";
+
+            _tray.ShowBalloonTip(3000, pinning ? "Pinned to all desktops" : "Unpinned",
+                                 text, ToolTipIcon.None);
+        }
+
+        /// <summary>Longer than the menu's 40: a balloon wraps, a menu row does not.</summary>
+        const int PinTextMax = 60;
 
         // --- settings window ----------------------------------------------------
 
