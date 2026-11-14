@@ -840,6 +840,80 @@ namespace DesktopSwitcher
 
         // --- helpers ----------------------------------------------------------
 
+        // --- a window's AppUserModelId ------------------------------------------
+
+        [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"),
+         InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IPropertyStore
+        {
+            // Documented layout (propsys.h). Only GetValue is called.
+            [PreserveSig] int GetCount(out uint count);
+            [PreserveSig] int GetAt(uint index, out PropertyKey key);
+            [PreserveSig] int GetValue(ref PropertyKey key, out PropVariant value);
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct PropertyKey
+        {
+            public Guid Fmtid;
+            public int Pid;
+        }
+
+        /// <summary>Just big enough to read a VT_LPWSTR back: the type tag, and the pointer at 8.</summary>
+        [StructLayout(LayoutKind.Explicit, Size = 24)]
+        struct PropVariant
+        {
+            [FieldOffset(0)] public ushort Vt;
+            [FieldOffset(8)] public IntPtr Pointer;
+        }
+
+        const ushort VT_LPWSTR = 31;
+
+        [DllImport("shell32.dll")]
+        static extern int SHGetPropertyStoreForWindow(IntPtr hwnd, ref Guid riid,
+            [MarshalAs(UnmanagedType.Interface)] out IPropertyStore store);
+
+        [DllImport("ole32.dll")]
+        static extern int PropVariantClear(ref PropVariant value);
+
+        /// <summary>
+        /// The AppUserModelId a window carries explicitly - System.AppUserModel.ID off its
+        /// property store - or null. Documented, unlike IApplicationView's own getter, which
+        /// is why it is asked here: --pinned uses it to put IsAppIdPinned's answer beside the
+        /// pin GUID. It misses an app that never sets one and lets the shell derive it from
+        /// the exe path; null there means "not known", not "has none".
+        /// </summary>
+        public static string GetExplicitAppId(IntPtr hwnd)
+        {
+            Guid iid = typeof(IPropertyStore).GUID;
+            IPropertyStore store;
+            if (SHGetPropertyStoreForWindow(hwnd, ref iid, out store) < 0 || store == null) return null;
+
+            try
+            {
+                var key = new PropertyKey
+                {
+                    Fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),
+                    Pid = 5
+                };
+                PropVariant value;
+                if (store.GetValue(ref key, out value) < 0) return null;
+                try
+                {
+                    if (value.Vt != VT_LPWSTR || value.Pointer == IntPtr.Zero) return null;
+                    return Marshal.PtrToStringUni(value.Pointer);
+                }
+                finally
+                {
+                    PropVariantClear(ref value);
+                }
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(store);
+            }
+        }
+
         public static string GetText(IntPtr hWnd)
         {
             int len = GetWindowTextLength(hWnd);

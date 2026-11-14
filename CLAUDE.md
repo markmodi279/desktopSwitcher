@@ -119,7 +119,7 @@ shell.
 | `--list` | desktop enumeration, names, which is current |
 | `--desktops` | the full window inventory, per desktop, with app names, pinned windows tagged |
 | `--occupancy` | the occupancy dot's cheap sweep against the full sweep, per desktop |
-| `--pinned` | `IVirtualDesktopPinnedApps` comes up, and its `IsViewPinned` agrees with the visibility check window by window; a window only the visibility check calls pinned was pinned as an app |
+| `--pinned` | every alt-tab window's pin kind, read off the fixed GUID a pinned window reports in place of its desktop, checked against `IsViewPinned` and the visibility check. Pinned windows are in no desktop's inventory, which is why it walks the windows itself |
 | `--marks` | desktop marks: text form, the store (carry, prune, adoption, Recent), the strip's drag arithmetic over mixed widths; lists `marks.ini` against the live desktops without writing it |
 | `--stats [N]` | the stats panel's rows a second apart, what each reading cost, and which network adapters are counted |
 | `--taskbar` | taskbar geometry, DPI scale, computed strip bounds, sampled colour |
@@ -134,7 +134,7 @@ shell.
 | `--help` | the command list |
 
 **Ask first** — these mutate desktop state or take over the screen: `--quit` (closes the running app), `--switch`, `--create`,
-`--remove`, `--rename`, `--move`, `--reorder`, `--reordertest` (adds three scratch desktops on the end, reorders only those, removes them), `--soak`, `--watch`, `--service`, `--testwindow`,
+`--remove`, `--pin <title> on|off` (pins or unpins a real window, printing its pin kind either side), `--rename`, `--move`, `--reorder`, `--reordertest` (adds three scratch desktops on the end, reorders only those, removes them), `--soak`, `--watch`, `--service`, `--testwindow`,
 `--strip`, `--settings` (opens the Settings window standalone; prints changes, saves nothing),
 `--markstress [seed]` (about a minute: a test window of strips driven with synthetic mouse messages - leave the pointer alone - then four scratch desktops reordered, added and removed; writes no marks, cleans up after itself, leaves `%TEMP%\markstress-sheet.png` to look over),
 `--closeall` (about 25 s of throwaway desktops and test windows flashing up; it only ever closes

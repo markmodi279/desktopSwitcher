@@ -143,7 +143,13 @@ namespace DesktopSwitcher
     /// <summary>
     /// Task View's two "show on all desktops" commands, as GetPinKind reads them.
     /// Window is "Show this window on all desktops"; App is "Show windows from this app
-    /// on all desktops", which covers every window of the app, present and future.
+    /// on all desktops", which covers every window of the app, present and future - a
+    /// Notepad opened after its app was pinned started out pinned, on 19045.7548.
+    ///
+    /// A window can carry both at once (Task View ticks both items), and then reads App:
+    /// the app pin is what GetWindowDesktopId reports. One window of a pinned app can also
+    /// be exempted from it - UnpinView does that - and then reads None while the app's
+    /// other windows stay App.
     /// </summary>
     enum PinKind
     {
@@ -779,7 +785,9 @@ namespace DesktopSwitcher
         /// one fixed GUID per kind of pinning, the same on every machine. Found by --pinned
         /// on 19045.7548 - a window pinned from Task View stopped reporting its desktop and
         /// reported one of these instead, and they match the "app/window on all desktops"
-        /// constants other virtual desktop tools name.
+        /// constants other virtual desktop tools name. Which is which was then pinned down
+        /// on a Notepad with nothing else to confuse it: PinView alone gave the window GUID,
+        /// and Task View's "Show windows from this app" alone gave the app GUID.
         ///
         /// This is also why a pinned window is in no desktop's WindowInventory list: it
         /// matches none of the real desktop ids.
@@ -792,6 +800,10 @@ namespace DesktopSwitcher
         /// call, no view lookup, and it tells the two kinds apart, which IsViewPinned does
         /// not (it answers true for both). None for a window on an ordinary desktop and for
         /// one the shell cannot place.
+        ///
+        /// App for a window pinned both ways: the app pin wins the GUID. So App does not
+        /// mean "not also pinned as a window" - nothing outside Task View can tell that,
+        /// short of the app's AppUserModelId. See PinKind.
         /// </summary>
         public PinKind GetPinKind(IntPtr hwnd)
         {
@@ -811,11 +823,11 @@ namespace DesktopSwitcher
         }
 
         /// <summary>
-        /// Asks IVirtualDesktopPinnedApps whether this one window is pinned - Task View's
-        /// "Show this window on all desktops". Unlike IsPinned it does not see a window
-        /// pinned through "Show windows from this app on all desktops": that is the AppID
-        /// kind, which this interface answers separately and we cannot ask without the
-        /// app's AppUserModelId. Unlike IsPinned it also answers with only one desktop.
+        /// Asks IVirtualDesktopPinnedApps whether this one window is shown on all desktops.
+        /// Despite the name it answers true for an app-pinned window too - expected not
+        /// to, and found to on 19045.7548 with VS Code and Notepad - so it cannot tell the
+        /// kinds apart; GetPinKind can. Unlike IsPinned it answers with only one desktop.
+        /// Kept as --pinned's cross-check on GetPinKind.
         ///
         /// False with hr set when it could not be asked: no pinning interface (hr 0), a
         /// window the view collection does not know, or the call itself refusing. The
@@ -849,9 +861,49 @@ namespace DesktopSwitcher
         }
 
         /// <summary>
+        /// IsAppIdPinned for an AppUserModelId: whether Task View's "Show windows from this
+        /// app on all desktops" is on for that app. False with hr set when it could not be
+        /// asked, as TryIsViewPinned.
+        ///
+        /// Rarely askable from outside: it wants the AppUserModelId, and the only
+        /// documented way to a window's is Native.GetExplicitAppId, which VS Code, Windows
+        /// Terminal and Notepad all left empty on 19045.7548. Kept for --pin, which prints
+        /// it when an app does set one.
+        /// </summary>
+        public bool TryIsAppIdPinned(string appId, out bool pinned, out int hr)
+        {
+            pinned = false;
+            hr = 0;
+            if (string.IsNullOrEmpty(appId)) return false;
+
+            int code = 0;
+            int answer = 0;
+            bool asked = Do(delegate
+            {
+                code = 0;
+                if (_pins == null) return false;
+                code = _pins.IsAppIdPinned(appId, out answer);
+                return code >= 0;
+            }, "IsAppIdPinned");
+
+            hr = code;
+            pinned = asked && answer != 0;
+            return asked;
+        }
+
+        /// <summary>
         /// Pins one window to every desktop, or unpins it - Task View's "Show this window
-        /// on all desktops". The window kind only; an app-pinned window stays shown
-        /// everywhere after UnpinView, because it is the app that is pinned.
+        /// on all desktops". What --pin found against app pins on 19045.7548:
+        ///
+        ///   - UnpinView on an app-pinned window takes that window off every desktop but
+        ///     its own and leaves the app pinned: its other windows stay pinned, and new
+        ///     ones still open pinned. An exemption for the one window, not an app unpin.
+        ///   - PinView on such an exempted window puts it back, reading App again.
+        ///   - PinView on a window of a pinned app adds the window pin underneath; Task
+        ///     View then ticks both, and GetPinKind still reads App.
+        ///
+        /// So "unpin the active window" does what it says whichever way the window was
+        /// pinned, and nothing here can unpin an app - that stays a Task View job.
         ///
         /// --closeall pinned its test window through these same two slots before the app
         /// used them, which is the longest record this interface has on 19045.

@@ -42,6 +42,7 @@ namespace DesktopSwitcher
                     case "--desktops": return CmdDesktops(api);
                     case "--occupancy": return CmdOccupancy(api);
                     case "--pinned":  return CmdPinned(api);
+                    case "--pin":     return CmdPin(api, args);
                     case "--marks":   return MarksTest.Run(api);
                     case "--markstress": return MarkStress.Run(api, args);
                     case "--stats":   return CmdStats(args);
@@ -101,6 +102,7 @@ namespace DesktopSwitcher
             Console.WriteLine("  --marks                check desktop marks: text form, store, mixed-width drag arithmetic; list saved ones");
             Console.WriteLine("  --stats [N]            print the stats panel N times, a second apart, and which adapters count");
             Console.WriteLine("  --publicip             ask each public IP service once and print what it says (goes online)");
+            Console.WriteLine("  --pin <title> on|off   pin or unpin a window through the app's own call, printing its pin kind either side");
             Console.WriteLine("  --switch N             switch to desktop N (1-based)");
             Console.WriteLine("  --create               create a new desktop");
             Console.WriteLine("  --remove N             remove desktop N");
@@ -300,6 +302,57 @@ namespace DesktopSwitcher
             Console.WriteLine();
 
             return failures == 0 ? 0 : 1;
+        }
+
+        /// <summary>
+        /// Pins or unpins one window through SetViewPinned - the call the pin shortcut
+        /// makes - and prints its pin kind before, straight after, and 300 ms after, since
+        /// nothing says the shell applies the change before the call returns.
+        ///
+        /// What it is for, beyond the plain case: asking what PinView and UnpinView do to a
+        /// window pinned as an app, which no documentation answers and the shortcut has to
+        /// handle. Mutates; ask first.
+        /// </summary>
+        static int CmdPin(VirtualDesktopApi api, string[] args)
+        {
+            if (args.Length < 3 || (args[2] != "on" && args[2] != "off"))
+            {
+                Console.WriteLine("Usage: --pin <title substring> on|off");
+                return 2;
+            }
+
+            // Exact title first: a terminal titled "Ubuntu-24.04" is a substring of every
+            // VS Code window opened on that WSL distro, which came first in z-order and got
+            // pinned in its place the first time this ran.
+            IntPtr hwnd = FindWindowByExactTitle(args[1]);
+            if (hwnd == IntPtr.Zero) hwnd = FindWindowByTitle(args[1]);
+            if (hwnd == IntPtr.Zero)
+            {
+                Console.WriteLine("No visible window with title containing \"" + args[1] + "\"");
+                return 2;
+            }
+
+            bool pin = args[2] == "on";
+            Console.WriteLine("\"" + Native.GetText(hwnd) + "\"");
+            Console.WriteLine("  before:     " + api.GetPinKind(hwnd));
+
+            bool ok = api.SetViewPinned(hwnd, pin);
+            Console.WriteLine("  " + (pin ? "PinView" : "UnpinView") + ":  " + (ok ? "succeeded" : "refused - see log.txt"));
+            Console.WriteLine("  after:      " + api.GetPinKind(hwnd));
+
+            System.Threading.Thread.Sleep(300);
+            bool view;
+            int hr;
+            api.TryIsViewPinned(hwnd, out view, out hr);
+            Console.WriteLine("  +300 ms:    " + api.GetPinKind(hwnd) + "   (IsViewPinned " + (view ? "yes" : "no")
+                              + ", visibility " + (api.IsPinned(hwnd) ? "yes" : "no") + ")");
+            string appId = Native.GetExplicitAppId(hwnd);
+            bool app;
+            bool appAsked = api.TryIsAppIdPinned(appId, out app, out hr);
+            Console.WriteLine("  app id:     " + (appId ?? "(none set)")
+                              + (appAsked ? "   IsAppIdPinned " + (app ? "yes" : "no") : ""));
+            Console.WriteLine();
+            return ok ? 0 : 1;
         }
 
         /// <summary>
@@ -2190,6 +2243,20 @@ namespace DesktopSwitcher
                 return null;
             }
             return desktops[n - 1];
+        }
+
+        static IntPtr FindWindowByExactTitle(string title)
+        {
+            IntPtr found = IntPtr.Zero;
+            Native.EnumWindows(delegate(IntPtr hwnd, IntPtr param)
+            {
+                if (!Native.IsAltTabWindow(hwnd)) return true;
+                if (!string.Equals(Native.GetText(hwnd), title, StringComparison.OrdinalIgnoreCase)) return true;
+
+                found = hwnd;
+                return false;
+            }, IntPtr.Zero);
+            return found;
         }
 
         static IntPtr FindWindowByTitle(string needle)
