@@ -820,10 +820,21 @@ namespace DesktopSwitcher
 
             menu.Items.Add(new ToolStripSeparator());
 
-            // Greyed out on an empty desktop, where it would only be Remove again. Pinned
-            // windows are left alone by the click, so they do not count here either.
-            AddItem(menu, "Close all and remove", desktops.Count > 1 && _closer.HasCloseable(id),
-                    delegate { RequestCloseAll(id); });
+            // Two items rather than one whose caption changes with the count, so each row
+            // always means the same thing. "Close all windows" keeps the desktop: it is the
+            // only way to clear the last desktop, which Windows will not remove and which
+            // therefore had no close-all at all, and elsewhere it clears a desktop without
+            // losing its name, mark and place. "Close all and remove" is greyed on the last
+            // desktop for the same reason Remove is.
+            //
+            // Both greyed on an empty desktop, where one would do nothing and the other would
+            // only be Remove again. Pinned windows are left alone by the click, so they do
+            // not count here either.
+            bool closeable = _closer.HasCloseable(id);
+            AddItem(menu, "Close all windows", closeable,
+                    delegate { RequestCloseAll(id, false); });
+            AddItem(menu, "Close all and remove", desktops.Count > 1 && closeable,
+                    delegate { RequestCloseAll(id, true); });
 
             // Removing is the one item worth hesitating over, so it says what is at stake.
             // Windows moves the windows to another desktop rather than closing them, but
@@ -887,10 +898,15 @@ namespace DesktopSwitcher
         }
 
         /// <summary>
-        /// The menu's "Close all and remove". Confirms first, with the count - a menu row is
-        /// one misplaced click from the one above it, and this cannot be undone - then hands
-        /// over to a CloseAllRun, which shows each window closing and removes the desktop
-        /// once it is empty.
+        /// The menu's "Close all and remove" (remove true) and "Close all windows" (false).
+        /// Confirms first, with the count - a menu row is one misplaced click from the one
+        /// above it, and this cannot be undone - then hands over to a CloseAllRun, which
+        /// shows each window closing and, when asked to, removes the desktop once it is
+        /// empty.
+        ///
+        /// On the last desktop the dialog says so in as many words. There, every window is
+        /// every window the user has open - the browser, the editor, the terminal this was
+        /// built from - and "the windows on Desktop 1" undersells that.
         ///
         /// One run at a time. A second request, for any desktop, brings the open panel
         /// forward instead: two panels over the strip would hide each other, and the
@@ -899,7 +915,7 @@ namespace DesktopSwitcher
         /// The list is taken again here rather than carried from the menu, so the count
         /// in the dialog is the one acted on.
         /// </summary>
-        void RequestCloseAll(Guid id)
+        void RequestCloseAll(Guid id, bool remove)
         {
             if (_closeRun != null)
             {
@@ -915,16 +931,31 @@ namespace DesktopSwitcher
             {
                 // Emptied between the menu and the click. Removing an empty desktop never
                 // asks, so neither does this.
-                if (_service.Count > 1) _service.Remove(id);
+                if (remove && _service.Count > 1) _service.Remove(id);
                 return;
             }
 
-            string body = (windows.Count == 1 ? "1 window" : windows.Count + " windows")
-                + " will be asked to close, as if you clicked each one's X. Apps with unsaved "
-                + "work will ask to save first. The desktop is removed once it is empty.";
+            // Not "remove" alone: a remove asked for on what has become the last desktop
+            // (the others went while the menu was open) cannot happen, and the dialog
+            // should not promise it.
+            bool removing = remove && _service.Count > 1;
+            bool onlyOne = _service.Count == 1;
 
-            if (Ask("Close all windows and remove \"" + desktop.DisplayName + "\"?", body,
-                    "Close and remove", "Cancel") != 0) return;
+            string count = windows.Count == 1 ? "1 window" : windows.Count + " windows";
+            string body = (onlyOne
+                    ? "This is your only desktop, so this is every window you have open: "
+                      + count + " will be asked to close"
+                    : count + " will be asked to close")
+                + ", as if you clicked each one's X. Apps with unsaved work will ask to save first. "
+                + (removing ? "The desktop is removed once it is empty."
+                            : "The desktop itself stays.");
+
+            string title = removing
+                ? "Close all windows and remove \"" + desktop.DisplayName + "\"?"
+                : "Close all windows on \"" + desktop.DisplayName + "\"?";
+
+            // The safe button stays last, so Escape and a stray Enter both reach Cancel.
+            if (Ask(title, body, removing ? "Close and remove" : "Close all", "Cancel") != 0) return;
 
             // Everything again, now that the user has answered. The dialog pumps messages
             // while it is up, so the world moved on underneath it: the desktop may have been
@@ -943,11 +974,11 @@ namespace DesktopSwitcher
             windows = _closer.Closeable(id);
             if (windows.Count == 0)
             {
-                if (_service.Count > 1) _service.Remove(id);
+                if (removing && _service.Count > 1) _service.Remove(id);
                 return;
             }
 
-            var run = new CloseAllRun(_service, _closer, desktop, windows,
+            var run = new CloseAllRun(_service, _closer, desktop, windows, removing,
                                       delegate(WindowEntry w) { return Ellipsize(Describe(w), MenuTextMax); });
             run.Ended += delegate
             {

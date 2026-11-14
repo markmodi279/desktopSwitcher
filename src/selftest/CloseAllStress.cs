@@ -263,6 +263,10 @@ namespace DesktopSwitcher
                 Do("the harness's own window is excluded", OwnWindowExcluded);
                 Do("closing the desktop you are on", OnCurrentDesktop);
                 Do("twenty windows at once", Many);
+                Do("Close all windows keeps the desktop", KeepsDesktop);
+                Do("Show brings up a minimized window asking inside itself", ShowMinimized);
+                Do("Show gives a real dialog the keyboard", ShowDialogFocus);
+                Do("Go there, then Show, to a real dialog", GoThenShow);
 
                 _service.Dispose();
 
@@ -597,7 +601,8 @@ namespace DesktopSwitcher
 
             IntPtr popup = Native.GetLastActivePopup(modal);
             bool focused = WaitFor(delegate { return Native.GetForegroundWindow() == popup; }, 1500);
-            Check(focused, "with no other desktop to be pulled to, the dialog got focus (no lock)");
+            Check(focused, "with no other desktop to be pulled to, the dialog got focus (no lock)"
+                  + (focused ? "" : " - foreground is " + DescribeForeground()));
 
             Native.PostMessage(popup, WM_ANSWER, IntPtr.Zero, IntPtr.Zero);
             WaitFor(delegate { return run.HasEnded; }, 4000);
@@ -613,6 +618,165 @@ namespace DesktopSwitcher
             Check(run.Handles.Length == 20, "all twenty listed (" + run.Handles.Length + ")");
             WaitFor(delegate { return run.HasEnded; }, 8000);
             Check(run.RemovedDesktop, "desktop removed after " + clock.ElapsedMilliseconds + " ms");
+        }
+
+        /// <summary>
+        /// The menu's "Close all windows", the one the last desktop has. It cannot be run
+        /// on the real last desktop - that would close the user's own windows - and need
+        /// not be: what differs is the run's Remove flag, not the count, so a scratch
+        /// desktop beside the user's proves it. Finish's count check is the same line the
+        /// removing runs above already go through.
+        /// </summary>
+        static void KeepsDesktop()
+        {
+            IntPtr close = Spawn("close");
+            IntPtr slow = Spawn("slow2");
+
+            CloseAllRun run = StartRun(false);
+            Check(!run.Remove, "the run was told to keep the desktop");
+            Check(!run.ShowsHere, "on another desktop the first button is Go there, not Show");
+
+            // One more window opened on the desktop while the run is going. A removing run
+            // sweeps for these before it removes; this one must leave it, since nothing is
+            // being carried off and on the last desktop it is likely the user's own.
+            IntPtr late = Spawn("close");
+            bool lateInTime = !run.HasEnded;
+
+            WaitFor(delegate { return run.HasEnded; }, 6000);
+            Check(run.HasEnded, "run ended");
+            Check(!run.RemovedDesktop, "it did not claim a removal");
+            Check(DesktopExists(_scratch), "desktop is still there");
+            Check(WindowCloser.IsGone(close) && WindowCloser.IsGone(slow), "both listed windows closed");
+
+            if (!lateInTime)
+                Console.WriteLine("    note: the late window opened after the run ended; its check proves less");
+            Check(Array.IndexOf(run.Handles, late) < 0, "the window opened mid-run was not picked up");
+            Check(Native.IsWindow(late) && Native.IsWindowVisible(late), "and it is still open");
+        }
+
+        const int SW_MINIMIZE = 6;
+
+        /// <summary>Switches to the scratch desktop and waits out the switch's focus nudge.</summary>
+        static void GoToScratch()
+        {
+            _api.SwitchTo(_scratch);
+            WaitFor(delegate { return _service.Current != null && _service.Current.Id == _scratch; }, 2000);
+            // The nudge fires 200 ms after a switch; anything this scenario sets up for
+            // focus has to come after it, or it is testing the nudge instead.
+            Pump(500);
+        }
+
+        /// <summary>
+        /// What the screenshot that prompted Show caught: Notepads asking "Save?" inside a
+        /// minimized window on the desktop being cleared, the panel saying "still open",
+        /// and Go there greyed out because the user was already there.
+        /// </summary>
+        static void ShowMinimized()
+        {
+            IntPtr ignore = Spawn("ignore");
+            GoToScratch();
+            Native.ShowWindow(ignore, SW_MINIMIZE);
+            Check(WaitFor(delegate { return Native.IsIconic(ignore); }, 1500), "the window is minimized");
+
+            CloseAllRun run = StartRun(false);
+            Check(WaitFor(delegate { return StateOf(ignore) == CloseState.StillOpen; }, 3000), "read as still open");
+            Check(run.ShowsHere, "on its own desktop the first button is Show");
+
+            run.Show();
+            Check(run.LastShown == ignore, "Show picked the still-open window");
+            Check(WaitFor(delegate { return !Native.IsIconic(ignore); }, 1500), "Show restored it");
+            bool focused = WaitFor(delegate { return Native.GetForegroundWindow() == ignore; }, 1500);
+            Check(focused, "and gave it the keyboard" + (focused ? "" : " - foreground is " + DescribeForeground()));
+
+            Native.PostMessage(ignore, WM_ANSWER, IntPtr.Zero, IntPtr.Zero);
+            WaitFor(delegate { return run.HasEnded; }, 4000);
+            Check(run.HasEnded && !run.RemovedDesktop && DesktopExists(_scratch), "answered, run ended, desktop kept");
+        }
+
+        /// <summary>
+        /// Show on a window disabled behind a real dialog: the keyboard goes to the dialog,
+        /// not to the owner that cannot take input.
+        ///
+        /// The keyboard is taken off the dialog by focusing another window, the way a user
+        /// clicking elsewhere would. Not by minimizing the owner: a first version did, and
+        /// minimizing the owner of a WinForms ShowDialog dismissed the dialog outright - the
+        /// log read Prompting -> KeptOpen 0.7 s later - so Show had no dialog left to find.
+        /// </summary>
+        static void ShowDialogFocus()
+        {
+            IntPtr modal = Spawn("modal");
+            IntPtr other = Spawn("ignore");
+            GoToScratch();
+
+            // Only the modal window is closed; the other one is there to hold the keyboard.
+            _closer.Invalidate();
+            var only = new List<WindowEntry>();
+            foreach (WindowEntry w in _closer.Closeable(_scratch))
+                if (w.Handle == modal) only.Add(w);
+
+            CloseAllRun run = StartRun(only, false);
+            Check(WaitFor(delegate { return StateOf(modal) == CloseState.Prompting; }, 3000), "dialog read as asking to save");
+            IntPtr popup = Native.GetLastActivePopup(modal);
+
+            // Windows lets only the foreground process give the foreground away, and here
+            // that is the test window's, so this can be refused. Then the dialog still has
+            // the keyboard and the last check below proves less - but LastFocused, the
+            // window Show chose, is checked either way.
+            Native.ForceForeground(other);
+            bool moved = WaitFor(delegate { return Native.GetForegroundWindow() == other; }, 1500);
+            if (!moved)
+                Console.WriteLine("    note: could not take the keyboard off the dialog first ("
+                                  + DescribeForeground() + "); the focus check below proves less");
+
+            run.Show();
+            Check(run.LastShown == modal, "Show picked the window with the dialog");
+            Check(run.LastFocused == popup, "and chose the dialog, not its disabled owner, for the keyboard");
+            bool focused = WaitFor(delegate { return Native.GetForegroundWindow() == popup; }, 1500);
+            Check(focused, "the dialog, not its disabled owner, got the keyboard"
+                  + (focused ? "" : " - foreground is " + DescribeForeground()));
+
+            Native.PostMessage(popup, WM_ANSWER, IntPtr.Zero, IntPtr.Zero);
+            WaitFor(delegate { return run.HasEnded; }, 4000);
+            Check(run.HasEnded && DesktopExists(_scratch), "answered, run ended, desktop kept");
+        }
+
+        /// <summary>
+        /// The two buttons in the order a user meets them: a run on another desktop, Go
+        /// there to the dialog, and - the button now reading Show - Show to make sure the
+        /// dialog has the keyboard. Also watches the switch's focus nudge, which used to
+        /// take the keyboard off a dialog and hand it to the dialog's own disabled owner.
+        /// </summary>
+        static void GoThenShow()
+        {
+            IntPtr modal = Spawn("modal");
+
+            // Read at once, before the dialog is up. If the foreground lock is refused - it
+            // needs this process to hold the foreground, which a test run beside an editor
+            // does not always - the dialog pulls the session over within ~70 ms, and read
+            // after that this would be testing the lock, not the button.
+            CloseAllRun run = StartRun();
+            Check(!run.ShowsHere, "from another desktop the button is Go there");
+            Check(WaitFor(delegate { return StateOf(modal) == CloseState.Prompting; }, 3000), "dialog read as asking to save");
+            if (_api.GetCurrentId() == _scratch)
+                Console.WriteLine("    note: the dialog pulled the session over - the foreground lock was refused here");
+            IntPtr popup = Native.GetLastActivePopup(modal);
+
+            run.Go();
+            Check(WaitFor(delegate { return _api.GetCurrentId() == _scratch; }, 2000), "Go there switched to the desktop");
+            Pump(600);   // past the nudge
+            Console.WriteLine("    note: after the switch settled, foreground is " + DescribeForeground());
+            Check(Native.GetForegroundWindow() != modal || !Native.IsWindowEnabled(popup),
+                  "the nudge did not hand the keyboard to the dialog's disabled owner");
+            Check(run.ShowsHere, "once there, the button reads Show");
+
+            run.Show();
+            Check(run.LastFocused == popup, "Show chose the dialog for the keyboard");
+            bool focused = WaitFor(delegate { return Native.GetForegroundWindow() == popup; }, 1500);
+            Check(focused, "Show gave the dialog the keyboard" + (focused ? "" : " - foreground is " + DescribeForeground()));
+
+            Native.PostMessage(popup, WM_ANSWER, IntPtr.Zero, IntPtr.Zero);
+            WaitFor(delegate { return run.HasEnded; }, 4000);
+            Check(run.RemovedDesktop && !DesktopExists(_scratch), "answered, desktop removed");
         }
 
         // --- helpers -----------------------------------------------------------------
@@ -660,16 +824,26 @@ namespace DesktopSwitcher
 
         static CloseAllRun StartRun()
         {
+            return StartRun(true);
+        }
+
+        static CloseAllRun StartRun(bool remove)
+        {
             _closer.Invalidate();
-            return StartRun(_closer.Closeable(_scratch));
+            return StartRun(_closer.Closeable(_scratch), remove);
         }
 
         static CloseAllRun StartRun(List<WindowEntry> windows)
         {
+            return StartRun(windows, true);
+        }
+
+        static CloseAllRun StartRun(List<WindowEntry> windows, bool remove)
+        {
             Desktop desktop = Find(_scratch);
             if (desktop == null) throw new InvalidOperationException("scratch desktop not in the model");
 
-            _run = new CloseAllRun(_service, _closer, desktop, windows,
+            _run = new CloseAllRun(_service, _closer, desktop, windows, remove,
                                    delegate(WindowEntry w) { return w.Title; });
             _run.Start(_pump, Color.FromArgb(0x20, 0x20, 0x20), 1.0, Rectangle.Empty);
             return _run;
@@ -746,6 +920,23 @@ namespace DesktopSwitcher
         static bool DesktopExists(Guid id)
         {
             return Array.IndexOf(_api.GetDesktopIds(), id) >= 0;
+        }
+
+        /// <summary>
+        /// The window that has the foreground, said so a focus failure can be told apart:
+        /// the run's own panel holding it is a bug in the run, while an editor or terminal
+        /// outside the test holding it means Windows never let the test take focus at all.
+        /// </summary>
+        static string DescribeForeground()
+        {
+            IntPtr fg = Native.GetForegroundWindow();
+            if (fg == IntPtr.Zero) return "nobody";
+
+            uint pid = Native.GetOwningProcessId(fg);
+            string who = pid == (uint)Process.GetCurrentProcess().Id ? "this process"
+                : Native.GetAppName(pid);
+            return "0x" + fg.ToString("X") + " \"" + Native.GetText(fg) + "\" (" + Native.GetClass(fg)
+                   + ", " + (who.Length > 0 ? who : "pid " + pid) + ")";
         }
 
         static void Check(bool ok, string what)

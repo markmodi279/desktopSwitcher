@@ -31,8 +31,9 @@ namespace DesktopSwitcher
     }
 
     /// <summary>
-    /// Closes every window on one desktop - the menu's "Close all and remove". The policy
-    /// of a run, and the panel that shows it, are CloseAllRun's; this is the mechanism.
+    /// Closes every window on one desktop - the menu's "Close all and remove" and "Close
+    /// all windows". The policy of a run, and the panel that shows it, are CloseAllRun's;
+    /// this is the mechanism.
     ///
     /// Asks before it forces. Each window is sent WM_CLOSE, which is what its own X sends,
     /// so an app with unsaved work puts up its "Save changes?" and waits rather than losing

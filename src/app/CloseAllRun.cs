@@ -6,7 +6,8 @@ using System.Windows.Forms;
 namespace DesktopSwitcher
 {
     /// <summary>
-    /// One "Close all and remove", from the confirmed click to the desktop going away.
+    /// One "Close all and remove" or "Close all windows", from the confirmed click to the
+    /// desktop going away - or, for the second, to it standing empty.
     ///
     /// Asks every window to close at once, then watches on a short tick and shows each
     /// one's state in CloseProgressWindow as it changes. There is no fixed wait anywhere:
@@ -15,11 +16,22 @@ namespace DesktopSwitcher
     ///
     ///   Go there     switches to the desktop, where the questions are. The panel shows on
     ///                every desktop, so it comes along.
+    ///   Show         the same button once the run's desktop is the current one: restores
+    ///                and brings forward the window holding things up. A question drawn
+    ///                inside a minimized window - Notepads' "Save?" - is otherwise asked
+    ///                where nobody can see it, and the panel only says "still open".
     ///   Force close  ends the apps behind whatever is still open, without saving.
     ///   Cancel       stops watching. What closed stays closed; nothing is removed.
     ///
     /// Never removes past an open window. Removing would move a window with an unanswered
     /// save prompt onto a neighbour, which is the opposite of the clean desktop asked for.
+    ///
+    /// A run that does not remove (Remove false) is the same run with the last step left
+    /// off. It exists for the last desktop, which Windows will not remove, and so had no
+    /// way to close everything on it at all; and for clearing a desktop while keeping its
+    /// name, mark and place in the row. It is also the only honest outcome when the other
+    /// desktops are removed mid-run and this one becomes the last - Finish checks the
+    /// count again rather than trusting the flag alone.
     ///
     /// There used to be a Bring here, which moved the open windows to the user instead.
     /// Moving a window mid-close is not safe: Brave and Terminal moved, Notepads vanished
@@ -89,6 +101,7 @@ namespace DesktopSwitcher
         readonly WindowCloser _closer;
         readonly Guid _id;
         readonly string _name;
+        readonly bool _remove;
         readonly Func<WindowEntry, string> _describe;
         readonly List<Item> _items = new List<Item>();
         readonly HashSet<IntPtr> _known = new HashSet<IntPtr>();
@@ -104,13 +117,17 @@ namespace DesktopSwitcher
 
         public Guid DesktopId { get { return _id; } }
 
+        /// <summary>Whether the desktop is to be removed once it empties.</summary>
+        public bool Remove { get { return _remove; } }
+
         public CloseAllRun(DesktopService service, WindowCloser closer, Desktop desktop,
-                           IList<WindowEntry> windows, Func<WindowEntry, string> describe)
+                           IList<WindowEntry> windows, bool remove, Func<WindowEntry, string> describe)
         {
             _service = service;
             _closer = closer;
             _id = desktop.Id;
             _name = desktop.DisplayName;
+            _remove = remove;
             _describe = describe;
 
             for (int i = 0; i < windows.Count; i++) Track(windows[i]);
@@ -129,21 +146,25 @@ namespace DesktopSwitcher
         /// <summary>Asks everything to close and opens the panel by the strip.</summary>
         public void Start(IWin32Window owner, Color background, double dpiScale, Rectangle anchor)
         {
-            Log.Write(delegate { return "close-all: closing " + _items.Count + " windows on " + _name; });
+            Log.Write(delegate
+            {
+                return "close-all: closing " + _items.Count + " windows on " + _name
+                       + (_remove ? "" : ", keeping the desktop");
+            });
 
             // The panel first, and only then the requests. Showing it takes the foreground,
             // so when the apps start answering, the window that has focus is this one - not
             // whatever Windows picks once the confirmation closes, which can be a window on
             // another desktop, and activating that switches the user over to it.
             _panel = new CloseProgressWindow("Closing \"" + _name + "\"", background, dpiScale, anchor);
-            _panel.GoRequested += delegate { Go(); };
+            _panel.GoRequested += delegate { GoOrShow(); };
             _panel.ForceRequested += delegate { Force(); };
             _panel.CancelRequested += delegate { Cancel(); };
 
             _panel.Show(owner);
 
             // Only when there is another desktop to be pulled to. Closing the one being
-            // looked at, the prompts are already here, Go there is greyed out, and the
+            // looked at, the prompts are already here, Go there is Show instead, and the
             // lock would only stop them taking focus - leaving them unanswerable from the
             // keyboard until the user happened to click.
             Desktop current = _service.Current;
@@ -260,7 +281,13 @@ namespace DesktopSwitcher
                 // Before removing, one more look at the desktop itself: something may have
                 // opened there since the list was taken, and removing would carry it off to
                 // a neighbour unasked.
-                if (_sweeps < MaxSweeps && SweepForNew())
+                //
+                // Only before removing. A run that keeps the desktop carries nothing off, so
+                // a window opened during it is safe where it is - and on the last desktop,
+                // which is always the one being looked at, it is most likely one the user
+                // just opened on purpose, which a sweep would close under them. What was
+                // asked to close is the list that was confirmed.
+                if (_remove && _sweeps < MaxSweeps && SweepForNew())
                 {
                     Refresh();
                     return;
@@ -350,10 +377,23 @@ namespace DesktopSwitcher
 
         void Finish()
         {
-            Log.Write("close-all: " + _name + " is empty, removing");
-            RemovedDesktop = true;
             _closer.Invalidate();
-            if (_service.Count > 1) _service.Remove(_id);
+
+            // The count is checked again, not taken from the flag: the other desktops may
+            // have been removed while this ran, and Windows will not remove the last one.
+            // Before the flag existed this logged "removing" and set RemovedDesktop either
+            // way, so --closeall and the log both claimed a removal that never happened.
+            if (_remove && _service.Count > 1)
+            {
+                Log.Write("close-all: " + _name + " is empty, removing");
+                RemovedDesktop = true;
+                _service.Remove(_id);
+            }
+            else
+            {
+                Log.Write("close-all: " + _name + " is empty, keeping it"
+                          + (_remove ? " - it is the last desktop now" : ""));
+            }
             End();
         }
 
@@ -363,6 +403,92 @@ namespace DesktopSwitcher
         /// answer; the desktop is removed under them once the last window goes, and Windows
         /// lands them on its neighbour.
         /// </summary>
+        /// <summary>
+        /// The window Show brings up: the one most worth answering - a real dialog, then a
+        /// window that may be asking inside itself, then one kept open, then anything not
+        /// yet closed. Zero when everything is closed.
+        /// </summary>
+        IntPtr ShowTarget()
+        {
+            CloseState[] order = { CloseState.Prompting, CloseState.StillOpen, CloseState.KeptOpen,
+                                   CloseState.Closing, CloseState.Refused };
+            for (int o = 0; o < order.Length; o++)
+                for (int i = 0; i < _items.Count; i++)
+                    if (_items[i].State == order[o] && Native.IsWindow(_items[i].Handle))
+                        return _items[i].Handle;
+            return IntPtr.Zero;
+        }
+
+        /// <summary>
+        /// The panel's Show, on the desktop the run is clearing: restores the window most
+        /// worth answering if it is minimized, and gives it the keyboard - or, when it is
+        /// disabled behind a dialog of its own, gives the dialog the keyboard.
+        ///
+        /// Only on the button, never by itself. Popping a window up the moment it reads
+        /// as still open would take the keyboard from whatever the user is typing in,
+        /// for a window that is quite possibly just slow.
+        ///
+        /// The click on the panel makes this process the foreground one, which is what
+        /// lets the SetForegroundWindow through without the input-attach fallback.
+        /// </summary>
+        public void Show()
+        {
+            IntPtr target = ShowTarget();
+            if (target == IntPtr.Zero) return;
+
+            bool restored = false;
+            if (Native.IsIconic(target))
+                restored = Native.ShowWindow(target, Native.SW_RESTORE);
+
+            IntPtr input = target;
+            if (!Native.IsWindowEnabled(target))
+            {
+                IntPtr popup = Native.GetLastActivePopup(target);
+                if (popup != IntPtr.Zero && popup != target && Native.IsWindowVisible(popup))
+                    input = popup;
+            }
+
+            bool focused = Native.ForceForeground(input);
+            LastShown = target;
+            LastFocused = input;
+            Log.Write(delegate
+            {
+                return "close-all: showing 0x" + target.ToString("X")
+                    + (input != target ? " via its dialog 0x" + input.ToString("X") : "")
+                    + (restored ? ", restored" : "") + (focused ? "" : ", focus refused");
+            });
+        }
+
+        /// <summary>Read by --closeall: the window the last Show acted on.</summary>
+        public IntPtr LastShown { get; private set; }
+
+        /// <summary>
+        /// Read by --closeall: the window the last Show gave the keyboard to - the dialog
+        /// rather than its owner, when there was one. Whether Windows honoured that is a
+        /// separate question; this is the choice, which can be checked every time.
+        /// </summary>
+        public IntPtr LastFocused { get; private set; }
+
+        /// <summary>
+        /// True while the panel's first button is Show rather than Go there - the run's
+        /// desktop is the one being looked at.
+        /// </summary>
+        public bool ShowsHere
+        {
+            get
+            {
+                Desktop current = _service.Current;
+                return current != null && current.Id == _id;
+            }
+        }
+
+        /// <summary>The panel's first button: Go there, or Show once already there.</summary>
+        void GoOrShow()
+        {
+            if (ShowsHere) Show();
+            else Go();
+        }
+
         public void Go()
         {
             Log.Write("close-all: going to " + _name);
@@ -440,7 +566,7 @@ namespace DesktopSwitcher
                 status = prompting + " apps are asking to save" + there;
             else if (stillOpen > 0)
                 status = (stillOpen == 1 ? "1 window is" : stillOpen + " windows are")
-                         + " still open, maybe asking something" + (elsewhere ? " - Go there to see" : "");
+                         + " still open, maybe asking something" + (elsewhere ? " - Go there to see" : " - Show it");
             else if (closed < _items.Count - kept - refused)
                 status = closed + " of " + _items.Count + " closed...";
             else if (refused > 0)
@@ -454,8 +580,13 @@ namespace DesktopSwitcher
                 ? "Force close was sent. What is left is probably running as administrator."
                 : "Force close ends these apps without saving, on every desktop.";
 
+            // Go there is live while anything is left and the desktop is another one; on
+            // the desktop itself the same button is Show, live on the same terms. It used to
+            // be greyed out here, which left a minimized window's question with no way to it
+            // but the taskbar.
             _panel.SetRows(texts, states, status, hint,
-                           elsewhere && closed < _items.Count,
+                           elsewhere ? "Go there" : "Show",
+                           closed < _items.Count,
                            closed < _items.Count);
         }
 

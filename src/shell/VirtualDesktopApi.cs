@@ -897,9 +897,17 @@ namespace DesktopSwitcher
 
             try
             {
+                // Judged by the root owner, not the focused window itself. A save prompt or
+                // any other owned dialog is never an Alt+Tab window, so judged on its own it
+                // read as "focus is not on the new desktop" and the nudge below took the
+                // keyboard off the dialog and gave it to the topmost window - which was the
+                // dialog's own disabled owner. Seen on 19045 in --closeall's run on the
+                // current desktop: the save dialog took focus, and 10 ms later the log reads
+                // "nudged" with the owner's hwnd. Go there, close-all's way to the questions,
+                // goes through the same switch and lost the same way. A dialog follows its
+                // owner between desktops, so the owner's desktop is the dialog's.
                 IntPtr fg = Native.GetForegroundWindow();
-                if (fg != IntPtr.Zero && Native.IsAltTabWindow(fg) && !Native.IsCloaked(fg)
-                    && IsOnCurrentDesktop(fg))
+                if (fg != IntPtr.Zero && FocusIsHere(fg))
                     return;
 
                 IntPtr hwnd = Native.GetTopWindow(IntPtr.Zero);
@@ -912,6 +920,7 @@ namespace DesktopSwitcher
                     // Notepads window nobody could see.
                     if (Native.IsAltTabWindow(hwnd) && !Native.IsCloaked(hwnd) && IsOnCurrentDesktop(hwnd))
                     {
+                        hwnd = InputTarget(hwnd);
                         bool ok = Native.ForceForeground(hwnd);
                         Log.Write(delegate
                         {
@@ -927,6 +936,37 @@ namespace DesktopSwitcher
             {
                 Log.Write("focus nudge failed: " + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// Whether the focused window is a real window on the desktop just switched to -
+        /// itself, or, for a dialog, the window that owns it.
+        /// </summary>
+        bool FocusIsHere(IntPtr fg)
+        {
+            if (Native.IsAltTabWindow(fg) && !Native.IsCloaked(fg) && IsOnCurrentDesktop(fg))
+                return true;
+
+            IntPtr owner = Native.GetAncestor(fg, Native.GA_ROOTOWNER);
+            return owner != IntPtr.Zero && owner != fg && Native.IsWindowVisible(fg)
+                && Native.IsAltTabWindow(owner) && !Native.IsCloaked(owner) && IsOnCurrentDesktop(owner);
+        }
+
+        /// <summary>
+        /// The window that should get the keyboard when the nudge picks one: the window
+        /// itself, or, when it is disabled behind a modal dialog of its own, that dialog.
+        /// Focusing the disabled owner leaves keys going nowhere useful - the dialog is the
+        /// thing waiting for an answer - and SetForegroundWindow does not pass it on.
+        /// </summary>
+        static IntPtr InputTarget(IntPtr hwnd)
+        {
+            if (Native.IsWindowEnabled(hwnd)) return hwnd;
+
+            IntPtr popup = Native.GetLastActivePopup(hwnd);
+            if (popup != IntPtr.Zero && popup != hwnd && Native.IsWindowVisible(popup)
+                && Native.IsWindowEnabled(popup))
+                return popup;
+            return hwnd;
         }
 
         public bool IsOnCurrentDesktop(IntPtr hwnd)

@@ -24,6 +24,15 @@ namespace DesktopSwitcher
         [DllImport("user32.dll")]
         public static extern bool IsWindowVisible(IntPtr hWnd);
 
+        /// <summary>True for a minimized window.</summary>
+        [DllImport("user32.dll")]
+        public static extern bool IsIconic(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern bool ShowWindow(IntPtr hWnd, int cmd);
+
+        public const int SW_RESTORE = 9;
+
         [DllImport("user32.dll")]
         public static extern int GetWindowTextLength(IntPtr hWnd);
 
@@ -194,6 +203,12 @@ namespace DesktopSwitcher
         public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
 
         public const uint GA_ROOT = 2;
+
+        /// <summary>
+        /// GetAncestor's walk up the owner chain as well as the parent chain: a save dialog's
+        /// root owner is the document window it belongs to.
+        /// </summary>
+        public const uint GA_ROOTOWNER = 3;
 
         /// <summary>
         /// The top-level window that owns whatever is on screen at a point.

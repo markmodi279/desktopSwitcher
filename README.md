@@ -91,11 +91,19 @@ as it goes. A window still there after a second is marked: **asking to save** wh
 uses a real dialog (Brave does), **still open** when it draws its question inside its own
 window (Terminal and Notepads do), since those cannot be told apart from a slow close. The
 questions are on the other desktop, so **Go there** takes you to them, and the panel, which
-shows on every desktop, comes along. **Force close** ends whatever is still open without
+shows on every desktop, comes along. Once you are on that desktop the same button reads
+**Show**: it brings up the window holding things up, restoring it if it was minimized and
+handing the keyboard to its save dialog if it has one - a question asked inside a minimized
+window is otherwise asked where nobody can see it. **Force close** ends whatever is still open without
 saving (which takes those apps' windows on other desktops too), and **Cancel** stops,
 leaving what closed closed. The desktop is removed the moment it is empty, never before.
 Windows pinned with Task View's **Show this window on all desktops** are left alone, since
 closing one would take it off every desktop.
+
+**Close all windows**, just above it, is the same thing without the removal: the desktop
+stays, with its name, mark and place in the row. It is the only one of the two on your last
+desktop, which Windows will not remove, and its confirmation says plainly that there it
+means every window you have open. A window you open while it runs is left alone.
 
 Dragging a number, or **Move left** and **Move right** on its menu, changes a desktop's
 place in the row, and Task View's order changes with it. Windows 10 has no way to reorder desktops, so this rebuilds the row: the

@@ -6,8 +6,9 @@ using System.Windows.Forms;
 namespace DesktopSwitcher
 {
     /// <summary>
-    /// The live panel behind "Close all and remove": every window on the desktop, ticked
-    /// off as it goes, with whatever is holding things up named as it happens.
+    /// The live panel behind "Close all and remove" and "Close all windows": every window
+    /// on the desktop, ticked off as it goes, with whatever is holding things up named as
+    /// it happens.
     ///
     /// Replaces a fixed wait followed by a report. There is nothing worth waiting a set
     /// time for - a window that closes is gone in a fraction of a second, and one with a
@@ -158,8 +159,14 @@ namespace DesktopSwitcher
         /// their order - each window stays on its own line and changes in place - so the
         /// eye can follow one down the list rather than chasing it as others close.
         /// </summary>
+        /// <summary>
+        /// goText is the first button's caption: "Go there" while the run's desktop is
+        /// another one, "Show" once it is the one being looked at - the same button, since
+        /// it is the same need, getting to the question, and a run can pass from one case
+        /// to the other through Go there itself. Sized once for the wider caption.
+        /// </summary>
         public void SetRows(IList<string> texts, IList<CloseState> states, string status,
-                            string hint, bool canGo, bool canForce)
+                            string hint, string goText, bool canGo, bool canForce)
         {
             bool grew = VisibleRows(texts.Count) != VisibleRows(_texts.Count);
 
@@ -168,6 +175,7 @@ namespace DesktopSwitcher
             _status = status;
             _hint = hint;
 
+            if (_go.Text != goText) _go.Text = goText;
             _go.Enabled = canGo;
             _force.Enabled = canForce;
 
