@@ -112,7 +112,45 @@ namespace DesktopSwitcher
         [PreserveSig] int MoveWindowToDesktop(IntPtr hwnd, ref Guid id);
     }
 
+    /// <summary>
+    /// Task View's two "show on all desktops" commands: one window (a view), or every
+    /// window of an app (by AppUserModelId). A separate service off the immersive shell,
+    /// not more slots on the manager, so a wrong IID fails QueryService outright rather
+    /// than handing back a vtable we then misread.
+    ///
+    /// Verified on 19045.7548 by --pinned - do not reorder. The AppID slots are declared
+    /// to keep the vtable aligned and are not called: an AppUserModelId comes from
+    /// IApplicationView's long vtable, which stays opaque here (see IsPinned). The view
+    /// slots take the IApplicationView the view collection already hands out for moves.
+    ///
+    /// HRESULT-returning, so a refusal reads as a code in the log rather than an
+    /// exception that Do would take for a stale shell and reacquire over.
+    /// </summary>
+    [ComImport, Guid("4CE81583-1E4C-4632-A621-07A53543148F"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IVirtualDesktopPinnedApps
+    {
+        [PreserveSig] int IsAppIdPinned([MarshalAs(UnmanagedType.LPWStr)] string appId, out int pinned);
+        [PreserveSig] int PinAppID([MarshalAs(UnmanagedType.LPWStr)] string appId);
+        [PreserveSig] int UnpinAppID([MarshalAs(UnmanagedType.LPWStr)] string appId);
+        [PreserveSig] int IsViewPinned(IApplicationView view, out int pinned);
+        [PreserveSig] int PinView(IApplicationView view);
+        [PreserveSig] int UnpinView(IApplicationView view);
+    }
+
     // =====================================================================
+
+    /// <summary>
+    /// Task View's two "show on all desktops" commands, as GetPinKind reads them.
+    /// Window is "Show this window on all desktops"; App is "Show windows from this app
+    /// on all desktops", which covers every window of the app, present and future.
+    /// </summary>
+    enum PinKind
+    {
+        None,
+        Window,
+        App
+    }
 
     /// <summary>
     /// The shell's virtual desktop objects cannot be obtained right now - almost always
@@ -150,11 +188,14 @@ namespace DesktopSwitcher
             new Guid("AA509086-5CA9-4C25-8F95-589D3C07B48A");
         static readonly Guid SVC_ApplicationViewCollection =
             new Guid("1841C6D7-4F9D-42C0-AF41-8747538F10E5");
+        static readonly Guid SVC_VirtualDesktopPinnedApps =
+            new Guid("B5A399E7-1C87-46B8-88E9-FC5747B171BD");
 
         static Guid _iidManagerInternal = new Guid("F31574D6-B682-4CDC-BD56-1827860ABEC6");
         static Guid _iidManagerInternal2 = new Guid("0F3A72B0-4566-487E-9A33-4ED302F6D6CE");
         static Guid _iidViewCollection  = new Guid("1841C6D7-4F9D-42C0-AF41-8747538F10E5");
         static Guid _iidVirtualDesktop  = new Guid("FF72FFDD-BE7E-43FC-9C03-AD81681E88E4");
+        static Guid _iidPinnedApps      = new Guid("4CE81583-1E4C-4632-A621-07A53543148F");
 
         const string DesktopsRegistryPath =
             @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VirtualDesktops\Desktops";
@@ -166,6 +207,9 @@ namespace DesktopSwitcher
 
         /// <summary>Null when this shell cannot name desktops. Optional, unlike the four above.</summary>
         IVirtualDesktopManagerInternal2 _names;
+
+        /// <summary>Null when this shell will not serve pinning. Optional, like _names.</summary>
+        IVirtualDesktopPinnedApps _pins;
 
         // How long after a switch the focus fallback looks. Explorer's own activation
         // lands within a few milliseconds; this leaves it ample room and is still too
@@ -235,6 +279,20 @@ namespace DesktopSwitcher
                     _names = null;
                     Log.Write("com: naming interface unavailable - " + ex.Message);
                 }
+
+                // Optional for the same reason: a shell that will not pin must still do
+                // everything else, and pinning is simply offered or not.
+                try
+                {
+                    Guid svcPins = SVC_VirtualDesktopPinnedApps;
+                    _pins = (IVirtualDesktopPinnedApps)
+                        shell.QueryService(ref svcPins, ref _iidPinnedApps);
+                }
+                catch (Exception ex)
+                {
+                    _pins = null;
+                    Log.Write("com: pinning interface unavailable - " + ex.Message);
+                }
             }
             catch (Exception ex)
             {
@@ -264,6 +322,7 @@ namespace DesktopSwitcher
             _views = null;
             _public = null;
             _names = null;
+            _pins = null;
         }
 
         static bool IsComFailure(Exception ex)
@@ -363,6 +422,25 @@ namespace DesktopSwitcher
         /// GUID_NULL or fail outright, and is how they are told apart from real windows
         /// that merely happen to be on another desktop.
         /// </summary>
+        /// <summary>
+        /// GetWindowDesktopId exactly as the shell answers it, HRESULT and all, for
+        /// --pinned to print. Everything else goes through TryGetWindowDesktop.
+        /// </summary>
+        public int GetWindowDesktopIdRaw(IntPtr hwnd, out Guid id)
+        {
+            Guid found = Guid.Empty;
+            int code = Do(delegate
+            {
+                Guid result;
+                int hr = _public.GetWindowDesktopId(hwnd, out result);
+                found = result;
+                return hr;
+            }, "GetWindowDesktopId");
+
+            id = found;
+            return code;
+        }
+
         public bool TryGetWindowDesktop(IntPtr hwnd, out Guid id)
         {
             Guid found = Guid.Empty;
@@ -655,6 +733,11 @@ namespace DesktopSwitcher
         /// IVirtualDesktop already declares. So: visible on any desktop besides the one
         /// GetWindowDesktopId names means pinned.
         ///
+        /// Written before --pinned found that a pinned window does not name its desktop at
+        /// all - it names one of the fixed pin GUIDs, so every real desktop counts as
+        /// "besides" it. The answer is right either way, and --pinned keeps it as a check
+        /// on GetPinKind, which reads the GUID directly and is what new code should ask.
+        ///
         /// False with a single desktop, where there is no other to look at - and where
         /// "on every desktop" and "on this one" are the same thing anyway. False too for a
         /// window the view collection does not know; better to treat an unknown window as
@@ -689,6 +772,117 @@ namespace DesktopSwitcher
                 }
                 return false;
             }, "IsPinned");
+        }
+
+        /// <summary>
+        /// What GetWindowDesktopId answers for a pinned window, in place of its desktop:
+        /// one fixed GUID per kind of pinning, the same on every machine. Found by --pinned
+        /// on 19045.7548 - a window pinned from Task View stopped reporting its desktop and
+        /// reported one of these instead, and they match the "app/window on all desktops"
+        /// constants other virtual desktop tools name.
+        ///
+        /// This is also why a pinned window is in no desktop's WindowInventory list: it
+        /// matches none of the real desktop ids.
+        /// </summary>
+        public static readonly Guid PinnedAppDesktop    = new Guid("BB64D5B7-4DE3-4AB2-A87C-DB7601AEA7DC");
+        public static readonly Guid PinnedWindowDesktop = new Guid("C2DDEA68-66F2-4CF9-8264-1BFD00FBBBAC");
+
+        /// <summary>
+        /// How a window is pinned, read off the GUID GetWindowDesktopId gives back - one
+        /// call, no view lookup, and it tells the two kinds apart, which IsViewPinned does
+        /// not (it answers true for both). None for a window on an ordinary desktop and for
+        /// one the shell cannot place.
+        /// </summary>
+        public PinKind GetPinKind(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero || !Native.IsWindow(hwnd)) return PinKind.None;
+
+            Guid id;
+            if (GetWindowDesktopIdRaw(hwnd, out id) < 0) return PinKind.None;
+            if (id == PinnedWindowDesktop) return PinKind.Window;
+            if (id == PinnedAppDesktop) return PinKind.App;
+            return PinKind.None;
+        }
+
+        /// <summary>True when this shell served IVirtualDesktopPinnedApps.</summary>
+        public bool CanPin
+        {
+            get { EnsureAcquired(); return _pins != null; }
+        }
+
+        /// <summary>
+        /// Asks IVirtualDesktopPinnedApps whether this one window is pinned - Task View's
+        /// "Show this window on all desktops". Unlike IsPinned it does not see a window
+        /// pinned through "Show windows from this app on all desktops": that is the AppID
+        /// kind, which this interface answers separately and we cannot ask without the
+        /// app's AppUserModelId. Unlike IsPinned it also answers with only one desktop.
+        ///
+        /// False with hr set when it could not be asked: no pinning interface (hr 0), a
+        /// window the view collection does not know, or the call itself refusing. The
+        /// HRESULT is handed back rather than logged so --pinned can print it per window.
+        /// </summary>
+        public bool TryIsViewPinned(IntPtr hwnd, out bool pinned, out int hr)
+        {
+            pinned = false;
+            hr = 0;
+            if (hwnd == IntPtr.Zero || !Native.IsWindow(hwnd)) return false;
+
+            int code = 0;
+            int answer = 0;
+            bool asked = Do(delegate
+            {
+                code = 0;
+                if (_pins == null) return false;
+
+                // Fresh, for the same TYPE_E_ELEMENTNOTFOUND reason MoveWindow queries it.
+                IApplicationView view;
+                code = QueryViewCollection().GetViewForHwnd(hwnd, out view);
+                if (code < 0 || view == null) return false;
+
+                code = _pins.IsViewPinned(view, out answer);
+                return code >= 0;
+            }, "IsViewPinned");
+
+            hr = code;
+            pinned = asked && answer != 0;
+            return asked;
+        }
+
+        /// <summary>
+        /// Pins one window to every desktop, or unpins it - Task View's "Show this window
+        /// on all desktops". The window kind only; an app-pinned window stays shown
+        /// everywhere after UnpinView, because it is the app that is pinned.
+        ///
+        /// --closeall pinned its test window through these same two slots before the app
+        /// used them, which is the longest record this interface has on 19045.
+        /// </summary>
+        public bool SetViewPinned(IntPtr hwnd, bool pin)
+        {
+            if (hwnd == IntPtr.Zero || !Native.IsWindow(hwnd)) return false;
+
+            return Do(delegate
+            {
+                if (_pins == null) return false;
+
+                IApplicationView view;
+                int hr = QueryViewCollection().GetViewForHwnd(hwnd, out view);
+                if (hr < 0 || view == null)
+                {
+                    Log.Write(delegate { return string.Format("pin: GetViewForHwnd failed hr=0x{0:X8}", hr); });
+                    return false;
+                }
+
+                int hr2 = pin ? _pins.PinView(view) : _pins.UnpinView(view);
+                if (hr2 < 0)
+                {
+                    Log.Write(delegate
+                    {
+                        return string.Format("pin: {0} refused hr=0x{1:X8}", pin ? "PinView" : "UnpinView", hr2);
+                    });
+                    return false;
+                }
+                return true;
+            }, pin ? "PinView" : "UnpinView");
         }
 
         // Internal helper used inside an existing Do() - must not re-enter Do().

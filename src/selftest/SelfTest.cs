@@ -41,6 +41,7 @@ namespace DesktopSwitcher
                     case "--list":    return CmdList(api);
                     case "--desktops": return CmdDesktops(api);
                     case "--occupancy": return CmdOccupancy(api);
+                    case "--pinned":  return CmdPinned(api);
                     case "--marks":   return MarksTest.Run(api);
                     case "--markstress": return MarkStress.Run(api, args);
                     case "--stats":   return CmdStats(args);
@@ -96,6 +97,7 @@ namespace DesktopSwitcher
             Console.WriteLine("  --list                 show all desktops");
             Console.WriteLine("  --desktops             show all desktops with the windows on each, pinned ones tagged");
             Console.WriteLine("  --occupancy            check the occupancy dot's cheap sweep against the full sweep");
+            Console.WriteLine("  --pinned               check the pinning interface against the visibility check, window by window");
             Console.WriteLine("  --marks                check desktop marks: text form, store, mixed-width drag arithmetic; list saved ones");
             Console.WriteLine("  --stats [N]            print the stats panel N times, a second apart, and which adapters count");
             Console.WriteLine("  --publicip             ask each public IP service once and print what it says (goes online)");
@@ -197,6 +199,107 @@ namespace DesktopSwitcher
             Console.WriteLine("  " + total + " windows total. Compare against Win+Tab.");
             Console.WriteLine();
             return 0;
+        }
+
+        /// <summary>
+        /// Proves pinning on this build before anything pins through it: that
+        /// IVirtualDesktopPinnedApps comes up, and that three independent answers to "is
+        /// this window pinned" agree, window by window.
+        ///
+        ///   1. GetPinKind - the GUID GetWindowDesktopId gives back. A pinned window does
+        ///      not report its desktop; it reports one fixed GUID per kind of pinning (see
+        ///      VirtualDesktopApi.PinnedWindowDesktop). The only one of the three that tells
+        ///      the kinds apart, so it is the answer and the other two check it.
+        ///   2. IsViewPinned, through the pinning interface. True for both kinds - found on
+        ///      19045.7548, where an app-pinned VS Code answered true.
+        ///   3. IsPinned, the visibility check close-all uses: shown on a desktop that is
+        ///      not the one it reports. Blind with one desktop, so not counted there.
+        ///
+        /// Walks every alt-tab window itself rather than WindowInventory, because the
+        /// inventory files windows by desktop id and a pinned window's id is one of the
+        /// fixed GUIDs, which matches no desktop: pinned windows are in no desktop's list.
+        /// That was the first thing this command found. Windows with no desktop at all
+        /// (suspended UWP ghosts, GUID_NULL) are skipped, as the inventory skips them.
+        ///
+        /// Read-only. Pin a window from Win+Tab first (right-click a thumbnail), one each
+        /// way, to give it something to compare. Exit 1 on any disagreement, a desktop id
+        /// that is neither a desktop nor a known pin GUID, or an interface that will not
+        /// come up.
+        /// </summary>
+        static int CmdPinned(VirtualDesktopApi api)
+        {
+            IList<Desktop> desktops = Snapshot(api);
+
+            if (!api.CanPin)
+            {
+                Console.WriteLine("IVirtualDesktopPinnedApps: UNAVAILABLE - QueryService refused it; see log.txt");
+                Console.WriteLine();
+                return 1;
+            }
+            Console.WriteLine("IVirtualDesktopPinnedApps: acquired");
+            Console.WriteLine();
+
+            var number = new Dictionary<Guid, int>();
+            foreach (Desktop d in desktops) number[d.Id] = d.Number;
+            bool single = desktops.Count < 2;
+
+            var handles = new List<IntPtr>();
+            Native.EnumWindows(delegate(IntPtr h, IntPtr p)
+            {
+                if (Native.IsAltTabWindow(h)) handles.Add(h);
+                return true;
+            }, IntPtr.Zero);
+
+            int windowCount = 0, byWindow = 0, byApp = 0, failures = 0;
+            Console.WriteLine("  where          view  visible  window");
+            foreach (IntPtr h in handles)
+            {
+                Guid id;
+                int hr = api.GetWindowDesktopIdRaw(h, out id);
+                if (hr < 0 || id == Guid.Empty) continue;
+                windowCount++;
+
+                PinKind kind = api.GetPinKind(h);
+                string where;
+                int n;
+                if (kind == PinKind.Window) { where = "pinned window"; byWindow++; }
+                else if (kind == PinKind.App) { where = "pinned app"; byApp++; }
+                else if (number.TryGetValue(id, out n)) where = "desktop " + n;
+                else where = "UNKNOWN " + id;
+
+                bool view;
+                int vhr;
+                bool asked = api.TryIsViewPinned(h, out view, out vhr);
+                bool visible = api.IsPinned(h);
+
+                bool pinned = kind != PinKind.None;
+                var faults = new List<string>();
+                if (where.StartsWith("UNKNOWN")) faults.Add("desktop id is neither a desktop nor a pin GUID");
+                if (!asked) faults.Add(string.Format("IsViewPinned could not be asked (hr=0x{0:X8})", vhr));
+                else if (view != pinned) faults.Add("IsViewPinned says " + (view ? "pinned" : "not pinned"));
+                if (!single && visible != pinned) faults.Add("visibility says " + (visible ? "pinned" : "not pinned"));
+                failures += faults.Count == 0 ? 0 : 1;
+
+                Console.WriteLine(string.Format("  {0,-14} {1,-5} {2,-8} {3}",
+                    where.Length <= 14 ? where : "?",
+                    asked ? (view ? "yes" : "no") : "?",
+                    single ? "n/a" : (visible ? "yes" : "no"),
+                    Native.GetText(h)));
+                foreach (string f in faults)
+                    Console.WriteLine("    ^ MISMATCH: " + f + (where.Length > 14 ? " (" + where + ")" : ""));
+            }
+            Console.WriteLine();
+
+            Console.WriteLine(string.Format(
+                "  {0} windows: {1} pinned as a window, {2} pinned as an app, {3} with a disagreement",
+                windowCount, byWindow, byApp, failures));
+            if (single)
+                Console.WriteLine("  One desktop: the visibility check cannot see pinning here and is not counted.");
+            if (byWindow == 0 || byApp == 0)
+                Console.WriteLine("  Not both kinds pinned - pin one window each way from Win+Tab to exercise every case.");
+            Console.WriteLine();
+
+            return failures == 0 ? 0 : 1;
         }
 
         /// <summary>

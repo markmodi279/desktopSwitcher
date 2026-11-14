@@ -119,6 +119,7 @@ shell.
 | `--list` | desktop enumeration, names, which is current |
 | `--desktops` | the full window inventory, per desktop, with app names, pinned windows tagged |
 | `--occupancy` | the occupancy dot's cheap sweep against the full sweep, per desktop |
+| `--pinned` | `IVirtualDesktopPinnedApps` comes up, and its `IsViewPinned` agrees with the visibility check window by window; a window only the visibility check calls pinned was pinned as an app |
 | `--marks` | desktop marks: text form, the store (carry, prune, adoption, Recent), the strip's drag arithmetic over mixed widths; lists `marks.ini` against the live desktops without writing it |
 | `--stats [N]` | the stats panel's rows a second apart, what each reading cost, and which network adapters are counted |
 | `--taskbar` | taskbar geometry, DPI scale, computed strip bounds, sampled colour |

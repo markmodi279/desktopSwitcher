@@ -8,27 +8,6 @@ using System.Windows.Forms;
 namespace DesktopSwitcher
 {
     /// <summary>
-    /// Pins a view to every desktop. Test-only: the app itself never pins anything, it only
-    /// asks whether a window is pinned, and does that by visibility (VirtualDesktopApi.IsPinned)
-    /// so as not to depend on this interface. --closeall uses it to make a pinned window to
-    /// check that answer against.
-    ///
-    /// Win10 19041+ layout, as the virtual desktop tools in the wild declare it. Do not
-    /// reorder. A wrong slot here can only take down the selftest process.
-    /// </summary>
-    [ComImport, Guid("4CE81583-1E4C-4632-A621-07A53543148F"),
-     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    interface IVirtualDesktopPinnedApps
-    {
-        bool IsAppIdPinned(string appId);
-        void PinAppID(string appId);
-        void UnpinAppID(string appId);
-        bool IsViewPinned(IApplicationView view);
-        void PinView(IApplicationView view);
-        void UnpinView(IApplicationView view);
-    }
-
-    /// <summary>
     /// --closeall: "Close all and remove" driven end to end against scripted windows, on
     /// throwaway desktops, so nothing of the user's is ever asked to close.
     ///
@@ -213,8 +192,6 @@ namespace DesktopSwitcher
 
         const int DWMWA_CLOAKED = 14;
 
-        static readonly Guid CLSID_PinnedApps = new Guid("B5A399E7-1C87-46B8-88E9-FC5747B171BD");
-        static readonly Guid SVC_ViewCollection = new Guid("1841C6D7-4F9D-42C0-AF41-8747538F10E5");
 
         delegate void Scenario();
 
@@ -862,20 +839,17 @@ namespace DesktopSwitcher
             return i < 0 ? (CloseState)(-1) : states[i];
         }
 
+        /// <summary>
+        /// Through the app's own SetViewPinned, so the pinned scenario exercises the same
+        /// call the pin shortcut makes. It used to carry a private copy of the interface.
+        /// </summary>
         static bool Pin(IntPtr hwnd, bool pin)
         {
             try
             {
-                Guid svc = SVC_ViewCollection, iid = SVC_ViewCollection;
-                var views = (IApplicationViewCollection)_api.Shell.QueryService(ref svc, ref iid);
-                IApplicationView view;
-                if (views.GetViewForHwnd(hwnd, out view) < 0 || view == null) return false;
-
-                Guid clsid = CLSID_PinnedApps, iidPinned = typeof(IVirtualDesktopPinnedApps).GUID;
-                var pinned = (IVirtualDesktopPinnedApps)_api.Shell.QueryService(ref clsid, ref iidPinned);
-                if (pin) pinned.PinView(view);
-                else pinned.UnpinView(view);
-                return true;
+                if (_api.SetViewPinned(hwnd, pin)) return true;
+                Console.WriteLine("    note: pin refused - see log.txt");
+                return false;
             }
             catch (Exception ex)
             {
