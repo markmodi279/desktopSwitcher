@@ -1508,14 +1508,43 @@ namespace DesktopSwitcher
 
             // An empty desktop is worth saying out loud: it is the one you can remove
             // without losing anything, and otherwise you would have to visit it to find out.
+            // Still said with pinned windows listed below: they go nowhere when it is removed.
             if (windows.Count == 0)
             {
                 lines.Add("- empty -");
                 behind.Add(null);
-                return lines;
+            }
+            else
+            {
+                AddWindowRows(lines, behind, windows);
             }
 
-            // Only real windows get a bullet. The overflow line is a count, not an entry.
+            // Windows pinned to every desktop, on every desktop's panel - they are on screen
+            // there, which is what the panel is asked. Under a heading, after the desktop's
+            // own, so the list above it still answers "what lives here" and the heading says
+            // why the same rows turn up on every button. Without this they were on no panel at
+            // all: a pinned window reports a pin GUID in place of a desktop, and the inventory
+            // filed it under that. The heading is a row with no window behind it, which the
+            // modern panel draws as muted text and the classic one as an unbulleted line.
+            // Not in total - the title's count stays the desktop's own.
+            IList<WindowEntry> pinned = _inventory.PinnedWindows();
+            if (pinned.Count > 0)
+            {
+                lines.Add("Pinned to all desktops");
+                behind.Add(null);
+                AddWindowRows(lines, behind, pinned);
+            }
+
+            return lines;
+        }
+
+        /// <summary>
+        /// Up to tooltipMaxWindows rows, then "+N more". Only real windows get a bullet; the
+        /// overflow line is a count, not an entry. The pinned group has a cap of its own, so a
+        /// long desktop cannot push it out of sight.
+        /// </summary>
+        void AddWindowRows(List<string> lines, List<WindowEntry> behind, IList<WindowEntry> windows)
+        {
             int max = _config.TooltipMaxWindows;
             for (int i = 0; i < windows.Count && i < max; i++)
             {
@@ -1528,8 +1557,6 @@ namespace DesktopSwitcher
                 lines.Add("+" + (windows.Count - max) + " more");
                 behind.Add(null);
             }
-
-            return lines;
         }
 
         /// <summary>

@@ -58,6 +58,13 @@ namespace DesktopSwitcher
 
         Dictionary<Guid, List<WindowEntry>> _byDesktop = new Dictionary<Guid, List<WindowEntry>>();
 
+        // Windows shown on every desktop, both kinds together, most recently used first.
+        // They are in _byDesktop too, under the pin GUIDs they report in place of a desktop
+        // (VirtualDesktopApi.PinnedWindowDesktop and PinnedAppDesktop), which is why no real
+        // desktop's list has them; kept here as well because two keys lose the z-order
+        // between the kinds.
+        List<WindowEntry> _pinned = new List<WindowEntry>();
+
         // --- occupancy: swept when something changed, not on every tick ------------
         //
         // The occupancy sweep ran on every reconcile tick, every two seconds, and asked the
@@ -151,6 +158,25 @@ namespace DesktopSwitcher
         }
 
         /// <summary>
+        /// Windows shown on every desktop - pinned from Task View, the menu or Ctrl+Alt+P -
+        /// most recently used first, from the same sweep as WindowsOn. Not in any desktop's
+        /// WindowsOn: the hover panel lists them on every desktop under a heading of their
+        /// own, and close-all and the remove count leave them out because neither touches
+        /// them.
+        /// </summary>
+        public IList<WindowEntry> PinnedWindows()
+        {
+            EnsureFresh();
+            return _pinned;
+        }
+
+        /// <summary>A pin GUID rather than a desktop - see VirtualDesktopApi.PinnedWindowDesktop.</summary>
+        static bool IsPinGuid(Guid id)
+        {
+            return id == VirtualDesktopApi.PinnedWindowDesktop || id == VirtualDesktopApi.PinnedAppDesktop;
+        }
+
+        /// <summary>
         /// One window read the way a sweep reads it, for a caller that already holds the
         /// handle and is asking about that window rather than about a desktop. No cache and
         /// no desktop lookup, so it costs one process query.
@@ -196,8 +222,19 @@ namespace DesktopSwitcher
             // not necessarily seen by it, and must leave the answer stale for the next tick.
             _occupancyStale = false;
 
+            // Pin GUIDs left out here and in the sweep below. They are not desktops, and a
+            // pinned window is not counted on any - it would light every dot. Worse, the
+            // sweep stops once it holds desktopCount ids, and with them counted two pinned
+            // windows near the top of the z-order could fill the count before a real desktop
+            // further down was reached, losing its dot. Found reading the code for the pinned
+            // group in the hover panel; --occupancy never saw it, its one real occupied
+            // desktop leaving room in the count.
             if (_age.IsRunning && _age.ElapsedMilliseconds < CacheMs)
-                return Remember(new HashSet<Guid>(_byDesktop.Keys), desktopCount);
+            {
+                var keys = new HashSet<Guid>(_byDesktop.Keys);
+                keys.RemoveWhere(IsPinGuid);
+                return Remember(keys, desktopCount);
+            }
 
             var occupied = new HashSet<Guid>();
             try
@@ -207,7 +244,7 @@ namespace DesktopSwitcher
                 for (int i = 0; i < candidates.Count && occupied.Count < desktopCount; i++)
                 {
                     Guid desktop;
-                    if (_api.TryGetWindowDesktop(candidates[i], out desktop))
+                    if (_api.TryGetWindowDesktop(candidates[i], out desktop) && !IsPinGuid(desktop))
                         occupied.Add(desktop);
                 }
             }
@@ -265,6 +302,7 @@ namespace DesktopSwitcher
         void Refresh()
         {
             var map = new Dictionary<Guid, List<WindowEntry>>();
+            var pinned = new List<WindowEntry>();
 
             // Ten Chrome windows are one process, so resolve each pid once. Local to the
             // sweep on purpose: a pid the kernel has since recycled can never hand back a
@@ -278,7 +316,7 @@ namespace DesktopSwitcher
                 var uwp = new UwpPairs(candidates);
 
                 for (int i = 0; i < candidates.Count; i++)
-                    AddIfReal(map, paths, uwp, candidates[i]);
+                    AddIfReal(map, pinned, paths, uwp, candidates[i]);
             }
             catch (ShellUnavailableException)
             {
@@ -294,14 +332,15 @@ namespace DesktopSwitcher
             }
 
             _byDesktop = map;
+            _pinned = pinned;
             _age.Restart();
 
             if (Log.Enabled)
                 Log.Write(delegate { return "inventory: swept " + Total(map) + " windows across " + map.Count + " desktops"; });
         }
 
-        void AddIfReal(Dictionary<Guid, List<WindowEntry>> map, Dictionary<uint, string> paths,
-                       UwpPairs uwp, IntPtr hwnd)
+        void AddIfReal(Dictionary<Guid, List<WindowEntry>> map, List<WindowEntry> pinned,
+                       Dictionary<uint, string> paths, UwpPairs uwp, IntPtr hwnd)
         {
             string title = Native.GetText(hwnd);
             if (title.Length == 0) return;
@@ -323,7 +362,9 @@ namespace DesktopSwitcher
                 windows = new List<WindowEntry>();
                 map[desktop] = windows;
             }
-            windows.Add(new WindowEntry(app, TrimRepeat(title, app), path, hwnd));
+            var entry = new WindowEntry(app, TrimRepeat(title, app), path, hwnd);
+            windows.Add(entry);
+            if (IsPinGuid(desktop)) pinned.Add(entry);
         }
 
         static string PathOf(Dictionary<uint, string> paths, IntPtr hwnd)

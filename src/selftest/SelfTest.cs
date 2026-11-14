@@ -198,6 +198,19 @@ namespace DesktopSwitcher
                 Console.WriteLine();
             }
 
+            // The hover panel's "Pinned to all desktops" group, which every desktop's panel
+            // shows below its own windows.
+            IList<WindowEntry> pinned = inventory.PinnedWindows();
+            if (pinned.Count > 0)
+            {
+                Console.WriteLine("  Pinned to all desktops  (" + pinned.Count + ")");
+                foreach (WindowEntry w in pinned)
+                    Console.WriteLine("         " + (w.App.Length == 0 ? "?" : w.App) + "  -  " + w.Title
+                                      + "   [" + api.GetPinKind(w.Handle).ToString().ToLowerInvariant() + "]");
+                Console.WriteLine();
+                total += pinned.Count;
+            }
+
             Console.WriteLine("  " + total + " windows total. Compare against Win+Tab.");
             Console.WriteLine();
             return 0;
