@@ -144,7 +144,7 @@ A clean compile with zero warnings plus `--list`, `--desktops` and `--taskbar` r
 sane live data is the baseline any change should clear.
 
 Some things can only be checked by eye, and no command covers them: how a drag to reorder looks and feels, how the close-all panel looks, hover panel placement
-and timing, menu appearance, the Settings window's look, how the highlight animation *looks*, behaviour across an
+and timing, menu appearance, the Settings window's look, how the highlight animation *looks*, the pin mark and its flash in the modern style, on a marked button and on a light taskbar, behaviour across an
 Explorer restart, and anything on a second monitor. `--anim` and `--slide` cover the arithmetic under
 the animation - that it converges, lands exactly and stops - but nothing about how it
 reads on screen. For the hover panel specifically, `--slide` cannot see trails behind a

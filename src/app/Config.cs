@@ -52,6 +52,14 @@ namespace DesktopSwitcher
         /// </summary>
         public bool OccupancyDots = true;
 
+        /// <summary>
+        /// A small pin in the current desktop's corner while the focused window is shown on
+        /// every desktop - in the accent colour when it is the app that is pinned. Also the
+        /// pin shortcut's only feedback, which flashes it in or out. Windows shows a pin
+        /// nowhere but Task View, so this is on by default.
+        /// </summary>
+        public bool PinMark = true;
+
         // --- system stats -------------------------------------------------------
         /// <summary>
         /// A tile after '+' whose panel shows CPU, memory and network throughput. Click to
@@ -198,15 +206,6 @@ namespace DesktopSwitcher
         /// </summary>
         public HotkeyModifiers PinHotkeys = HotkeyModifiers.CtrlAlt;
 
-        /// <summary>
-        /// A balloon after each pin or unpin, naming the window. On by default because
-        /// pinning has nothing to show for itself until the next switch, and a key that
-        /// seems to do nothing gets pressed twice - which unpins it again. Off for someone
-        /// who has learnt to trust it: on Windows 10 every balloon also lands in the
-        /// Action Center.
-        /// </summary>
-        public bool PinNotify = true;
-
         // --- tooltips ---------------------------------------------------------
         public bool Tooltips = true;
         /// <summary>Hover delay before the panel appears. 400ms is the Windows default.</summary>
@@ -319,6 +318,11 @@ namespace DesktopSwitcher
                 c => c.OccupancyDots, (c, v) => c.OccupancyDots = v,
                 "A dim dot beside a desktop's number when it has windows on it, so the empty "
                 + "ones - the ones safe to remove - show at a glance."),
+            Bool(StripSection, "pinMark", "Pinned window mark",
+                c => c.PinMark, (c, v) => c.PinMark = v,
+                "A small pin in the current desktop's corner while the window you are in shows on "
+                + "every desktop; in the accent colour when its whole app is pinned. The pin "
+                + "shortcut flashes it."),
             Bool(StripSection, "contextMenu", "Right-click menu",
                 c => c.ContextMenu, (c, v) => c.ContextMenu = v,
                 "Right click a button for a menu of what it can do. Off makes right click send "
@@ -457,11 +461,6 @@ namespace DesktopSwitcher
                 c => (int)c.PinHotkeys, (c, v) => c.PinHotkeys = (HotkeyModifiers)v,
                 "Hold these and press P to show the active window on every desktop, or to stop. "
                 + "A window of an app pinned from Task View stops alone; the app's other windows stay."),
-            Bool(ShortcutsSection, "pinNotify", "Say when pinned",
-                c => c.PinNotify, (c, v) => c.PinNotify = v,
-                "A notification naming the window after each pin or unpin. Pinning shows nothing "
-                + "until you switch desktops, so this is how you know it took.")
-                .When(c => c.PinHotkeys != HotkeyModifiers.Off),
 
             // --- advanced
             Int(AdvancedSection, "reconcileMs", "Check interval", 250, 60000, "ms",

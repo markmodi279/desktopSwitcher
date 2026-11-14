@@ -186,6 +186,7 @@ namespace DesktopSwitcher
             {
                 _service.Tick();
                 RefreshOccupancy(true);
+                RefreshFocusPin();
                 SampleStats();
                 if (SyncMarks()) ApplyMarks();
             });
@@ -204,7 +205,7 @@ namespace DesktopSwitcher
             // the click on the strip took focus away again. System-wide, because focus moves
             // between every process; rare enough that it costs nothing.
             _foregroundWatch = new WinEventWatcher(Native.EVENT_SYSTEM_FOREGROUND, Native.EVENT_SYSTEM_FOREGROUND,
-                                                   0, false, delegate { _foreground.Sample(); });
+                                                   0, false, delegate { _foreground.Sample(); RefreshFocusPin(); });
             _foreground.Sample();
 
             _saveTimer = new Timer();
@@ -537,6 +538,7 @@ namespace DesktopSwitcher
             _strip.SetDesktops(_service.Desktops);
             PlaceStrip();
             RefreshOccupancy();
+            RefreshFocusPin();
             PushStatsLevels();
 
             // After Reassert, so the panel anchors to where the tile actually is. A pinned
@@ -2332,8 +2334,13 @@ namespace DesktopSwitcher
         /// Asked fresh which way to go rather than remembered, because a pin set from Task
         /// View in between is invisible to us otherwise. A window pinned as an app (PinKind
         /// App) unpins too: UnpinView exempts it alone and leaves the app pinned, which
-        /// --pin proved on 19045. The balloon says so, or the app's next window opening
-        /// pinned would read as the shortcut not having worked.
+        /// --pin proved on 19045.
+        ///
+        /// The feedback is the strip's pin mark, flashed in or out - see
+        /// SwitcherStrip.SetFocusPin. It was tray balloons at first, dropped because on
+        /// Windows 10 every balloon also lands in the Action Center and nothing else on the
+        /// strip talks through the shell's notifications. A refusal shows as the mark not
+        /// changing, and is logged.
         /// </summary>
         void TogglePin()
         {
@@ -2344,57 +2351,62 @@ namespace DesktopSwitcher
                 return;
             }
 
-            PinKind before;
+            PinKind before, after;
             bool ok;
             try
             {
                 before = _api.GetPinKind(target);
                 ok = _api.SetViewPinned(target, before == PinKind.None);
+                after = _api.GetPinKind(target);
             }
             catch (ShellUnavailableException ex)
             {
-                // Mid-restart. Said nowhere but the log: a balloon about a shell that is
-                // visibly redrawing itself tells nobody anything.
                 Log.Write("hotkeys: pin skipped, shell unavailable - " + ex.Message);
                 return;
             }
 
-            bool pinning = before == PinKind.None;
-            string what = Ellipsize(Describe(WindowInventory.Describe(target)), PinTextMax);
             Log.Write(delegate
             {
-                return "hotkeys: " + (pinning ? "pin" : "unpin") + " (was " + before + ") \""
-                       + what + "\" - " + (ok ? "done" : "refused");
+                return "hotkeys: " + (before == PinKind.None ? "pin" : "unpin") + " \""
+                       + Native.GetText(target) + "\" " + before + " -> " + after
+                       + (ok ? "" : " - refused");
             });
 
-            if (_tray == null) return;
-
-            // A refusal is said whatever pinNotify says: the setting quiets news that it
-            // worked, not news that it did not.
-            if (!ok)
-            {
-                _tray.ShowBalloonTip(5000, pinning ? "Could not pin" : "Could not unpin",
-                    what + " - Windows refused. Task View (Win+Tab) may still manage it.",
-                    ToolTipIcon.Warning);
-                return;
-            }
-            if (!_config.PinNotify) return;
-
-            string text;
-            if (pinning)
-                text = what + " now shows on every desktop.";
-            else if (before == PinKind.App)
-                text = what + " is back to one desktop. Other windows of this app stay on every "
-                       + "desktop - the app is pinned in Task View (Win+Tab).";
-            else
-                text = what + " is back to one desktop.";
-
-            _tray.ShowBalloonTip(3000, pinning ? "Pinned to all desktops" : "Unpinned",
-                                 text, ToolTipIcon.None);
+            // Read back rather than assumed, so a refusal flashes nothing and an exempted
+            // window of a pinned app that is pinned again shows the app's colour.
+            if (ok && _strip != null && _config.PinMark) _strip.SetFocusPin(after, true);
         }
 
-        /// <summary>Longer than the menu's 40: a balloon wraps, a menu row does not.</summary>
-        const int PinTextMax = 60;
+        /// <summary>
+        /// Tells the strip whether the focused window is pinned, for its corner mark. On
+        /// every focus change, on the reconcile tick - Task View's own pin commands change
+        /// nothing that raises an event we hear while the window keeps the focus - and into
+        /// every new strip.
+        ///
+        /// One GetWindowDesktopId per call. The window is ForegroundTracker's, so a click on
+        /// the strip itself, which hands the focus to the taskbar, keeps showing the window
+        /// that click came from rather than blanking the mark.
+        /// </summary>
+        void RefreshFocusPin()
+        {
+            if (_strip == null || !_config.PinMark) return;
+
+            PinKind kind = PinKind.None;
+            IntPtr target = _foreground.Resolve();
+            if (target != IntPtr.Zero)
+            {
+                try
+                {
+                    kind = _api.GetPinKind(target);
+                }
+                catch (ShellUnavailableException)
+                {
+                    // Mid-restart: keep what is showing, as occupancy does.
+                    return;
+                }
+            }
+            _strip.SetFocusPin(kind, false);
+        }
 
         // --- settings window ----------------------------------------------------
 

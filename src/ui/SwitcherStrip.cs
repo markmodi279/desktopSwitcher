@@ -256,6 +256,13 @@ namespace DesktopSwitcher
 
         Timer _frameTimer;            // runs only while something is actually moving
 
+        // The pin mark in the current button's corner - see SetFocusPin.
+        PinKind _pinKind;                         // the focused window, as last pushed
+        PinKind _pinDrawn = PinKind.Window;       // the last kind shown, so a mark fading out keeps its colour
+        float _pinLevel, _pinLevelTarget;         // shown, eased like every other tone
+        float _pinFlash;                          // 1 at a press of the pin shortcut, decaying to 0
+        bool _pinFlashIn;                         // that press pinned (pops in) or unpinned (swells out)
+
         // statsFanSpin: the fan's rotor angle, in degrees within one blade's 120, and its own
         // timer - see UpdateSpin for why it is not the frame timer.
         bool _fanSpin;
@@ -785,6 +792,56 @@ namespace DesktopSwitcher
             Animate();
         }
 
+        /// <summary>
+        /// How long a pin flash takes to die away. Its own clock rather than animationMs:
+        /// the flash is there to be seen out of the corner of an eye after a keypress that
+        /// otherwise shows nothing, and at the 80-100 ms the underline slides in it would be
+        /// over before anyone looked. animationMs 0 still turns it off, as it does
+        /// everything - Settle lands it at once.
+        /// </summary>
+        const int PinFlashMs = 650;
+
+        /// <summary>
+        /// Whether the focused window is shown on every desktop, for the small pin in the
+        /// current button's top right corner - mockup option A, chosen over standing in for
+        /// the occupancy dot (which a marked button does not have) and over a faint bar
+        /// under every desktop (which cannot tell an app pin). The corner is the one place
+        /// on a button nothing else draws.
+        ///
+        /// State, not an event: it says "this window is pinned" for as long as that is
+        /// true, wherever the pin came from, Task View included - Windows itself shows it
+        /// nowhere but a ticked item on a thumbnail's menu. The controller pushes it on
+        /// every focus change and on the reconcile tick.
+        ///
+        /// <paramref name="flash"/> is the press of the pin shortcut, the only feedback that
+        /// press has: a pinned window looks no different until a desktop switch. Pinning
+        /// pops the pin in large and in the accent colour, settling to size and ink;
+        /// unpinning swells it a little in the accent as it fades out. These replaced tray
+        /// balloons, which on Windows 10 also pile up in the Action Center - nothing else
+        /// on the strip talks through the shell's notifications.
+        /// </summary>
+        public void SetFocusPin(PinKind kind, bool flash)
+        {
+            if (kind == _pinKind && !flash) return;
+
+            _pinKind = kind;
+            if (kind != PinKind.None) _pinDrawn = kind;
+            _pinLevelTarget = kind != PinKind.None ? 1f : 0f;
+
+            if (flash)
+            {
+                _pinFlash = 1f;
+                _pinFlashIn = kind != PinKind.None;
+
+                // Popping in from nothing, not fading up under the flash: the pop is the
+                // point, and a level still easing from 0 would draw it faint.
+                if (_pinFlashIn) _pinLevel = 1f;
+            }
+
+            Animate();
+            Invalidate();
+        }
+
         public void SetBackground(Color color)
         {
             if (_background == color) return;
@@ -1026,12 +1083,13 @@ namespace DesktopSwitcher
 
             _lastFrame = now;
             float rate = Motion.Rate(elapsed, _animationMs);
+            float flashRate = Motion.Rate(elapsed, PinFlashMs);
 
             // Stepped separately and asked separately. The panel is a window of its own and
             // repaints itself as it moves, so a strip that repainted whenever *anything*
             // moved would redraw the taskbar sixty times a second for a slide happening
             // entirely above it.
-            bool strip = Step(rate);
+            bool strip = Step(rate, flashRate);
             bool panel = _tooltip != null && _tooltip.Step(rate);
 
             if (strip) Invalidate();
@@ -1042,8 +1100,11 @@ namespace DesktopSwitcher
             _frameTimer.Stop();
         }
 
-        /// <summary>Steps every animated value. True when any of them moved.</summary>
-        bool Step(float rate)
+        /// <summary>
+        /// Steps every animated value. True when any of them moved. The pin flash has a
+        /// rate of its own - see PinFlashMs.
+        /// </summary>
+        bool Step(float rate, float flashRate)
         {
             bool moved = false;
 
@@ -1066,6 +1127,12 @@ namespace DesktopSwitcher
             moved |= Motion.Ease(ref _cpuLevel, _cpuLevelTarget, rate, Motion.ToneEpsilon);
             moved |= Motion.Ease(ref _memLevel, _memLevelTarget, rate, Motion.ToneEpsilon);
 
+            // An unpin's fade runs on the flash's clock, so the swell has time to be seen;
+            // otherwise the mark comes and goes at the strip's own pace, as focus moves.
+            float levelRate = _pinFlash > 0f && !_pinFlashIn ? flashRate : rate;
+            moved |= Motion.Ease(ref _pinLevel, _pinLevelTarget, levelRate, Motion.ToneEpsilon);
+            moved |= Motion.Ease(ref _pinFlash, 0f, flashRate, Motion.ToneEpsilon);
+
             return moved;
         }
 
@@ -1083,7 +1150,8 @@ namespace DesktopSwitcher
 
             return _barX == _barXTarget && _barWidth == _barWidthTarget
                 && _barLevel == _barLevelTarget
-                && _cpuLevel == _cpuLevelTarget && _memLevel == _memLevelTarget;
+                && _cpuLevel == _cpuLevelTarget && _memLevel == _memLevelTarget
+                && _pinLevel == _pinLevelTarget && _pinFlash == 0f;
         }
 
         /// <summary>
@@ -1092,7 +1160,7 @@ namespace DesktopSwitcher
         /// </summary>
         void Settle()
         {
-            Step(1f);
+            Step(1f, 1f);
             if (_tooltip != null) _tooltip.Settle();
             if (_frameTimer != null) _frameTimer.Stop();
         }
@@ -1171,6 +1239,77 @@ namespace DesktopSwitcher
                 DrawStatsButton(g, ButtonBounds(statsIndex, height), _visuals[statsIndex]);
 
             DrawBar(g, height);
+            DrawPin(g, height);
+        }
+
+        /// <summary>
+        /// The pin, as drawn in the mockup: a pushpin leaning right, in a 16-unit box. Points
+        /// rather than a Segoe MDL2 glyph because the strip only loads that face for the
+        /// modern look, and a polygon scales about its centre for the flash without the
+        /// font's own hinting snapping each frame to a different pixel size.
+        /// </summary>
+        static readonly PointF[] PinShape =
+        {
+            new PointF(9.5f, 1.5f), new PointF(14.5f, 6.5f), new PointF(13.1f, 7.0f),
+            new PointF(10.5f, 9.6f), new PointF(10.8f, 12.7f), new PointF(9.8f, 13.7f),
+            new PointF(7.0f, 10.9f), new PointF(3.2f, 14.8f), new PointF(2.3f, 14.7f),
+            new PointF(6.5f, 10.0f), new PointF(3.7f, 7.2f), new PointF(4.7f, 6.2f),
+            new PointF(7.8f, 6.5f), new PointF(10.4f, 3.9f)
+        };
+
+        /// <summary>
+        /// The pin mark in the current desktop's top right corner - see SetFocusPin. Drawn
+        /// last, over the cell and the bar, and following the button's drag offset so it
+        /// travels with a current desktop carried along the strip.
+        ///
+        /// A window pin is in the button's text ink; an app pin (Task View's "Show windows
+        /// from this app") in the accent. A second shape was mocked first - a pin behind
+        /// the pin - and at ten pixels it was a smudge rather than a meaning.
+        /// </summary>
+        void DrawPin(Graphics g, int height)
+        {
+            float shown = Math.Max(_pinLevel, _pinFlash);
+            if (shown <= 0.001f) return;
+
+            int current = -1;
+            for (int i = 0; i < _desktops.Count && i < _visuals.Length; i++)
+                if (_desktops[i].IsCurrent) { current = i; break; }
+            if (current < 0) return;
+
+            Rectangle bounds = ButtonBounds(current, height);
+            bounds.Offset((int)Math.Round(_visuals[current].Offset), 0);
+
+            float size = Scale(9);
+            float inset = _look == Look.Modern ? Scale(3) : Scale(2);
+            float top = _look == Look.Modern ? CellInsetY() + Scale(1) : Scale(3);
+            float cx = bounds.Right - inset - size / 2f;
+            float cy = bounds.Y + top + size / 2f;
+
+            // Pinning pops in from nearly twice the size; unpinning swells by a third. Both
+            // settle as the flash decays - exponentially, like everything else here, so the
+            // size comes down fast and the colour lingers, which is how the mock read.
+            float grow = (_pinFlashIn ? 0.9f : 0.3f) * _pinFlash;
+            float scale = size / 16f * (1f + grow);
+
+            Color ink = _pinDrawn == PinKind.App
+                ? _highlight
+                : Palette.RampText(_background, Emphasis(_visuals[current]));
+            Color color = Palette.Blend(ink, _highlight, _pinFlash);
+            int alpha = (int)Math.Round(255 * Math.Min(1f, shown));
+
+            GraphicsState state = g.Save();
+            try
+            {
+                g.TranslateTransform(cx, cy);
+                g.ScaleTransform(scale, scale);
+                g.TranslateTransform(-8.5f, -8f);   // the shape's own centre
+                using (var brush = new SolidBrush(Color.FromArgb(alpha, color)))
+                    g.FillPolygon(brush, PinShape);
+            }
+            finally
+            {
+                g.Restore(state);
+            }
         }
 
         /// <summary>

@@ -144,7 +144,9 @@ namespace DesktopSwitcher
     /// Task View's two "show on all desktops" commands, as GetPinKind reads them.
     /// Window is "Show this window on all desktops"; App is "Show windows from this app
     /// on all desktops", which covers every window of the app, present and future - a
-    /// Notepad opened after its app was pinned started out pinned, on 19045.7548.
+    /// Notepad opened after its app was pinned started out pinned, on 19045.7548. Not for
+    /// ever, though: once every Notepad window had been closed, the next one opened
+    /// unpinned - the app pin seems to last only while the app has a window open.
     ///
     /// A window can carry both at once (Task View ticks both items), and then reads App:
     /// the app pin is what GetWindowDesktopId reports. One window of a pinned app can also
