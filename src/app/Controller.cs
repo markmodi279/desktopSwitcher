@@ -809,6 +809,18 @@ namespace DesktopSwitcher
                         _service.MoveWindow(target, id);
                     });
 
+            // Beside Send because it acts on the same window, named the same way - though
+            // unlike Send it means the same on every button: the pin is not per desktop.
+            // Send stays enabled for a pinned window, deliberately: moving one takes it off
+            // every desktop and puts it on the one chosen, which --move showed on 19045 and
+            // which is a fair reading of "send it here".
+            PinKind pinKind = PinKindOf(target);
+            AddItem(menu, PinCaption(target, pinKind), target != IntPtr.Zero && CanPin(),
+                    delegate { TogglePin(target, "menu"); });
+            if (_config.PinHotkeys != HotkeyModifiers.Off)
+                ((ToolStripMenuItem)menu.Items[menu.Items.Count - 1]).ShortcutKeyDisplayString =
+                    Hotkeys.ModifierName(_config.PinHotkeys) + "+P";
+
             // Reordering, one place at a time. Windows 10 has no call for it, so it is rebuilt
             // out of create and remove - see VirtualDesktopApi.Reorder - which is about 1 ms a
             // call on 19045 and so reads as instant. Greyed out while a close-all is running:
@@ -1158,6 +1170,44 @@ namespace DesktopSwitcher
 
             string what = Describe(WindowInventory.Describe(target));
             return "Send \"" + Ellipsize(what, MenuTextMax) + "\" here";
+        }
+
+        /// <summary>
+        /// "Pin "Notepad - notes.txt" to all desktops", or Unpin when it already shows on
+        /// every desktop - either kind, since UnpinView frees a window of a pinned app too.
+        /// </summary>
+        string PinCaption(IntPtr target, PinKind kind)
+        {
+            if (target == IntPtr.Zero) return "Pin window to all desktops";
+
+            string what = "\"" + Ellipsize(Describe(WindowInventory.Describe(target)), MenuTextMax) + "\"";
+            return kind == PinKind.None ? "Pin " + what + " to all desktops" : "Unpin " + what;
+        }
+
+        /// <summary>The window's pin kind, None when the shell cannot say - the menu greys nothing on it.</summary>
+        PinKind PinKindOf(IntPtr target)
+        {
+            if (target == IntPtr.Zero) return PinKind.None;
+            try
+            {
+                return _api.GetPinKind(target);
+            }
+            catch (ShellUnavailableException)
+            {
+                return PinKind.None;
+            }
+        }
+
+        bool CanPin()
+        {
+            try
+            {
+                return _api.CanPin;
+            }
+            catch (ShellUnavailableException)
+            {
+                return false;
+            }
         }
 
         string RemoveCaption(Desktop desktop)
@@ -2260,7 +2310,7 @@ namespace DesktopSwitcher
         {
             if (Hotkeys.IsPin(id))
             {
-                TogglePin();
+                TogglePin(_foreground.Resolve(), "hotkeys");
                 return;
             }
 
@@ -2322,8 +2372,9 @@ namespace DesktopSwitcher
         }
 
         /// <summary>
-        /// The pin shortcut: pins the active window to every desktop, or unpins it if it is
-        /// shown on every desktop already - however that came about.
+        /// The pin shortcut and the menu's Pin item: pins the window to every desktop, or
+        /// unpins it if it is shown on every desktop already - however that came about.
+        /// <paramref name="source"/> only labels the log line.
         ///
         /// The window comes from ForegroundTracker, as Send here's does, though a hotkey
         /// does not take the focus the way a click on the taskbar does: what holds the
@@ -2342,12 +2393,11 @@ namespace DesktopSwitcher
         /// strip talks through the shell's notifications. A refusal shows as the mark not
         /// changing, and is logged.
         /// </summary>
-        void TogglePin()
+        void TogglePin(IntPtr target, string source)
         {
-            IntPtr target = _foreground.Resolve();
-            if (target == IntPtr.Zero)
+            if (target == IntPtr.Zero || !Native.IsWindow(target))
             {
-                Log.Write("hotkeys: pin pressed but no candidate window");
+                Log.Write(source + ": pin asked for but no candidate window");
                 return;
             }
 
@@ -2361,13 +2411,13 @@ namespace DesktopSwitcher
             }
             catch (ShellUnavailableException ex)
             {
-                Log.Write("hotkeys: pin skipped, shell unavailable - " + ex.Message);
+                Log.Write(source + ": pin skipped, shell unavailable - " + ex.Message);
                 return;
             }
 
             Log.Write(delegate
             {
-                return "hotkeys: " + (before == PinKind.None ? "pin" : "unpin") + " \""
+                return source + ": " + (before == PinKind.None ? "pin" : "unpin") + " \""
                        + Native.GetText(target) + "\" " + before + " -> " + after
                        + (ok ? "" : " - refused");
             });
