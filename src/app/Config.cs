@@ -246,6 +246,26 @@ namespace DesktopSwitcher
         public Look StripLook = Look.Classic;
         public Look PanelLook = Look.Classic;
 
+        /// <summary>
+        /// The finer strip choices, from a mock of seven variants that were all wanted
+        /// reachable. modernSlide: the modern cell travels with the pill instead of fading
+        /// from button to button. stripThumb: what fills the segmented thumb. plusIcon: '+'
+        /// as the Lucide plus at the marks' weight, rather than a text '+' (classic) or the
+        /// Segoe MDL2 Add glyph (modern and segmented). markNumberDimmed: a marked button's
+        /// number at full size and faded, instead of shrunk - the button is wider for it. The
+        /// defaults are the variants picked from the mock; stripStyle stays classic.
+        /// </summary>
+        public bool ModernSlide = true;
+        public SegmentThumb StripThumb = SegmentThumb.Edge;
+        public bool PlusIcon = true;
+        public bool MarkNumberDimmed = true;
+
+        /// <summary>
+        /// The monitor tile icon at stroke 2 and two pixels shorter, to sit with the icons
+        /// beside it - see DrawMonitor. On by default, picked with the rest from the mock.
+        /// </summary>
+        public bool StatsMonitorHeavy = true;
+
         public Color HighlightColor = Color.FromArgb(0x00, 0x78, 0xD7);
         /// <summary>Color.Empty means "sample the live taskbar colour at runtime".</summary>
         public Color BackgroundColor = Color.Empty;
@@ -291,10 +311,32 @@ namespace DesktopSwitcher
         {
             // --- strip
             Choice(StripSection, "stripStyle", "Style",
-                new[] { "classic", "modern" }, new[] { "Classic", "Modern" },
+                new[] { "classic", "modern", "segmented" }, new[] { "Classic", "Modern", "Segmented" },
                 c => (int)c.StripLook, (c, v) => c.StripLook = (Look)v,
                 "Modern rounds the buttons, marks the current desktop with a short pill and "
-                + "sets its number in semibold. Classic is the original square buttons and full-width underline."),
+                + "sets its number in semibold. Segmented sets the buttons in one rounded track "
+                + "with a thumb that slides behind the current desktop. Classic is the original "
+                + "square buttons and full-width underline."),
+            Bool(StripSection, "modernSlide", "Sliding cell",
+                c => c.ModernSlide, (c, v) => c.ModernSlide = v,
+                "The current desktop's rounded cell slides to the new desktop with the pill. "
+                + "Off fades it out on one button and in on the next.")
+                .When(c => c.StripLook == Look.Modern),
+            Choice(StripSection, "stripThumb", "Thumb",
+                new[] { "neutral", "accent", "edge" }, new[] { "Neutral", "Accent", "Accent edge" },
+                c => (int)c.StripThumb, (c, v) => c.StripThumb = (SegmentThumb)v,
+                "Neutral is a raised tile. Accent fills it with the highlight colour. Accent "
+                + "edge is the raised tile with a short highlight line along its foot.")
+                .When(c => c.StripLook == Look.Segmented),
+            Bool(StripSection, "plusIcon", "'+' as an icon",
+                c => c.PlusIcon, (c, v) => c.PlusIcon = v,
+                "Draws '+' at the same weight as the mark icons. Off uses the plain character, "
+                + "or the thin Windows glyph in the modern and segmented styles."),
+            Choice(StripSection, "markNumber", "Number beside a mark",
+                new[] { "shrunk", "dimmed" }, new[] { "Shrunk", "Dimmed" },
+                c => c.MarkNumberDimmed ? 1 : 0, (c, v) => c.MarkNumberDimmed = v == 1,
+                "Dimmed keeps a marked desktop's number full size and fades it, and makes the "
+                + "button a little wider. Shrunk sets it smaller beside the mark."),
             Int(StripSection, "buttonWidth", "Button width", 16, 128, "px",
                 c => c.ButtonWidth, (c, v) => c.ButtonWidth = v,
                 "Width of each numbered desktop button."),
@@ -374,6 +416,11 @@ namespace DesktopSwitcher
                 + "is CPU outside and memory inside. Chip, Monitor and Fan are icons that only "
                 + "change colour under load.")
                 .When(c => c.StatsTile),
+            Bool(StatsSection, "statsMonitorHeavy", "Heavier monitor",
+                c => c.StatsMonitorHeavy, (c, v) => c.StatsMonitorHeavy = v,
+                "Draws the monitor with a heavier outline, a little smaller, to match the "
+                + "icons beside it.")
+                .When(c => c.StatsTile && c.StatsStyle == StatsTileStyle.Monitor),
             Int(StatsSection, "statsIconSize", "Icon size", 8, 64, "px",
                 c => c.StatsIconSize, (c, v) => c.StatsIconSize = v,
                 "Height of the icon. Shrunk to fit the tile and the taskbar.")

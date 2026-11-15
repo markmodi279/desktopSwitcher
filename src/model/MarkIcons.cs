@@ -116,6 +116,9 @@ namespace DesktopSwitcher
             { "cart", "M7 21A1 1 0 1 0 9 21A1 1 0 1 0 7 21Z M18 21A1 1 0 1 0 20 21A1 1 0 1 0 18 21Z M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12" },
             { "brush", "M9.06 11.9l8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08 M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z" },
             { "image", "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2Z M7 9A2 2 0 1 0 11 9A2 2 0 1 0 7 9Z M21 15l-3.086-3.086a2 2 0 0 0-2.828 0L6 21" },
+            // Not offered either - the strip's '+' button under plusIcon, kept here so it is
+            // parsed, cached and checked by --marks like every other icon.
+            { "plus", "M5 12h14 M12 5v14" },
         };
 
         /// <summary>

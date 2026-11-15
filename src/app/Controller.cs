@@ -400,7 +400,7 @@ namespace DesktopSwitcher
         void ComputeMetrics(int desktopCount)
         {
             _buttonWidth = _host.Scale(_config.ButtonWidth);
-            _markedWidth = _host.Scale(SwitcherStrip.MarkedWidthFor(_config.ButtonWidth));
+            _markedWidth = _host.Scale(SwitcherStrip.MarkedWidthFor(_config.ButtonWidth, _config.MarkNumberDimmed));
             _plusWidth = _host.Scale(_config.PlusWidth);
             _statsWidth = _config.StatsTile ? _host.Scale(_config.StatsWidth) : 0;
             _margin = _host.Scale(_config.Margin);
@@ -507,6 +507,10 @@ namespace DesktopSwitcher
             // A strip rebuilt under an open dialog - an Explorer restart, a theme change -
             // keeps its panel away like the one it replaced.
             _strip.Asking = _asking > 0;
+            // Before SetDesktops and the first paint: the number font is sized on that paint,
+            // and the marked width it must agree with came from ComputeMetrics above.
+            _strip.SetDrawing(_config.ModernSlide, _config.StripThumb, _config.PlusIcon,
+                              _config.MarkNumberDimmed, _config.StatsMonitorHeavy);
             _strip.SetStatsMeter(_host.Scale(_config.StatsBarWidth), _host.Scale(_config.StatsBarGap),
                                  _host.Scale(_config.StatsBarHeight), _config.StatsBarLabels, _config.StatsBarRounded,
                                  _config.StatsWarnPercent, _config.StatsAlertPercent, _config.StatsStyle,

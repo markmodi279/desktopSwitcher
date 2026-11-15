@@ -1163,7 +1163,7 @@ namespace DesktopSwitcher
                 host.TryComputeBounds(initialWidth, margin, out bounds);
 
                 var strip = new SwitcherStrip(host.TrayWindow, bounds,
-                                              buttonWidth, host.Scale(SwitcherStrip.MarkedWidthFor(cfg.ButtonWidth)),
+                                              buttonWidth, host.Scale(SwitcherStrip.MarkedWidthFor(cfg.ButtonWidth, cfg.MarkNumberDimmed)),
                                               plusWidth, statsWidth, barHeight,
                                               background, cfg.HighlightColor,
                                               (uint)cfg.TooltipDelayMs, cfg.TooltipWidth,
@@ -1173,6 +1173,8 @@ namespace DesktopSwitcher
                                     cfg.StatsWarnPercent, cfg.StatsAlertPercent, cfg.StatsStyle,
                                     host.Scale(cfg.StatsIconSize), cfg.StatsFanSpin,
                                     cfg.StatsFanSpeed);
+                strip.SetDrawing(cfg.ModernSlide, cfg.StripThumb, cfg.PlusIcon,
+                                 cfg.MarkNumberDimmed, cfg.StatsMonitorHeavy);
 
                 // The saved marks, read-only, so --strip draws the row the app would. Nothing
                 // here writes marks.ini; a reorder in the harness leaves them on the old GUIDs.

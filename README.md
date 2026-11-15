@@ -179,11 +179,18 @@ Hover a number and a panel appears above it listing the windows open on that des
 Windows 10 otherwise gives you no way to see that without `Win+Tab`. Desktops with nothing
 on them say so, which is how you find the one that is safe to remove.
 
-The strip and the panel each come in two styles, set separately: **Style** at the top of
+The strip and the panel each have a style, set separately: **Style** at the top of
 Settings → Strip (`stripStyle`) and under Settings → Hover panel (`panelStyle`). **Classic**
 is the original: square buttons, a full-width underline, and a flat panel sitting on the
 strip. A **modern** strip rounds the buttons and marks the current desktop with a short pill
-and its number in semibold. A **modern** panel is a floating card with rounded corners and a
+and its number in semibold; its rounded cell slides to the new desktop with the pill unless
+**Sliding cell** (`modernSlide`) is off. A **segmented** strip, for the strip only, sets the
+desktop buttons in one faint rounded track with a thumb that slides behind the current one
+and no underline; **Thumb** (`stripThumb`) makes it a neutral raised tile, a tile in the
+highlight colour, or a neutral tile with a short highlight line along its foot. In every
+style **'+' as an icon** (`plusIcon`) draws `+` at the weight of the mark icons, and
+**Number beside a mark** (`markNumber`) keeps a marked desktop's number full size and faded
+rather than shrinking it. A **modern** panel is a floating card with rounded corners and a
 soft shadow; each window row gets the app's own icon, with the app name in semibold and the
 title after it in a softer tone, and the window count sits at the right of the title. The
 stats panel follows the panel's style. Both are classic by default for now.
@@ -282,7 +289,11 @@ colour again.
 | Key | Default | Meaning |
 |---|---|---|
 | `lastCount` | `2` | desktop count restored at login |
-| `stripStyle` | `classic` | `classic` is square buttons and a full-width underline; `modern` rounds the buttons and marks the current desktop with a short pill |
+| `stripStyle` | `classic` | `classic` is square buttons and a full-width underline; `modern` rounds the buttons and marks the current desktop with a short pill; `segmented` sets the buttons in one rounded track with a sliding thumb |
+| `modernSlide` | `true` | modern only: the current desktop's cell slides with the pill; `false` fades it from button to button |
+| `stripThumb` | `edge` | segmented only: `neutral` raised tile, `accent` tile in the highlight colour, `edge` neutral tile with a short highlight line along its foot |
+| `plusIcon` | `true` | `+` drawn at the mark icons' weight; `false` is the plain character (classic) or the thin Windows glyph (modern, segmented) |
+| `markNumber` | `dimmed` | a marked desktop's number: `dimmed` full size and faded, with the button 4 px wider; `shrunk` two-thirds size |
 | `panelStyle` | `classic` | `classic` is the original flat panel; `modern` gives it rounded corners, a shadow and an icon beside each window, and applies to the stats panel too |
 | `buttonWidth` | `34` | per-button width at 96 DPI |
 | `plusWidth` | `26` | width of the `+` button at 96 DPI |
@@ -294,6 +305,7 @@ colour again.
 | `statsWidth` | `38` | width of the system tile at 96 DPI |
 | `statsCpu` | `utility` | CPU measure: `utility` matches Task Manager, `time` is the plain share of time not idle |
 | `statsTileStyle` | `meters` | what the tile draws: `meters` is the CPU and memory bars, `gauge` a half-ring gauge whose needle follows CPU, `rings` two concentric rings, CPU outside and memory inside, `chip`, `monitor` and `fan` icons that turn amber and red when CPU or memory is under heavy load; the bar settings below apply to `meters` only |
+| `statsMonitorHeavy` | `true` | the `monitor` icon with a heavier outline and two pixels shorter, to match the icons beside it |
 | `statsIconSize` | `20` | height of the icon, for every style but `meters`, at 96 DPI; capped to the taskbar's height and the tile's width, so a much bigger icon needs `statsWidth` raised too |
 | `statsFanSpin` | `false` | keeps the `fan` icon turning, faster as CPU rises; costs a small repaint about thirty times a second |
 | `statsFanSpeed` | `100` | how fast the spinning fan turns, in percent of the built-in pace (an eighth of a turn a second at idle, one at full CPU); 10 to 400 |

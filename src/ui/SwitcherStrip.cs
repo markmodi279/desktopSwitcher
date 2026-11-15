@@ -59,11 +59,32 @@ namespace DesktopSwitcher
     /// desktop with a short pill, and makes the panel a layered window - rounded, shadowed,
     /// an icon on every window row. The panel's frame is the one structural difference; the
     /// rest is the same drawing code reading different numbers.
+    ///
+    /// Segmented is the strip's only: the desktop buttons sit in one faint rounded track and
+    /// a thumb slides behind the current one, with no underline - the thumb is the mark. It
+    /// is never a panel style; panelStyle offers only the first two, so TooltipWindow never
+    /// sees it. Chosen from a mock of seven variants, which are all still reachable: this,
+    /// stripThumb, modernSlide, plusIcon and markNumber between them.
     /// </summary>
     enum Look
     {
         Classic,
         Modern,
+        Segmented,
+    }
+
+    /// <summary>
+    /// What fills the segmented strip's thumb - stripThumb. Neutral is a raised tile a step
+    /// off the track, which on a light taskbar comes out as a white key; Accent fills it with
+    /// the highlight colour, so it says "here" from across a room the way the underline did;
+    /// Edge is the neutral tile with a short accent line along its foot, the Windows 10
+    /// underline surviving in miniature. Edge is the default, as the middle of the three.
+    /// </summary>
+    enum SegmentThumb
+    {
+        Neutral,
+        Accent,
+        Edge,
     }
 
     /// <summary>
@@ -172,10 +193,30 @@ namespace DesktopSwitcher
         /// </summary>
         public const int MarkMinWidth = 40;
 
-        /// <summary>A marked button's width at 96 DPI, for a given buttonWidth.</summary>
+        /// <summary>
+        /// MarkExtra and MarkMinWidth for markNumber = dimmed, where the number beside the mark
+        /// stays full size: four pixels more each, what a two-digit number gains at full size
+        /// over two thirds on a 40 px taskbar. Without them a dimmed "12" and "WW" met the
+        /// button's edges and were clipped.
+        /// </summary>
+        public const int MarkExtraFull = 14;
+        public const int MarkMinWidthFull = 44;
+
+        /// <summary>A marked button's width at 96 DPI, for a given buttonWidth, with the number shrunk.</summary>
         public static int MarkedWidthFor(int buttonWidth)
         {
-            return Math.Max(buttonWidth + MarkExtra, MarkMinWidth);
+            return MarkedWidthFor(buttonWidth, false);
+        }
+
+        /// <summary>
+        /// A marked button's width at 96 DPI. <paramref name="fullNumber"/> is markNumber =
+        /// dimmed, and must agree with what SetDrawing is given, or the pair is drawn into a
+        /// button sized for the other.
+        /// </summary>
+        public static int MarkedWidthFor(int buttonWidth, bool fullNumber)
+        {
+            return fullNumber ? Math.Max(buttonWidth + MarkExtraFull, MarkMinWidthFull)
+                              : Math.Max(buttonWidth + MarkExtra, MarkMinWidth);
         }
 
         /// <summary>
@@ -210,6 +251,15 @@ namespace DesktopSwitcher
         readonly double _dpiScale;
         readonly Look _look;           // stripStyle: this strip's own cells and bar
         readonly Look _panelLook;      // panelStyle: handed to the hover panel it creates
+
+        // The strip's finer drawing choices - see SetDrawing. Their defaults here are the
+        // strip as it was before they existed, which is what the selftest rigs that never
+        // call SetDrawing get; the app's own defaults are in Config.
+        bool _slidingCell;             // modernSlide: one rounded cell travels with the pill
+        SegmentThumb _thumb = SegmentThumb.Edge;
+        bool _plusIcon;                // plusIcon: '+' stroked as the Lucide plus
+        bool _markNumberFull;          // markNumber = dimmed: full size and faded, not shrunk
+        bool _monitorHeavy;            // statsMonitorHeavy: the monitor at the icons' weight
 
         List<Desktop> _desktops = new List<Desktop>();
         ButtonVisual[] _visuals = new ButtonVisual[0];
@@ -956,6 +1006,27 @@ namespace DesktopSwitcher
             Invalidate();
         }
 
+        /// <summary>
+        /// The drawing choices that are neither geometry nor the stats tile's: modernSlide,
+        /// stripThumb, plusIcon, markNumber and statsMonitorHeavy. A setter rather than more
+        /// constructor arguments, as SetStatsMeter is, and called once straight after
+        /// construction - before the first paint, since the fonts are sized on that paint and
+        /// the number font depends on <paramref name="markNumberFull"/>. Dropping the fonts
+        /// here makes a later call safe too.
+        /// </summary>
+        public void SetDrawing(bool slidingCell, SegmentThumb thumb, bool plusIcon,
+                               bool markNumberFull, bool monitorHeavy)
+        {
+            _slidingCell = slidingCell;
+            _thumb = thumb;
+            _plusIcon = plusIcon;
+            _markNumberFull = markNumberFull;
+            _monitorHeavy = monitorHeavy;
+
+            if (_font != null) { _font.Dispose(); _font = null; }
+            Invalidate();
+        }
+
         // Degrees a second at idle and the extra at flat out, at statsFanSpeed = 100.
         // Scaled together by that setting, so a faster or slower fan keeps the same gap
         // between idle and busy. An eighth of a turn a second
@@ -1224,6 +1295,10 @@ namespace DesktopSwitcher
 
             EnsureFont(height);
 
+            // The segmented track and the travelling cell, under every button so the
+            // numbers draw over them. See DrawUnderlay for the drag's half of this.
+            DrawUnderlay(g, height, Rectangle.Empty, true);
+
             for (int i = 0; i < _desktops.Count; i++)
                 if (i != _topIndex) DrawDesktopButton(g, i, height);
 
@@ -1279,9 +1354,12 @@ namespace DesktopSwitcher
             Rectangle bounds = ButtonBounds(current, height);
             bounds.Offset((int)Math.Round(_visuals[current].Offset), 0);
 
+            // Inside the rounded cell for modern and segmented - the segmented thumb stands two
+            // pixels further in than the modern cell, so the pin does too.
             float size = Scale(9);
-            float inset = _look == Look.Modern ? Scale(3) : Scale(2);
-            float top = _look == Look.Modern ? CellInsetY() + Scale(1) : Scale(3);
+            float inset = _look == Look.Classic ? Scale(2) : _look == Look.Modern ? Scale(3) : Scale(4);
+            float top = _look == Look.Classic ? Scale(3)
+                      : _look == Look.Modern ? CellInsetY() + Scale(1) : CellInsetY() + Scale(3);
             float cx = bounds.Right - inset - size / 2f;
             float cy = bounds.Y + top + size / 2f;
 
@@ -1326,6 +1404,11 @@ namespace DesktopSwitcher
                 bounds.Offset(offset, 0);
                 using (var back = new SolidBrush(_background))
                     FillCrisp(g, back, bounds);
+
+                // That fill also wiped the segmented track and, if this is the current
+                // desktop, the travelling cell that is following it - both drawn once for
+                // the whole strip before any button. Put back what belongs under this one.
+                DrawUnderlay(g, height, bounds, _desktops[i].IsCurrent);
             }
             if (_marks[i] != null) DrawMarkedButton(g, bounds, _desktops[i].Number.ToString(), _marks[i], _visuals[i]);
             else DrawButton(g, bounds, _desktops[i].Number.ToString(), _visuals[i]);
@@ -1363,11 +1446,19 @@ namespace DesktopSwitcher
         void DrawMarkContent(Graphics g, Rectangle bounds, string number, DesktopMark mark, ButtonVisual visual)
         {
             var area = new RectangleF(bounds.X, bounds.Y, bounds.Width, bounds.Height - _barHeight);
-            Color ink = Palette.RampText(_background, Emphasis(visual));
+            Color ink = TextInk(visual);
 
             // Softer than the mark at rest, catching up with it as the button lights: the
             // current desktop's number reads as clearly as anything else on it.
             Color numberInk = Palette.Blend(Palette.MutedText(_background), ink, 0.35f + 0.65f * visual.Highlight);
+
+            // markNumber = dimmed: full size, so it is the same number as on the buttons
+            // either side, and set back by alpha instead of size. Alpha over the ink rather
+            // than a blend toward the muted grey, because under an accent thumb the ink is
+            // white and the grey would read as a smudge on the colour; faded white does not.
+            // Still a little stronger on the current desktop, as the shrunk one is.
+            if (_markNumberFull)
+                numberInk = Color.FromArgb((int)(255 * (0.5f + 0.2f * visual.Highlight)), ink);
 
             float alpha = 1f;
             if (OccupancyShown && _desktops.Count > 1) alpha = 0.4f + 0.6f * visual.Dot;
@@ -1386,9 +1477,11 @@ namespace DesktopSwitcher
                 format.FormatFlags |= StringFormatFlags.NoWrap | StringFormatFlags.NoClip;
 
                 // A pixel lower than true centre, so the small number sits nearer the mark's
-                // baseline than its middle and the pair reads as one label.
+                // baseline than its middle and the pair reads as one label. A full-size number
+                // already shares the mark's height, and stays centred.
+                float drop = _markNumberFull ? 0 : Scale(1);
                 g.DrawString(number, _numberFont, brush,
-                             new RectangleF(x, area.Y + Scale(1), numberWidth, area.Height), format);
+                             new RectangleF(x, area.Y + drop, numberWidth, area.Height), format);
             }
 
             MarkPainter.Draw(g, mark, new RectangleF(x + numberWidth + gap, area.Y, markWidth, area.Height),
@@ -1404,6 +1497,10 @@ namespace DesktopSwitcher
         void DrawBar(Graphics g, int height)
         {
             if (_barLevel <= 0.001f || _barWidth < 1f) return;
+
+            // Segmented has no bar: the thumb is the mark, and its Edge variant draws its own
+            // accent line inside the thumb, under the numbers - see DrawMovingCell.
+            if (_look == Look.Segmented) return;
 
             int barHeight = Math.Max(2, (int)Math.Round(_barHeight * _barLevel));
 
@@ -1436,6 +1533,162 @@ namespace DesktopSwitcher
                 FillCrisp(g, brush, bar);
         }
 
+        /// <summary>
+        /// Whether the current desktop's cell is one shape that travels - the segmented thumb,
+        /// or modern under modernSlide - rather than a cell per button fading out on one and in
+        /// on the next. The modern cell used to do the latter while its pill slid, and in the
+        /// mock the bigger of the two shapes fading while the smaller moved read as a fade
+        /// with a line under it rather than a move.
+        /// </summary>
+        bool MovingCell
+        {
+            get { return _look == Look.Segmented || (_look == Look.Modern && _slidingCell); }
+        }
+
+        /// <summary>
+        /// A button's text and icon colour: the ramp, except on the segmented accent thumb,
+        /// where the ink crosses to whatever reads on the thumb's own colour as the highlight
+        /// arrives. The mock's white on a pale accent over a light taskbar was the weakest
+        /// thing on it; picking by the thumb's luma is the fix.
+        /// </summary>
+        Color TextInk(ButtonVisual visual)
+        {
+            Color ink = Palette.RampText(_background, Emphasis(visual));
+            if (_look != Look.Segmented || _thumb != SegmentThumb.Accent) return ink;
+            return Palette.Blend(ink, Palette.PrimaryText(ThumbFill()), visual.Highlight);
+        }
+
+        /// <summary>
+        /// The segmented thumb, or a hover tile in its shape, over a button at x of width w:
+        /// two pixels in from the button and from the track on every side, so on the first
+        /// and last buttons the thumb keeps the same margin to the track's end as to its top.
+        /// </summary>
+        RectangleF ThumbRect(float x, float w, int height)
+        {
+            float pad = Scale(2);
+            float top = CellInsetY() + pad;
+            return new RectangleF(x + pad, top, Math.Max(1f, w - pad * 2), Math.Max(1f, height - top * 2));
+        }
+
+        /// <summary>
+        /// The thumb's colour. Neutral lifts off the track on a dark taskbar; on a light one,
+        /// where Lift would darken it into a hole, it goes toward white instead and reads as
+        /// a raised key. Accent is the highlight laid over the taskbar at a little over half,
+        /// solid rather than translucent so the ink can be picked against it.
+        /// </summary>
+        Color ThumbFill()
+        {
+            if (_thumb == SegmentThumb.Accent) return Palette.Blend(_background, _highlight, 0.55f);
+            return Palette.IsLight(_background) ? Palette.Blend(_background, Color.White, 0.8f)
+                                                : Palette.Lift(_background, 0.14f);
+        }
+
+        /// <summary>
+        /// Draws what lies under the buttons: the segmented track and the travelling cell.
+        /// Once for the whole strip before any button (an empty <paramref name="clip"/>), and
+        /// again inside a button that has just been laid on the taskbar's own colour mid-drag,
+        /// since that fill wiped both. The cell only comes back inside the current desktop's
+        /// button (<paramref name="cell"/>): it is following that button, and redrawn inside a
+        /// neighbour that is passing over it, it would show through the one meant to cover it.
+        /// </summary>
+        void DrawUnderlay(Graphics g, int height, Rectangle clip, bool cell)
+        {
+            if (!MovingCell) return;
+
+            Region saved = null;
+            if (!clip.IsEmpty)
+            {
+                saved = g.Clip;
+                g.SetClip(clip);
+            }
+            try
+            {
+                if (_look == Look.Segmented) DrawTrack(g, height);
+                if (cell) DrawMovingCell(g, height);
+            }
+            finally
+            {
+                if (saved != null)
+                {
+                    g.Clip = saved;
+                    saved.Dispose();
+                }
+            }
+        }
+
+        /// <summary>
+        /// The segmented strip's track: one faint rounded bar behind every desktop button and
+        /// nothing else - '+' and the stats tile are not desktops, so they stay outside it.
+        /// Inside the buttons' own bounds rather than in a margin added round them, so the
+        /// layout, the hit test and the drag's arithmetic are exactly what the other looks
+        /// use; the thumb's two-pixel inset is the margin.
+        /// </summary>
+        void DrawTrack(Graphics g, int height)
+        {
+            if (_desktops.Count == 0 || _buttonsWidth <= 0) return;
+
+            float inset = CellInsetY();
+            var track = new RectangleF(0, inset, _buttonsWidth, height - inset * 2);
+            using (var fill = new SolidBrush(Palette.Lift(_background, 0.045f)))
+            using (var path = RoundedRect(track, Scale(6)))
+                g.FillPath(fill, path);
+        }
+
+        /// <summary>
+        /// The current desktop's cell, as one shape on the bar's own travelling position and
+        /// width - the same values the underline and pill ride, so the cell and pill move as
+        /// one, a reorder's landing carries it, and a strip with no current desktop fades it
+        /// where it stands. Faded by the bar's level for that last reason.
+        /// </summary>
+        void DrawMovingCell(Graphics g, int height)
+        {
+            if (_barLevel <= 0.001f || _barWidth < 1f) return;
+            int alpha = (int)Math.Round(255 * Math.Min(1f, _barLevel));
+
+            if (_look == Look.Modern)
+            {
+                // DrawCell's modern cell exactly, at the current desktop's full lift.
+                float inset = CellInsetY();
+                var inner = new RectangleF(_barX + Scale(2), inset, _barWidth - Scale(4), height - inset * 2);
+                using (var fill = new SolidBrush(Color.FromArgb(alpha, Palette.Lift(_background, 0.085f))))
+                using (var path = RoundedRect(inner, Scale(4)))
+                    g.FillPath(fill, path);
+                return;
+            }
+
+            RectangleF thumb = ThumbRect(_barX, _barWidth, height);
+            float radius = Scale(4);
+
+            // A pixel of shadow under the neutral thumbs, which is what makes them read as
+            // raised rather than as a lighter patch of track. None under the accent thumb: its
+            // colour already separates it, and a shadow under colour looked like a smear.
+            if (_thumb != SegmentThumb.Accent)
+            {
+                int shade = Palette.IsLight(_background) ? 40 : 90;
+                var below = new RectangleF(thumb.X, thumb.Y + Scale(1), thumb.Width, thumb.Height);
+                using (var fill = new SolidBrush(Color.FromArgb(shade * alpha / 255, 0, 0, 0)))
+                using (var path = RoundedRect(below, radius))
+                    g.FillPath(fill, path);
+            }
+
+            using (var fill = new SolidBrush(Color.FromArgb(alpha, ThumbFill())))
+            using (var path = RoundedRect(thumb, radius))
+                g.FillPath(fill, path);
+
+            if (_thumb == SegmentThumb.Edge)
+            {
+                // The underline in miniature: a short pill along the thumb's foot, under the
+                // number. As wide as modern's pill, narrower on a narrow thumb.
+                float pw = Math.Min(Scale(14), thumb.Width * 0.45f);
+                float ph = Math.Max(2f, Scale(2));
+                float cx = thumb.X + thumb.Width / 2f;
+                var edge = new RectangleF(cx - pw / 2f, thumb.Bottom - Scale(2) - ph, pw, ph);
+                using (var fill = new SolidBrush(Color.FromArgb(alpha, _highlight)))
+                using (var path = RoundedRect(edge, ph / 2f))
+                    g.FillPath(fill, path);
+            }
+        }
+
         /// <summary>A whole-pixel rectangle, filled exactly - antialiasing off for the one call. See DrawBar.</summary>
         static void FillCrisp(Graphics g, Brush brush, Rectangle r)
         {
@@ -1463,22 +1716,38 @@ namespace DesktopSwitcher
         {
             DrawCell(g, bounds, visual);
 
-            using (var brush = new SolidBrush(Palette.RampText(_background, Emphasis(visual))))
+            Color ink = TextInk(visual);
+
+            // Nudge up so the glyph looks centred in the space above the bar.
+            var textBounds = new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height - _barHeight);
+
+            // plusIcon: '+' as the Lucide plus, stroked at the marks' weight by the same code
+            // that strokes them, in either look. The Bahnschrift '+' classic drew was a
+            // fraction of a digit's height and shrank to a dot from a few feet away; modern's
+            // Segoe MDL2 Add glyph was a hairline beside the SemiBold numbers and 2.6-stroke
+            // icons. The mock showed the plus mattered more than anything else on the strip.
+            if (caption == "+" && _plusIcon)
+            {
+                float side = MarkPainter.IconSize(_markFont);
+                var origin = new PointF(textBounds.X + (textBounds.Width - side) / 2f,
+                                        textBounds.Y + (textBounds.Height - side) / 2f);
+                MarkPainter.DrawIcon(g, "plus", origin, side, ink);
+                return;
+            }
+
+            using (var brush = new SolidBrush(ink))
             using (var format = new StringFormat())
             {
                 format.Alignment = StringAlignment.Center;
                 format.LineAlignment = StringAlignment.Center;
 
-                // Nudge up so the glyph looks centred in the space above the bar.
-                var textBounds = new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height - _barHeight);
-
-                // Modern: the current desktop's number in semibold, so it reads in weight as
-                // well as brightness, and '+' as the Add glyph from the icon font Windows 10's
-                // own interface uses. The weight switches halfway through the highlight's
-                // ease, where the brightness is already most of the way there.
+                // Modern and segmented: the current desktop's number in semibold, so it reads
+                // in weight as well as brightness, and '+' as the Add glyph from the icon font
+                // Windows 10's own interface uses. The weight switches halfway through the
+                // highlight's ease, where the brightness is already most of the way there.
                 Font font = _font;
                 string text = caption;
-                if (_look == Look.Modern)
+                if (_look != Look.Classic)
                 {
                     if (caption == "+" && _glyphFont != null) { font = _glyphFont; text = "\uE710"; }
                     else if (visual.Highlight >= 0.5f && _currentFont != null) font = _currentFont;
@@ -1497,11 +1766,42 @@ namespace DesktopSwitcher
             // underline. Which way that separation goes is Palette's problem - on a light
             // taskbar the cell darkens instead of lightening.
             float lift = Math.Max(visual.Hover * 0.55f, visual.Highlight * 0.85f);
+
+            // With a travelling cell the current desktop's lift is that cell's, drawn once
+            // under every button - see DrawMovingCell. What is left here is hover, held off
+            // the current button so the two do not stack into a brighter tile under the
+            // pointer, and faded in step with the highlight so a button the cell is leaving
+            // hands over to its hover without a flicker.
+            if (MovingCell) lift = visual.Hover * 0.55f * (1f - visual.Highlight);
+
             if (lift > 0.001f)
             {
-                using (var fill = new SolidBrush(Palette.Lift(_background, lift * 0.10f)))
+                // Opaque, Lift is the taskbar colour moved toward white (or black), which is
+                // right for a cell on the bare taskbar and wrong for one over the segmented
+                // track or a travelling cell: there it painted the taskbar's own dark colour
+                // over them. The button a click lands on is hovered, so as the thumb slid in
+                // under it, this tile - fading only as the highlight arrived - covered the
+                // thumb, and the number flashed on a dark block for the length of the ease.
+                // Seen on the live taskbar; the frame-by-frame harness missed it because its
+                // synthetic pointer never registered as a hover. Translucent white (black on a
+                // light taskbar) at the same amount is exactly Lift over the bare taskbar, and
+                // over the track or thumb lightens what is there instead of hiding it.
+                Color tile = Palette.Lift(_background, lift * 0.10f);
+                if (MovingCell)
                 {
-                    if (_look == Look.Modern)
+                    Color pole = Palette.IsLight(_background) ? Color.Black : Color.White;
+                    tile = Color.FromArgb((int)Math.Round(255 * lift * 0.10f), pole);
+                }
+
+                using (var fill = new SolidBrush(tile))
+                {
+                    if (_look == Look.Segmented)
+                    {
+                        // The thumb's shape, so hovering previews where the thumb would go.
+                        using (var path = RoundedRect(ThumbRect(bounds.X, bounds.Width, bounds.Height), Scale(4)))
+                            g.FillPath(fill, path);
+                    }
+                    else if (_look == Look.Modern)
                     {
                         var inner = new RectangleF(bounds.X + Scale(2), bounds.Y + CellInsetY(),
                                                    bounds.Width - Scale(4), bounds.Height - CellInsetY() * 2);
@@ -1918,6 +2218,16 @@ namespace DesktopSwitcher
         {
             float stroke = Math.Max(1f, (float)Math.Round(1.5 * _dpiScale));
 
+            // statsMonitorHeavy: stroke 2, nearer the 2.6-in-24 the mark icons and the '+' are
+            // drawn at, and two pixels shorter so the heavier outline does not make the tile
+            // the loudest thing on the strip. At 1.5 it read as finer than everything beside it
+            // once the '+' became an icon. Not rounded like the 1.5 - at 125% that would be 3.
+            if (_monitorHeavy)
+            {
+                stroke = Math.Max(1f, 2f * (float)_dpiScale);
+                height -= Scale(2);
+            }
+
             float tall = Math.Min(height, textBounds.Height - 2);
             tall = Math.Min(tall, (textBounds.Width - 4) / 1.2f);
             tall = Math.Max(8f, tall);
@@ -2175,8 +2485,10 @@ namespace DesktopSwitcher
             // enough to give the mark the button, large enough still to read for Ctrl+Alt+N -
             // and the mark at the number's usual size, semibold so two letters hold their own
             // against the full-size numbers on the buttons either side.
+            // Under markNumber = dimmed the number keeps the others' size and is faded instead
+            // - see DrawMarkContent - and the marked button is wider to fit it: MarkExtraFull.
             if (_numberFont != null) _numberFont.Dispose();
-            _numberFont = StripFace(Math.Max(7f, size * 0.66f), false);
+            _numberFont = StripFace(_markNumberFull ? size : Math.Max(7f, size * 0.66f), false);
             if (_markFont != null) _markFont.Dispose();
             _markFont = StripFace(size, false);
             if (_markGlyphFont != null) _markGlyphFont.Dispose();
@@ -2184,7 +2496,7 @@ namespace DesktopSwitcher
 
             if (_currentFont != null) { _currentFont.Dispose(); _currentFont = null; }
             if (_glyphFont != null) { _glyphFont.Dispose(); _glyphFont = null; }
-            if (_look != Look.Modern) return;
+            if (_look == Look.Classic) return;
 
             // A step heavier than the other numbers, so the current one still reads in weight
             // now that the rest are SemiBold themselves.
