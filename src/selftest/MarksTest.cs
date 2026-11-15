@@ -63,7 +63,8 @@ namespace DesktopSwitcher
                 DesktopMark.Letters("DS"), DesktopMark.Letters("c"), DesktopMark.Letters("9z"),
                 DesktopMark.Swatch(Color.FromArgb(0x16, 0xC6, 0x0C)), DesktopMark.Swatch(Color.FromArgb(128, 1, 2, 3)),
             };
-            foreach (char c in MarkPainter.Glyphs) marks.Add(DesktopMark.Glyph(c));
+            foreach (string key in MarkIcons.All) marks.Add(DesktopMark.Icon(key));
+            marks.Add(DesktopMark.Glyph('\uE710'));   // an old glyph with no icon still round-trips as a glyph
             foreach (Color c in MarkPainter.Colors) marks.Add(DesktopMark.Swatch(c));
 
             int n = 0;
@@ -87,6 +88,20 @@ namespace DesktopSwitcher
             Console.WriteLine("  " + refused.Length + " malformed forms refused");
 
             Check(DesktopMark.Parse(" Letters : ds ").Text == "DS", "kind and value trimmed, case-insensitive kind");
+
+            // The old picker's glyphs read back as the icons that replaced them.
+            DesktopMark house = DesktopMark.Parse("glyph:E80F");
+            Check(house != null && house.Kind == MarkKind.Icon && house.Text == "home", "old home glyph reads back as icon:home");
+            Check(DesktopMark.Same(DesktopMark.Parse("glyph:EB05"), DesktopMark.Icon("chart")), "old pie glyph reads back as icon:chart");
+            Check(DesktopMark.Parse("glyph:E710").Kind == MarkKind.Glyph, "a glyph with no icon stays a glyph");
+            Check(DesktopMark.Same(DesktopMark.Parse("icon:Rocket"), DesktopMark.Icon("rocket")), "icon key read case-insensitively");
+            Check(DesktopMark.Icon("nosuchicon") == null && DesktopMark.Parse("icon:nosuchicon") == null, "unknown icon refused");
+            Console.WriteLine("  old glyphs convert to icons");
+
+            List<string> broken = MarkPainter.VerifyIcons();
+            foreach (string b in broken) Check(false, "icon " + b);
+            Console.WriteLine("  " + new List<string>(MarkIcons.All).Count + " icons parse inside their grid, "
+                              + MarkIcons.Offered.Length + " offered");
         }
 
         // --- store --------------------------------------------------------------
@@ -101,7 +116,7 @@ namespace DesktopSwitcher
         static void Store()
         {
             Guid a = Guid.NewGuid(), b = Guid.NewGuid(), c = Guid.NewGuid(), d = Guid.NewGuid();
-            DesktopMark ds = DesktopMark.Letters("DS"), code = DesktopMark.Glyph('\uE943');
+            DesktopMark ds = DesktopMark.Letters("DS"), code = DesktopMark.Icon("code");
             DesktopMark green = DesktopMark.Swatch(Color.FromArgb(0x16, 0xC6, 0x0C));
 
             var store = new MarkStore();
@@ -145,12 +160,12 @@ namespace DesktopSwitcher
 
             // Recent: deduplicated, newest first, capped.
             var r = new MarkStore();
-            for (int i = 0; i < MarkStore.RecentMax + 4; i++) r.Set(Guid.NewGuid(), DesktopMark.Glyph(MarkPainter.Glyphs[i]), i);
-            r.Set(Guid.NewGuid(), DesktopMark.Glyph(MarkPainter.Glyphs[MarkStore.RecentMax + 3]), 0);
+            for (int i = 0; i < MarkStore.RecentMax + 4; i++) r.Set(Guid.NewGuid(), DesktopMark.Icon(MarkIcons.Offered[i]), i);
+            r.Set(Guid.NewGuid(), DesktopMark.Icon(MarkIcons.Offered[MarkStore.RecentMax + 3]), 0);
             Check(r.Recent.Count == MarkStore.RecentMax, "Recent capped at " + MarkStore.RecentMax + ", got " + r.Recent.Count);
             int copies = 0;
             foreach (DesktopMark m in r.Recent)
-                if (m.Equals(DesktopMark.Glyph(MarkPainter.Glyphs[MarkStore.RecentMax + 3]))) copies++;
+                if (m.Equals(DesktopMark.Icon(MarkIcons.Offered[MarkStore.RecentMax + 3]))) copies++;
             Check(copies == 1, "Recent holds a mark once");
             Console.WriteLine("  Recent deduplicated and capped at " + MarkStore.RecentMax);
 

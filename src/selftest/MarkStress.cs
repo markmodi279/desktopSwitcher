@@ -195,7 +195,7 @@ namespace DesktopSwitcher
                     string[] letters = { "WW", "MM", "DS", "CW", "A", "0", "88", "QJ" };
                     return DesktopMark.Letters(letters[_rng.Next(letters.Length)]);
                 case 1:
-                    return DesktopMark.Glyph(MarkPainter.Glyphs[_rng.Next(MarkPainter.Glyphs.Length)]);
+                    return DesktopMark.Icon(MarkIcons.Offered[_rng.Next(MarkIcons.Offered.Length)]);
                 default:
                     return DesktopMark.Swatch(MarkPainter.Colors[_rng.Next(MarkPainter.Colors.Length)]);
             }
@@ -524,10 +524,10 @@ namespace DesktopSwitcher
 
                 DesktopMark[] marks =
                 {
-                    DesktopMark.Letters("WW"), DesktopMark.Letters("MM"), DesktopMark.Glyph('\uE943'),
+                    DesktopMark.Letters("WW"), DesktopMark.Letters("MM"), DesktopMark.Icon("code"),
                     DesktopMark.Swatch(Color.FromArgb(0xFF, 0xB9, 0x00)), null, DesktopMark.Letters("0"),
-                    DesktopMark.Swatch(Color.FromArgb(0x8A, 0x8A, 0x8A)), DesktopMark.Glyph('\uEBE8'), null,
-                    DesktopMark.Letters("WW"), DesktopMark.Glyph('\uE8F2'), DesktopMark.Swatch(Color.FromArgb(0x00, 0x78, 0xD4)),
+                    DesktopMark.Swatch(Color.FromArgb(0x8A, 0x8A, 0x8A)), DesktopMark.Icon("bug"), null,
+                    DesktopMark.Letters("WW"), DesktopMark.Icon("chat"), DesktopMark.Swatch(Color.FromArgb(0x00, 0x78, 0xD4)),
                 };
 
                 int y = 0;

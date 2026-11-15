@@ -121,7 +121,7 @@ namespace DesktopSwitcher
             // --- symbols ---
             y = Section("Symbol", x, y);
             var glyphItems = new List<DesktopMark>();
-            foreach (char c in MarkPainter.Glyphs) glyphItems.Add(DesktopMark.Glyph(c));
+            foreach (string key in MarkIcons.Offered) glyphItems.Add(DesktopMark.Icon(key));
             _glyphs = new MarkGrid(_theme, glyphItems, 8, cellW, cellH, cellGap);
             _glyphs.Location = new Point(x, y);
             _glyphs.Picked += delegate(int i) { SetDraft(_glyphs.Items[i]); };

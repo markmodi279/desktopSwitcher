@@ -5,15 +5,21 @@ using System.Globalization;
 namespace DesktopSwitcher
 {
     /// <summary>
-    /// The three things a mark can be. A desktop has one kind or none: picking letters
-    /// replaces a symbol, and so on, because two marks squeezed into one 44 px button would
-    /// each be too small to do the job of either.
+    /// The things a mark can be. A desktop has one kind or none: picking letters replaces a
+    /// symbol, and so on, because two marks squeezed into one 44 px button would each be too
+    /// small to do the job of either.
+    ///
+    /// Glyph is the old symbol kind, from before the picker's symbols became Lucide icons.
+    /// Every glyph the picker offered converts to an icon as marks.ini is read, so a Glyph
+    /// mark now only exists for a codepoint typed into the file by hand; it still draws, in
+    /// Segoe MDL2 Assets as it always did.
     /// </summary>
     enum MarkKind
     {
         Letters,   // one or two of A-Z, 0-9
-        Glyph,     // a Segoe MDL2 Assets codepoint
+        Glyph,     // a Segoe MDL2 Assets codepoint - the old symbols; see above
         Color,     // a plain rounded square
+        Icon,      // one of MarkIcons' icons, by key
     }
 
     /// <summary>
@@ -37,7 +43,7 @@ namespace DesktopSwitcher
         public const int MaxLetters = 2;
 
         readonly MarkKind _kind;
-        readonly string _text;    // the letters, or the glyph as one char; null for a colour
+        readonly string _text;    // the letters, the glyph as one char, or the icon's key; null for a colour
         readonly Color _color;    // opaque; empty unless Kind is Color
 
         DesktopMark(MarkKind kind, string text, Color color)
@@ -49,7 +55,7 @@ namespace DesktopSwitcher
 
         public MarkKind Kind { get { return _kind; } }
 
-        /// <summary>The letters as drawn, or the glyph's single character. Null for a colour.</summary>
+        /// <summary>The letters as drawn, the glyph's single character, or the icon's key. Null for a colour.</summary>
         public string Text { get { return _text; } }
 
         public Color Color { get { return _color; } }
@@ -69,6 +75,13 @@ namespace DesktopSwitcher
         {
             if (codepoint < '\uE000' || codepoint > '\uF8FF') return null;
             return new DesktopMark(MarkKind.Glyph, codepoint.ToString(), Color.Empty);
+        }
+
+        /// <summary>One of MarkIcons' icons, by key. Null for a key this build has no icon for.</summary>
+        public static DesktopMark Icon(string key)
+        {
+            if (!MarkIcons.Has(key)) return null;
+            return new DesktopMark(MarkKind.Icon, key, Color.Empty);
         }
 
         /// <summary>A colour, alpha dropped: dimming an empty desktop is the strip's job, not the mark's.</summary>
@@ -96,9 +109,10 @@ namespace DesktopSwitcher
         // --- text form ----------------------------------------------------------
 
         /// <summary>
-        /// The mark as marks.ini stores it: "letters:DS", "glyph:E943", "color:#16C60C".
-        /// The glyph is written as its hex codepoint rather than the character itself, since
-        /// a private-use character in a text file is an invisible box to anyone editing it.
+        /// The mark as marks.ini stores it: "letters:DS", "icon:rocket", "color:#16C60C",
+        /// or for an old symbol "glyph:E943". The glyph is written as its hex codepoint rather
+        /// than the character itself, since a private-use character in a text file is an
+        /// invisible box to anyone editing it.
         /// </summary>
         public string Format()
         {
@@ -106,11 +120,19 @@ namespace DesktopSwitcher
             {
                 case MarkKind.Letters: return "letters:" + _text;
                 case MarkKind.Glyph:   return "glyph:" + ((int)_text[0]).ToString("X4");
+                case MarkKind.Icon:    return "icon:" + _text;
                 default:               return "color:#" + _color.R.ToString("X2") + _color.G.ToString("X2") + _color.B.ToString("X2");
             }
         }
 
-        /// <summary>The reverse of Format. Null for anything it cannot read, never an exception.</summary>
+        /// <summary>
+        /// The reverse of Format. Null for anything it cannot read, never an exception.
+        ///
+        /// Not quite its inverse, on purpose: a "glyph:" whose codepoint was one of the old
+        /// picker's symbols comes back as the icon that replaced it, so a mark chosen before
+        /// the icons arrived keeps its meaning and gets their weight. It is written back as
+        /// "icon:" the next time the store saves.
+        /// </summary>
         public static DesktopMark Parse(string text)
         {
             if (string.IsNullOrEmpty(text)) return null;
@@ -130,7 +152,11 @@ namespace DesktopSwitcher
                 case "glyph":
                     if (!int.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out number)) return null;
                     if (number < 0xE000 || number > 0xF8FF) return null;
-                    return Glyph((char)number);
+                    string converted = MarkIcons.FromGlyph((char)number);
+                    return converted != null ? Icon(converted) : Glyph((char)number);
+
+                case "icon":
+                    return Icon(value.ToLowerInvariant());
 
                 case "color":
                     if (value.StartsWith("#")) value = value.Substring(1);

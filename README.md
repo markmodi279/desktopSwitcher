@@ -126,9 +126,13 @@ for a desktop, drawn beside its number so you recognise it at a glance.
 is one of three things:
 
 - **Letters**: one or two, such as a project's initials (`CW`, `DS`).
-- **A symbol**: one of 32 from Windows' own icon font, in rows by what a desktop is for -
-  meetings (calendar, chat, video call), projects (`{ }` for an API, a browser window for
-  the web, layers for fullstack, database, bug), other work, and personal.
+- **A symbol**: one of 32 bold outline icons, in rows by what a desktop is for - home,
+  calendar, chat and people; projects (`< >` for code, a terminal, a browser window, layers,
+  database, bug); other work (chart, briefcase, cloud, palette); and the rest (rocket,
+  flame, leaf, bulb, target, music, game, star, heart). They are
+  [Lucide](https://lucide.dev) icons, drawn a little heavier than Lucide draws them so they
+  hold their own beside the numbers. A symbol chosen before they arrived turns into the
+  icon that means the same.
 - **A colour**: one of ten, or any other through **+**, shown as a small rounded square.
 
 Each change shows on the strip as you make it; **OK** keeps it, **Cancel** - or a click
@@ -335,3 +339,9 @@ changes and any unexpected failure.
 The exe also has a selftest mode — run `DesktopSwitcher.exe --help` (console build) for
 commands that list desktops, drive switches, dump taskbar geometry, and soak-test
 recovery from an Explorer restart.
+
+## Credits
+
+The mark symbols are [Lucide](https://lucide.dev) icons (ISC licence; portions from
+Feather, MIT), carried as path data in
+[src/model/MarkIcons.cs](src/model/MarkIcons.cs) with their licence notice.

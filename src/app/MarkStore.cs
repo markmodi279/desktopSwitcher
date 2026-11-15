@@ -268,8 +268,10 @@ namespace DesktopSwitcher
             sb.AppendLine("# Set them from a desktop's right-click menu: Set mark...");
             sb.AppendLine("#");
             sb.AppendLine("# {desktop GUID}=kind:value, position");
-            sb.AppendLine("#   kind:value is letters:DS, glyph:E943 (a Segoe MDL2 Assets codepoint),");
-            sb.AppendLine("#   or color:#16C60C. Position is where the desktop last stood, 1 = first.");
+            sb.AppendLine("#   kind:value is letters:DS, icon:rocket (one of the picker's symbols),");
+            sb.AppendLine("#   or color:#16C60C. glyph:E943, a Segoe MDL2 Assets codepoint, is the");
+            sb.AppendLine("#   old symbol form; the ones the picker offered read back as icons.");
+            sb.AppendLine("#   Position is where the desktop last stood, 1 = first.");
             sb.AppendLine("# recent= lines are the picker's Recent row, newest first.");
             sb.AppendLine("#");
             sb.AppendLine("# Read at startup only. Edit it with the app stopped, or the next change");
