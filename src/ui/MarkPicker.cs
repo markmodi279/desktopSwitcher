@@ -372,7 +372,8 @@ namespace DesktopSwitcher
             _cellW = cellW;
             _cellH = cellH;
             _gap = gap;
-            _letters = new Font("Segoe UI Semibold", (float)(13 * theme.Scale), FontStyle.Regular, GraphicsUnit.Pixel);
+            // The strip's own face, so a letters mark in a cell looks as it will on the strip.
+            _letters = SwitcherStrip.StripFace((float)(13 * theme.Scale), false);
             _glyph = MarkPainter.GlyphFont((float)(16 * theme.Scale));
             _plus = MarkPainter.GlyphFont((float)(11 * theme.Scale));
             Cursor = Cursors.Hand;

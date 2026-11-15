@@ -2133,6 +2133,22 @@ namespace DesktopSwitcher
                 g.FillEllipse(brush, x, y, diameter, diameter);
         }
 
+        /// <summary>
+        /// The face the strip's numbers and mark letters are drawn in: Bahnschrift SemiBold,
+        /// or Bahnschrift Bold for <paramref name="heavier"/>. Every Windows 10 this runs on
+        /// has Bahnschrift (it arrived in 1709), but GDI+ quietly substitutes a missing face
+        /// with Microsoft Sans Serif rather than failing, so a face that does not come back
+        /// as asked for is swapped for the Segoe UI weights the strip used before.
+        /// </summary>
+        public static Font StripFace(float size, bool heavier)
+        {
+            Font font = heavier ? new Font("Bahnschrift", size, FontStyle.Bold, GraphicsUnit.Pixel)
+                                : new Font("Bahnschrift SemiBold", size, FontStyle.Regular, GraphicsUnit.Pixel);
+            if (font.Name.StartsWith("Bahnschrift")) return font;
+            font.Dispose();
+            return new Font(heavier ? "Segoe UI Semibold" : "Segoe UI", size, FontStyle.Regular, GraphicsUnit.Pixel);
+        }
+
         void EnsureFont(int height)
         {
             // Sized in pixels from the taskbar height, so it tracks DPI without
@@ -2140,8 +2156,14 @@ namespace DesktopSwitcher
             float size = Math.Max(9f, height * 0.30f);
             if (_font != null && Math.Abs(_font.Size - size) < 0.5f) return;
 
+            // The strip's numbers are Bahnschrift SemiBold, not the Segoe UI the rest of the
+            // shell uses. When the marks became Lucide icons stroked heavier than Lucide draws
+            // them, the Regular numbers beside them read as faint; Segoe UI Semibold and Bold
+            // were mocked and at this size hardly differ from Regular, while Bahnschrift - the
+            // DIN-style face Windows 10 ships, narrower and squarer - matched the icons' weight
+            // and reads like a gauge rather than body text. StripFace falls back to Segoe UI.
             if (_font != null) _font.Dispose();
-            _font = new Font("Segoe UI", size, FontStyle.Regular, GraphicsUnit.Pixel);
+            _font = StripFace(size, false);
 
             // The meters' letters, made and replaced with the main font so the two always
             // agree on the DPI they were sized for. Small enough to sit under a 20px bar in a
@@ -2154,9 +2176,9 @@ namespace DesktopSwitcher
             // and the mark at the number's usual size, semibold so two letters hold their own
             // against the full-size numbers on the buttons either side.
             if (_numberFont != null) _numberFont.Dispose();
-            _numberFont = new Font("Segoe UI", Math.Max(7f, size * 0.66f), FontStyle.Regular, GraphicsUnit.Pixel);
+            _numberFont = StripFace(Math.Max(7f, size * 0.66f), false);
             if (_markFont != null) _markFont.Dispose();
-            _markFont = new Font("Segoe UI Semibold", size, FontStyle.Regular, GraphicsUnit.Pixel);
+            _markFont = StripFace(size, false);
             if (_markGlyphFont != null) _markGlyphFont.Dispose();
             _markGlyphFont = MarkPainter.GlyphFont(size * 1.05f);
 
@@ -2164,7 +2186,9 @@ namespace DesktopSwitcher
             if (_glyphFont != null) { _glyphFont.Dispose(); _glyphFont = null; }
             if (_look != Look.Modern) return;
 
-            _currentFont = new Font("Segoe UI Semibold", size, FontStyle.Regular, GraphicsUnit.Pixel);
+            // A step heavier than the other numbers, so the current one still reads in weight
+            // now that the rest are SemiBold themselves.
+            _currentFont = StripFace(size, true);
 
             // GDI+ quietly substitutes a missing face, and E710 in any other font is a box.
             // Every Windows 10 has MDL2 Assets, but a font that is not there falls back to
