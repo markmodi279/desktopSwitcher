@@ -206,6 +206,13 @@ namespace DesktopSwitcher
         /// </summary>
         public HotkeyModifiers PinHotkeys = HotkeyModifiers.CtrlAlt;
 
+        /// <summary>
+        /// The click on a desktop button that removes it, as middle click does and through
+        /// the same confirmation - see RemoveGesture. Ctrl+Alt+click by default, for a
+        /// touchpad, which has no middle button.
+        /// </summary>
+        public RemoveGesture RemoveGesture = RemoveGesture.CtrlAltClick;
+
         // --- tooltips ---------------------------------------------------------
         public bool Tooltips = true;
         /// <summary>Hover delay before the panel appears. 400ms is the Windows default.</summary>
@@ -295,6 +302,12 @@ namespace DesktopSwitcher
             { "off", "ctrl+alt", "alt+shift", "ctrl+shift", "ctrl+win+alt" };
         static readonly string[] HotkeyCaptions =
             { "Off", "Ctrl+Alt", "Alt+Shift", "Ctrl+Shift", "Ctrl+Win+Alt" };
+
+        // removeGesture's, in RemoveGesture's order.
+        static readonly string[] RemoveGestureChoices =
+            { "off", "ctrl+alt+click", "ctrl+alt+right-click" };
+        static readonly string[] RemoveGestureCaptions =
+            { "Off", "Ctrl+Alt+click", "Ctrl+Alt+right-click" };
 
 
         /// <summary>
@@ -508,6 +521,11 @@ namespace DesktopSwitcher
                 c => (int)c.PinHotkeys, (c, v) => c.PinHotkeys = (HotkeyModifiers)v,
                 "Hold these and press P to show the active window on every desktop, or to stop. "
                 + "A window of an app pinned from Task View stops alone; the app's other windows stay."),
+            Choice(ShortcutsSection, "removeGesture", "Remove with click",
+                RemoveGestureChoices, RemoveGestureCaptions,
+                c => (int)c.RemoveGesture, (c, v) => c.RemoveGesture = (RemoveGesture)v,
+                "Click a desktop's number with these to remove that desktop, as a middle click does - "
+                + "for a touchpad. If it has windows, you are asked first."),
 
             // --- advanced
             Int(AdvancedSection, "reconcileMs", "Check interval", 250, 60000, "ms",

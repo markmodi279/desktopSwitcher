@@ -45,6 +45,26 @@ namespace DesktopSwitcher
     }
 
     /// <summary>
+    /// The click on a desktop button that removes that desktop - removeGesture - beside the
+    /// middle click, which always does. Asked for because a touchpad has no middle button,
+    /// and the menu's Remove is two clicks and a read.
+    ///
+    /// Not a TileGesture, though it is the same kind of thing: those choices are shared by
+    /// three stats settings, and Ctrl+Alt+right-click on the tile would be eaten by the
+    /// tile's menu before the tile saw it. Ctrl+Alt because nothing else on a desktop button
+    /// is held under two modifiers, so neither a switch with a slipped Ctrl nor a Shift+right
+    /// send can turn into a remove.
+    ///
+    /// Appended to, never reordered: a Choice setting is stored by name but held by index.
+    /// </summary>
+    enum RemoveGesture
+    {
+        Off,
+        CtrlAltClick,
+        CtrlAltRightClick,
+    }
+
+    /// <summary>
     /// How the strip or the hover panel is drawn - stripStyle and panelStyle, one each.
     ///
     /// It was one switch for both at first, on the reasoning that the two are meant to read
@@ -398,8 +418,11 @@ namespace DesktopSwitcher
         /// <summary>Left click on a desktop button.</summary>
         public event Action<Guid> SwitchRequested;
 
-        /// <summary>Middle click on a desktop button.</summary>
+        /// <summary>Middle click on a desktop button, or RemoveClick.</summary>
         public event Action<Guid> RemoveRequested;
+
+        /// <summary>The modified click on a desktop button that also raises RemoveRequested. Off for none.</summary>
+        public RemoveGesture RemoveClick { get; set; }
 
         /// <summary>Shift + right click on a desktop button - send the active window there.</summary>
         public event Action<Guid> MoveWindowRequested;
@@ -2592,6 +2615,16 @@ namespace DesktopSwitcher
             int index = HitTest(x, y);
             if (index < 0) { RestOrHide(); return; }
 
+            // Ahead of the menu, which a right click would otherwise open, and of the switch,
+            // which a left click would otherwise be. Desktop buttons only: '+' and the tile
+            // have nothing to remove.
+            if (index < _desktops.Count && IsRemoveClick(RemoveClick, button))
+            {
+                Raise(RemoveRequested, _desktops[index].Id);
+                RestOrHide();
+                return;
+            }
+
             // The menu is the touchpad's only way to the actions the other buttons carry,
             // so it answers on every button, '+' included. With nothing listening - the
             // menu turned off in config - the click falls through to what right click did
@@ -3450,6 +3483,22 @@ namespace DesktopSwitcher
                 case TileGesture.MiddleClick: return button == MouseButtons.Middle;
                 case TileGesture.ShiftRightClick: return button == MouseButtons.Right && mods == Keys.Shift;
                 default:                      return false;
+            }
+        }
+
+        /// <summary>
+        /// Whether this click is the remove gesture. Exactly Ctrl and Alt, from ModifierKeys
+        /// for the reason IsGesture gives: the message's own flags carry no Alt.
+        /// </summary>
+        static bool IsRemoveClick(RemoveGesture gesture, MouseButtons button)
+        {
+            Keys mods = Control.ModifierKeys & (Keys.Control | Keys.Shift | Keys.Alt);
+            if (mods != (Keys.Control | Keys.Alt)) return false;
+            switch (gesture)
+            {
+                case RemoveGesture.CtrlAltClick:      return button == MouseButtons.Left;
+                case RemoveGesture.CtrlAltRightClick: return button == MouseButtons.Right;
+                default:                              return false;
             }
         }
 

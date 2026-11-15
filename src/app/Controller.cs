@@ -497,6 +497,7 @@ namespace DesktopSwitcher
             _strip.SwitchRequested += delegate(Guid id) { _service.SwitchTo(id); };
             _strip.CreateRequested += delegate { _service.Create(); };
             _strip.RemoveRequested += delegate(Guid id) { RequestRemove(id); };
+            _strip.RemoveClick = _config.RemoveGesture;
             _strip.MoveWindowRequested += OnMoveWindowRequested;
             _strip.ReorderRequested += delegate(int from, int to) { Reorder(from, to, "drag"); };
             _strip.TooltipProvider = BuildTooltip;
@@ -860,12 +861,19 @@ namespace DesktopSwitcher
             AddItem(menu, RemoveCaption(desktop), desktops.Count > 1,
                     delegate { RequestRemove(id); });
 
+            // The modified click that does the same from the strip, named as Pin names its key.
+            string removeHint = null;
+            if (_config.RemoveGesture == RemoveGesture.CtrlAltClick) removeHint = "Ctrl+Alt+click";
+            else if (_config.RemoveGesture == RemoveGesture.CtrlAltRightClick) removeHint = "Ctrl+Alt+right-click";
+            if (removeHint != null)
+                ((ToolStripMenuItem)menu.Items[menu.Items.Count - 1]).ShortcutKeyDisplayString = removeHint;
+
             return menu;
         }
 
         /// <summary>
-        /// The one gate both removal paths - middle click and the menu's Remove item -
-        /// go through. An empty desktop is removed on the spot, exactly as before;
+        /// The one gate every removal path - middle click, removeGesture's Ctrl+Alt click and
+        /// the menu's Remove item - goes through. An empty desktop is removed on the spot, exactly as before;
         /// one with windows on it gets a themed confirmation first, since the OS moves
         /// those windows to a neighbour rather than closing them, and finding them again
         /// afterward is a nuisance worth a second click to avoid by accident.

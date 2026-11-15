@@ -69,6 +69,7 @@ Run the exe with no arguments. Then, on the strip:
 | Right click a number | menu of everything that button can do |
 | Shift + right click a number | send the window you were last using to that desktop |
 | Middle click a number | remove that desktop |
+| Ctrl+Alt+click a number | remove that desktop, for a touchpad (set by `removeGesture`: `ctrl+alt+click`, `ctrl+alt+right-click` or `off`) |
 | Left click `+` | create a desktop |
 | Right click `+` | menu — **New desktop** |
 | Left click the signal tile | open the CPU, memory and network panel; click again to close it |
