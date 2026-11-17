@@ -239,6 +239,18 @@ namespace DesktopSwitcher
             get { return 1 + (int)Math.Round(_header) + (int)Math.Round(_viewport) + 1; }
         }
 
+        /// <summary>Rows of the run not yet shown closed - for --closeall, zero once it is done.</summary>
+        public int OpenCount
+        {
+            get
+            {
+                int n = 0;
+                for (int i = 0; i < _rows.Count; i++)
+                    if (_rows[i].Live != null && !_rows[i].Closed) n++;
+                return n;
+            }
+        }
+
         /// <summary>Rows left alone because they were unticked when the run started.</summary>
         public int KeptCount
         {

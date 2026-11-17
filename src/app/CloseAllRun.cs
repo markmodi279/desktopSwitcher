@@ -578,6 +578,9 @@ namespace DesktopSwitcher
 
         public bool HasEnded { get { return _ended; } }
 
+        /// <summary>Read by --closeall: the window a run that finished left showing its outcome.</summary>
+        public CloseAllWindow Window { get; private set; }
+
         /// <summary>True once the run has removed the desktop itself.</summary>
         public bool RemovedDesktop { get; private set; }
 
@@ -608,12 +611,18 @@ namespace DesktopSwitcher
                           + (_remove ? " - it is the last desktop now" : ""));
             }
 
+            // The rows' last states first. The window takes no more updates once it is done,
+            // and windows that all close inside one tick - five at once, in a real run - were
+            // never told: the done window sat over five rows still spinning.
+            Refresh();
+
             // The window stays a moment to say how it went, then goes by itself.
             int forced = 0;
             for (int i = 0; i < _items.Count; i++) if (_items[i].WasForced) forced++;
             string line = _items.Count + " closed" + (forced > 0 ? ", " + forced + " forced" : "");
             string title = "\"" + _name + "\"" + (RemovedDesktop ? " removed" : " is empty");
             if (_panel != null && !_panel.IsDisposed) _panel.ShowDone(title, line);
+            Window = _panel;
 
             End(false);
         }

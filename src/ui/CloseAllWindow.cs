@@ -699,6 +699,9 @@ namespace DesktopSwitcher
             button.Visible = shown;
         }
 
+        /// <summary>Rows still shown as open, for --closeall's check that done means done.</summary>
+        public int OpenRows { get { return _list.OpenCount; } }
+
         /// <summary>Where Cancel is, for --closeall's check that the layout ran.</summary>
         public Rectangle CancelBounds { get { return _cancel.Bounds; } }
 

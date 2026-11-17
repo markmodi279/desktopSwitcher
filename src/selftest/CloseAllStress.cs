@@ -351,6 +351,7 @@ namespace DesktopSwitcher
 
             Check(run.HasEnded && run.RemovedDesktop, "run ended and removed the desktop");
             Check(!DesktopExists(_scratch), "desktop is gone");
+            CheckDoneRows(run);
             Check(_api.GetCurrentId() == _original, "user stayed on their own desktop");
             Check(!Native.IsWindowVisible(hide), "the tray-style window counted as closed once hidden");
             Check(!slowWentStillOpen, "a 0.6 s close never read as still open");
@@ -646,6 +647,10 @@ namespace DesktopSwitcher
             Check(run.Handles.Length == 20, "all twenty listed (" + run.Handles.Length + ")");
             WaitFor(delegate { return run.HasEnded; }, 8000);
             Check(run.RemovedDesktop, "desktop removed after " + clock.ElapsedMilliseconds + " ms");
+
+            // Twenty plain windows go together, mostly inside one tick - the case a real
+            // desktop of five hit, where the done window was left showing them all closing.
+            CheckDoneRows(run);
         }
 
         /// <summary>
@@ -1128,6 +1133,17 @@ namespace DesktopSwitcher
                                    delegate(WindowEntry w) { return w.Title; });
             _run.Start(_pump, Color.FromArgb(0x20, 0x20, 0x20), 1.0, Rectangle.Empty);
             return _run;
+        }
+
+        /// <summary>
+        /// The done window shows every row closed. Its rows used to freeze at whatever the
+        /// last tick before the end said, so windows closing together stayed "closing".
+        /// </summary>
+        static void CheckDoneRows(CloseAllRun run)
+        {
+            CloseAllWindow window = run.Window;
+            Check(window != null && window.OpenRows == 0,
+                  "the done window shows every row closed (" + (window == null ? "no window" : window.OpenRows + " open") + ")");
         }
 
         static CloseState StateOf(IntPtr hwnd)
