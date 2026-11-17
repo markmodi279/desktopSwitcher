@@ -18,8 +18,13 @@ rem  mark Controller.CreateIcon draws for the tray, generated once and committed
 rem  assets\ - there is no build step that could redraw it, and no reason for one.
 rem  Version metadata is not here: csc stamps that from the attributes in
 rem  src\app\AssemblyInfo.cs.
+rem
+rem  UIAutomationClient and UIAutomationTypes: how close-all reads what a save prompt
+rem  asks (src\model\DialogText.cs). They ship with .NET 4.8 like everything else here,
+rem  but in the WPF\ subfolder, which csc does not search, so they are named in full.
 
 set "CSC=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+set "WPF=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF"
 set "OUTDIR=%LOCALAPPDATA%\DesktopSwitcher"
 set "OUTEXE=%OUTDIR%\DesktopSwitcher.exe"
 
@@ -52,6 +57,8 @@ echo Building [%TARGET%] -^> %OUTEXE%
   -r:System.Core.dll ^
   -r:System.Drawing.dll ^
   -r:System.Windows.Forms.dll ^
+  -r:"%WPF%\UIAutomationClient.dll" ^
+  -r:"%WPF%\UIAutomationTypes.dll" ^
   -recurse:"%~dp0src\*.cs"
 
 if errorlevel 1 (

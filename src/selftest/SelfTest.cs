@@ -64,12 +64,13 @@ namespace DesktopSwitcher
                     case "--anim":    return CmdAnim(args);
                     case "--slide":   return CmdSlide(args);
                     case "--glide":   return CmdGlide(args);
+                    case "--fold":    return CmdFold(args);
                     case "--config":  return CmdConfig();
                     case "--quit":    return CmdQuit();
                     case "--winver":  return CmdWinVer();
                     case "--hotkeys": return CmdHotkeys();
                     case "--settings": return CmdSettings(args);
-                    case "--closeall": return CloseAllStress.Run(api);
+                    case "--closeall": return CloseAllStress.Run(api, args.Length > 1 ? args[1] : null);
                     case "--closetarget": return CloseAllStress.RunTarget(args);
                     case "--help":
                     case "-h":
@@ -120,13 +121,15 @@ namespace DesktopSwitcher
             Console.WriteLine("  --anim [ms]            step the strip's easing headlessly, frame by frame");
             Console.WriteLine("  --slide [ms]           step the hover panel's travel between buttons");
             Console.WriteLine("  --glide                step the strip's glide to a moved tray anchor, headlessly");
+            Console.WriteLine("  --fold [ms]            step a removed desktop's button folding away, headlessly");
             Console.WriteLine("  --quit                 close any running DesktopSwitcher the way Exit does, so its tray icon goes with it");
             Console.WriteLine("  --config               print every setting and check config.ini round-trips");
             Console.WriteLine("  --winver               print the Windows build and whether startup would accept it");
             Console.WriteLine("  --hotkeys              print the desktop shortcuts and whether each one is free to register");
             Console.WriteLine("  --settings [light|dark|#RRGGBB]  open the Settings window on its own; saves nothing");
             Console.WriteLine("  --markstress [seed]    drive marked strips with synthetic input, render a sheet, and reorder marked scratch desktops");
-            Console.WriteLine("  --closeall             stress \"Close all and remove\" against its own test windows, on desktops it creates");
+            Console.WriteLine("  --closeall [filter]    stress \"Close all and remove\" against its own test windows, on desktops it creates;");
+            Console.WriteLine("                         a filter runs only the scenarios whose name contains it");
             Console.WriteLine();
         }
 
@@ -1397,6 +1400,117 @@ namespace DesktopSwitcher
             Console.WriteLine();
             Console.WriteLine(ok ? "OK" : "FAILED");
             return ok ? 0 : 1;
+        }
+
+        /// <summary>
+        /// --fold: a removed desktop's button closing up (StripFold), with no strip. The
+        /// questions are the ones --glide asks of its own easing, plus the fold's own: the
+        /// flash holds the gap at full width and then fades out completely, the gap only
+        /// ever shrinks once it starts to, it lands on exactly zero and reports itself
+        /// finished, a second removal mid-fold starts cleanly, and animation off means no
+        /// fold at all. Then the rule that decides there is a fold: exactly one desktop
+        /// gone with the rest in order, and nothing else.
+        /// </summary>
+        static int CmdFold(string[] args)
+        {
+            int animationMs;
+            if (args.Length < 2 || !int.TryParse(args[1], out animationMs))
+                animationMs = Config.Load().AnimationMs;
+            if (animationMs <= 0) animationMs = 200;
+
+            const int Frame = Motion.FrameMs;
+            const float Width = 38f;
+            bool ok = true;
+
+            Console.WriteLine("animationMs   " + animationMs + "   flash " + StripFold.FlashMs + " ms   button " + Width + " px");
+            Console.WriteLine();
+
+            var fold = new StripFold();
+            fold.Start(2, Width);
+            Console.WriteLine("removed button 3: gap " + fold.GapPixels + " px, flash " + fold.Flash);
+            if (!fold.Active || fold.GapPixels != (int)Width) { Console.WriteLine("   FAIL  did not open a full-width gap"); ok = false; }
+
+            int frames = 0, flashFrames = 0;
+            float prevFlash = fold.Flash, prevGap = fold.Gap;
+            bool closing = false;
+            while (fold.Active && frames < 1000)
+            {
+                bool moved = fold.Step(Frame, animationMs);
+                frames++;
+                if (!moved) { Console.WriteLine("   FAIL  an active fold reported no movement"); ok = false; break; }
+
+                if (!closing && fold.Flash > 0f)
+                {
+                    flashFrames++;
+                    if (fold.Flash > prevFlash) { Console.WriteLine("   FAIL  the flash grew"); ok = false; }
+                    if (fold.Gap != Width) { Console.WriteLine("   FAIL  the gap closed during the flash"); ok = false; }
+                }
+                else
+                {
+                    if (!closing)
+                    {
+                        closing = true;
+                        Console.WriteLine("   flash done after " + flashFrames + " frames (" + (flashFrames * Frame) + " ms)");
+                    }
+                    if (fold.Flash != 0f) { Console.WriteLine("   FAIL  the flash came back"); ok = false; }
+                    if (fold.Gap > prevGap) { Console.WriteLine("   FAIL  the gap grew"); ok = false; }
+                    Console.WriteLine("   frame " + frames + "   gap " + fold.Gap.ToString("0.00") + "   (" + fold.GapPixels + " px)");
+                }
+                prevFlash = fold.Flash;
+                prevGap = fold.Gap;
+            }
+            Console.WriteLine("   closed after " + frames + " frames (" + (frames * Frame) + " ms)");
+            if (fold.Active || fold.Gap != 0f || fold.GapPixels != 0) { Console.WriteLine("   FAIL  did not land exactly on zero"); ok = false; }
+            if (fold.Step(Frame, animationMs)) { Console.WriteLine("   FAIL  a finished fold still reports movement"); ok = false; }
+            Console.WriteLine();
+
+            // A second removal half way through the closing.
+            fold.Start(1, Width);
+            for (int i = 0; i < StripFold.FlashMs / Frame + 4; i++) fold.Step(Frame, animationMs);
+            float mid = fold.Gap;
+            fold.Start(3, 24f);
+            Console.WriteLine("second removal mid-fold (gap was " + mid.ToString("0.0") + "): now index " + fold.Index
+                              + ", gap " + fold.GapPixels + ", flash " + fold.Flash);
+            if (fold.Index != 3 || fold.GapPixels != 24 || fold.Flash != 1f) { Console.WriteLine("   FAIL  did not restart cleanly"); ok = false; }
+            frames = 0;
+            while (fold.Active && frames < 1000) { fold.Step(Frame, animationMs); frames++; }
+            if (fold.Active || fold.Gap != 0f) { Console.WriteLine("   FAIL  the second fold did not land"); ok = false; }
+
+            // Animation off: the first step shuts it.
+            fold.Start(0, Width);
+            fold.Step(Frame, 0);
+            Console.WriteLine("animation off: active after one step = " + fold.Active);
+            if (fold.Active || fold.Gap != 0f) { Console.WriteLine("   FAIL  animation off still folded"); ok = false; }
+
+            // A frame with no time in it does nothing.
+            fold.Start(0, Width);
+            if (fold.Step(0, animationMs) || fold.Flash != 1f) { Console.WriteLine("   FAIL  a zero-length frame moved"); ok = false; }
+            fold.Snap();
+            if (fold.Active || fold.GapPixels != 0) { Console.WriteLine("   FAIL  Snap left a gap"); ok = false; }
+            Console.WriteLine();
+
+            // Which changes fold.
+            Guid a = Guid.NewGuid(), b = Guid.NewGuid(), c = Guid.NewGuid(), d = Guid.NewGuid();
+            ok &= FoldCase("middle removed", new[] { a, b, c }, new[] { a, c }, 1);
+            ok &= FoldCase("first removed", new[] { a, b, c }, new[] { b, c }, 0);
+            ok &= FoldCase("last removed", new[] { a, b, c }, new[] { a, b }, 2);
+            ok &= FoldCase("one added", new[] { a, b }, new[] { a, b, c }, -1);
+            ok &= FoldCase("two removed", new[] { a, b, c, d }, new[] { a, d }, -1);
+            ok &= FoldCase("removed and reordered", new[] { a, b, c }, new[] { c, a }, -1);
+            ok &= FoldCase("reorder, new ids", new[] { a, b, c }, new[] { a, d, c }, -1);
+            ok &= FoldCase("same", new[] { a, b }, new[] { a, b }, -1);
+
+            Console.WriteLine();
+            Console.WriteLine(ok ? "OK" : "FAILED");
+            return ok ? 0 : 1;
+        }
+
+        static bool FoldCase(string what, Guid[] before, Guid[] after, int expected)
+        {
+            int got = StripFold.RemovedIndex(before, after);
+            bool ok = got == expected;
+            Console.WriteLine("   " + (ok ? "ok    " : "FAIL  ") + what + ": " + got + (ok ? "" : " (expected " + expected + ")"));
+            return ok;
         }
 
         /// <summary>

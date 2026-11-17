@@ -224,28 +224,100 @@ namespace DesktopSwitcher
                 uint pid = Native.GetOwningProcessId(windows[i]);
                 if (pid == 0 || pid == OwnPid || !tried.Add(pid)) continue;
 
-                string path = Native.GetProcessPath(pid);
-                string exe = path.Substring(path.LastIndexOf('\\') + 1);
-
-                // Fails closed. An unreadable path cannot be checked against NeverForce,
-                // and terminating whatever it is might be ending Explorer and the taskbar
-                // with it. A process whose name cannot be read is very likely one that
-                // cannot be terminated either, so little is given up.
-                if (exe.Length == 0)
+                string exe;
+                string refusal = Refusal(pid, out exe);
+                if (refusal != null)
                 {
-                    Log.Write("closer: will not force pid " + pid + ", its exe could not be read");
-                    continue;
-                }
-
-                if (NeverForce.Contains(exe))
-                {
-                    Log.Write("closer: will not force " + exe);
+                    Log.Write("closer: will not force " + (exe.Length > 0 ? exe : "pid " + pid) + ", " + refusal);
                     continue;
                 }
 
                 bool ok = Native.KillProcess(pid);
                 Log.Write("closer: force " + exe + (ok ? " ended" : " refused"));
             }
+        }
+
+        /// <summary>
+        /// Whether Force would even try this window's process. The progress window asks so
+        /// a File Explorer row says "can't be forced" rather than offering a button that
+        /// does nothing - the same rules Force applies, from the same place, so the two
+        /// cannot disagree.
+        /// </summary>
+        public static bool CanForce(IntPtr hwnd)
+        {
+            uint pid = Native.GetOwningProcessId(hwnd);
+            if (pid == 0 || pid == OwnPid) return false;
+            string exe;
+            return Refusal(pid, out exe) == null;
+        }
+
+        /// <summary>
+        /// Why a process is not to be forced, or null when it may be.
+        ///
+        /// Fails closed. An unreadable path cannot be checked against NeverForce, and
+        /// terminating whatever it is might be ending Explorer and the taskbar with it. A
+        /// process whose name cannot be read is very likely one that cannot be terminated
+        /// either, so little is given up.
+        /// </summary>
+        static string Refusal(uint pid, out string exe)
+        {
+            string path = Native.GetProcessPath(pid);
+            exe = path.Substring(path.LastIndexOf('\\') + 1);
+
+            if (exe.Length == 0) return "its exe could not be read";
+            if (NeverForce.Contains(exe)) return "it is never forced";
+            return null;
+        }
+
+        /// <summary>
+        /// The windows a force of this one would also end, and the app they belong to: every
+        /// other top-level window of the same process, on any desktop or pinned to all,
+        /// less <paramref name="excluding"/> - the run's own still-open windows, which are
+        /// being closed anyway.
+        ///
+        /// What the per-row Force asks before it acts. Forcing ends a process, not a window
+        /// (see the class comment), so the one Chrome window holding up a desktop takes the
+        /// user's other Chrome windows with it - including ones they unticked on this very
+        /// desktop to keep. One click on a row that looks like it is about one window must
+        /// not do that unannounced.
+        ///
+        /// From the inventory's cached sweep, refreshed if stale: only ever asked on a click.
+        /// </summary>
+        public int OthersOfProcess(IntPtr hwnd, ICollection<IntPtr> excluding, out string app)
+        {
+            app = string.Empty;
+            uint pid = Native.GetOwningProcessId(hwnd);
+            if (pid == 0) return 0;
+            app = Native.GetAppName(pid);
+
+            var seen = new HashSet<IntPtr>();
+            int count = 0;
+
+            Guid[] ids;
+            try { ids = _api.GetDesktopIds(); }
+            catch (Exception ex)
+            {
+                // Mid-restart. Zero others is the answer that skips the confirmation, so
+                // say so where a "why did it not ask" question would look.
+                Log.Write("closer: desktop list failed counting others - " + ex.Message);
+                return 0;
+            }
+
+            var lists = new List<IList<WindowEntry>>();
+            for (int i = 0; i < ids.Length; i++) lists.Add(_inventory.WindowsOn(ids[i]));
+            lists.Add(_inventory.PinnedWindows());
+
+            foreach (IList<WindowEntry> list in lists)
+            {
+                for (int i = 0; i < list.Count; i++)
+                {
+                    IntPtr h = list[i].Handle;
+                    if (h == hwnd || !seen.Add(h)) continue;
+                    if (excluding != null && excluding.Contains(h)) continue;
+                    if (Native.GetOwningProcessId(h) == pid) count++;
+                }
+            }
+            return count;
         }
     }
 }

@@ -4,11 +4,11 @@ using System.Collections.Generic;
 namespace DesktopSwitcher
 {
     /// <summary>
-    /// What a close-all actually closes once CloseSelectDialog has been answered.
+    /// What a close-all actually closes once CloseAllWindow's confirmation has been answered.
     ///
     /// Apart from Controller so --closeall can drive exactly this rule against real windows,
     /// the way MarkSync is apart for --markstress. The controller takes the closeable list
-    /// again after the dialog (the dialog pumps messages, so the desktop moved on under it)
+    /// again after the answer (the window is modeless, so the desktop moved on under it)
     /// and hands that list and the ticked handles here.
     /// </summary>
     static class CloseSelection

@@ -52,11 +52,17 @@ Passing WSL-relative paths fails — `csc` resolves them against the wrong UNC b
 ```bash
 OUT=$(wslpath -w /mnt/c/Users/Public/dswtest.exe)
 ICO=$(wslpath -w "$PWD/assets/DesktopSwitcher.ico")
+WPF='C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF'
 /mnt/c/Windows/Microsoft.NET/Framework64/v4.0.30319/csc.exe \
   -nologo -target:exe -platform:x64 -optimize+ -out:"$OUT" -win32icon:"$ICO" \
   -r:System.dll -r:System.Core.dll -r:System.Drawing.dll -r:System.Windows.Forms.dll \
+  -r:"$WPF\\UIAutomationClient.dll" -r:"$WPF\\UIAutomationTypes.dll" \
   -recurse:$(wslpath -w "$PWD/src")\\*.cs
 ```
+
+The two UI Automation references are how close-all reads what a save prompt asks
+([DialogText.cs](src/model/DialogText.cs)). They ship with .NET 4.8 like the rest, but in
+the `WPF\` subfolder, which `csc` does not search, so they are named in full.
 
 `-target:exe` gives the console build, which is the one that can print selftest output.
 `-target:winexe` is the shipped, windowed build. `-win32icon:` is what puts the icon on the
@@ -126,6 +132,7 @@ shell.
 | `--where <title>` | whether a window is on the current desktop |
 | `--anim [ms]` | steps the strip's easing headlessly and prints each frame; needs no shell at all |
 | `--glide` | the strip's glide to a moved tray edge, headlessly: no jump on the first frame, only toward the target, lands exactly, a mid-glide retarget is absorbed |
+| `--fold [ms]` | a removed desktop's button folding away, headlessly: the flash holds the gap and fades, the gap only shrinks, lands on zero and stops, a second removal restarts cleanly, animation off means no fold; and which row changes count as exactly one removal |
 | `--slide [ms]` | the same for the hover panel's travel between buttons, in both styles: placement, the pinned bottom edge, the row-block origin, the accent stub |
 | `--publicip` | asks each public IP service once over HTTPS and prints the address, which one answered, and how long it took - the one selftest that goes online |
 | `--hotkeys` | the configured desktop shortcuts, each registered and released at once: `free`, or taken. Beside the running app its own keys read as taken |
@@ -137,13 +144,15 @@ shell.
 `--remove`, `--pin <title> on|off` (pins or unpins a real window, printing its pin kind either side), `--rename`, `--move`, `--reorder`, `--reordertest` (adds three scratch desktops on the end, reorders only those, removes them), `--soak`, `--watch`, `--service`, `--testwindow`,
 `--strip`, `--settings` (opens the Settings window standalone; prints changes, saves nothing),
 `--markstress [seed]` (about a minute: a test window of strips driven with synthetic mouse messages - leave the pointer alone - then four scratch desktops reordered, added and removed; writes no marks, cleans up after itself, leaves `%TEMP%\markstress-sheet.png` to look over),
-`--closeall` (about 25 s of throwaway desktops and test windows flashing up; it only ever closes
-its own windows, on desktops it creates, and cleans up after every scenario).
+`--closeall [filter]` (about a minute of throwaway desktops and test windows flashing up; it only ever closes
+its own windows, on desktops it creates, and cleans up after every scenario. One scenario also opens a test
+window on the current desktop for about a second, a second window of a test app, to prove Force asks twice.
+A filter runs only the scenarios whose name contains it - `--closeall "answered Save"`).
 
 A clean compile with zero warnings plus `--list`, `--desktops` and `--taskbar` returning
 sane live data is the baseline any change should clear.
 
-Some things can only be checked by eye, and no command covers them: how a drag to reorder looks and feels, how the close-all panel and its checklist dialog look, hover panel placement
+Some things can only be checked by eye, and no command covers them: how a drag to reorder looks and feels, how the close-all window looks through its three phases - the checklist turning into progress, rows folding and stuck ones rising, an armed Force, the done state fading - and a removed desktop's button folding away on the strip, hover panel placement
 and timing, menu appearance, the Settings window's look, how the highlight animation *looks*, the pin mark and its flash in the modern style, on a marked button and on a light taskbar, behaviour across an
 Explorer restart, and anything on a second monitor. `--anim` and `--slide` cover the arithmetic under
 the animation - that it converges, lands exactly and stops - but nothing about how it
@@ -196,6 +205,8 @@ it before the next went on top.
 | **M21** | **Desktop marks**: two letters, a symbol or a colour beside a desktop's shrunk number, set from **Set mark...** on its menu, so desktops holding the same apps can be told apart. `MarkPicker` previews every edit on the strip live. Marked buttons are wider, so the strip's `Layout` now gives every button its own width and left edge, and the drag's step-aside, drop slot and landing (`PassOffset`, `DropSlot`, `SlotLeft`) work over mixed widths. Marks are kept by GUID in `marks.ini` (`MarkStore`); a reorder's new GUIDs reach it through `DesktopService.Recreated`, raised before `DesktopsChanged`, and pruning is held off during a reorder. A removed desktop's mark goes to the picker's Recent row; in the first 15 s after start a vanished desktop's mark can be adopted by the unmarked desktop at its old position, in case Windows recreated the desktops at login. An empty marked desktop dims its mark in place of the dot. `--marks` checks it all without writing; `--reordertest` now checks `Recreated` too. `MarkSync` holds the controller's rules so `--markstress` can drive the same code: synthetic drags, clicks and stray buttons over random mixed-width rows checked against an independent oracle, the settled underline read back off the screen, a rendering sheet, and random reorders of marked scratch desktops through the real shell. It found three bugs, all fixed: a second "Set mark..." while a picker was open opened a second picker, and OK in the first then saved onto the second desktop (one picker at a time now, and the dialog-open flag is a count); at `buttonWidth` 16 a marked button was 26 px and its mark drew over the neighbours (`MarkMinWidth` 40, and the mark is clipped to its button); and, from before marks, the classic underline and lit cell were drawn antialiased, half a pixel soft at both ends (`FillCrisp`). The selftests log to the app's own `log.txt`, so `--marks`'s synthetic adoptions show up there - they are not the app's. Later the 32 Segoe MDL2 symbols, too thin beside the numbers, became Lucide icons stroked at 2.6 (`MarkIcons`, drawn by `MarkPainter` through `SvgPath`), chosen from mocks of other Segoe faces, fattened MDL2 outlines and filled sets. Stored as `icon:<key>`; an old `glyph:` the picker offered reads back as its icon. The strip's numbers and mark letters then moved from Segoe UI to Bahnschrift SemiBold to match the icons' weight (`SwitcherStrip.StripFace`; the modern current number is Bahnschrift Bold), Segoe UI Semibold and Bold having barely shown at strip size. |
 
 | **M22** | **Pin a window to all desktops**: Ctrl+Alt+P (`pinShortcut`) and **Pin/Unpin** beside Send here on a desktop's menu, both through `VirtualDesktopApi.SetViewPinned` (`IVirtualDesktopPinnedApps`, moved out of `CloseAllStress`). `--pinned` found that a pinned window reports one of two fixed GUIDs in place of its desktop, one per kind - `GetPinKind` reads them, and is the only answer that tells a window pin from an app pin (`IsViewPinned` is true for both). `--pin` found what UnpinView does to an app pin: it exempts that one window and leaves the app pinned. Feedback is on the strip, not in tray balloons: a small pin in the current desktop's corner while the focused window is pinned (`pinMark`; accent for an app pin), pushed on focus change and the reconcile tick, flashed by the shortcut on its own 650 ms clock - mocked in four placements first. Sending a pinned window to a desktop unpins it, so Send stays enabled. The hover panel lists pinned windows on every desktop under "Pinned to all desktops" - before, they were on no panel, filed under their pin GUID. That also found an occupancy bug: the cheap sweep counted pin GUIDs as desktops and could stop before reaching a real one, dropping its dot; reproduced against the old build, fixed. |
+
+| **M23** | **Close-all as one window**, from a browser mock. `CloseSelectDialog` and `CloseProgressWindow` became `CloseAllWindow`: the checklist turns into the progress in the same rows (`CloseList`), unticked rows stay as "kept", the one-window case uses it too (no box), and it is modeless throughout - the controller holds `BeginAsking` while it confirms. Stuck rows rise to the top and closed ones fold away, under an eased bar; done holds 1.5 s and fades. Each stuck row has its own **Show** (across desktops by activating the window, so Windows follows it there - switching first and focusing after was refused once Explorer took the activation), **Force** (armed first, "End Chrome + 2 others?", when `WindowCloser.OthersOfProcess` finds windows outside the run - a force ends the process) and **Ask again** after a cancelled prompt. The row quotes the prompt: `DialogText` reads a Static, else UI Automation (a TaskDialog's text has no Win32 handle), else the caption, on a pool thread, two ticks after the prompt appears and once more if only the caption came back. Hung windows read **Not responding**. A removed desktop's button now flashes and folds shut on the strip (`StripFold`, for every removal), the strip re-placed each frame like the tray glide; `--fold` steps it. `--closeall` gained seven scenarios and a name filter. Measured against the old build under `--closeall`, scenario by scenario from a CPU series lined up with the log: the first version cost 16% of a core inside runs against 6.9%, nearly all of it re-laying-out the window every frame (9 ms a resize) and repainting every row; one `SetWindowPos` per resize, a resize every third frame, row bitmaps redrawn only on change and paint skipped outside the dirty area brought it to 12.4%, about 0.1-0.2 s of CPU per close-all. GDI and USER counts stay flat across 26 runs. UI Automation costs about 6 MB and four threads, once, from the first prompt that needs it. `Perf` writes the before-and-after lines. |
 
 Between M8 and M9, two fixes worth knowing: tooltip rows lead with the owning app resolved
 from the process, and the tooltip width is fixed rather than sized to content so it does not

@@ -18,8 +18,9 @@ namespace DesktopSwitcher
     /// outside can tell), hangs, or opens a new window as it goes.
     ///
     /// The run is the real CloseAllRun, over the real DesktopService, WindowInventory and
-    /// WindowCloser; only the confirmation is skipped, and the panel's buttons are pressed
-    /// through the run's own Go, Force and Cancel. Every scenario creates its own desktop
+    /// WindowCloser; only the confirmation is skipped, and the window's buttons are pressed
+    /// through the run's own methods - Show, ForceRow, Force, AskAgain, Cancel - which are
+    /// what the buttons call. Every scenario creates its own desktop
     /// and is cleaned up in a finally - test processes killed, the desktop removed if the
     /// run did not, the user switched back - whether it passed, failed or threw.
     ///
@@ -43,6 +44,22 @@ namespace DesktopSwitcher
 
             var form = new TargetForm(args[1], args[2], 0);
             form.Show();
+
+            if (args[1] == "twin")
+            {
+                // A second window in the same process, on whichever desktop is current - the
+                // user's, since only the first is moved to the test desktop. Late, so the
+                // harness's MainWindowHandle finds the first. What a browser with a window on
+                // another desktop looks like to a Force.
+                var later = new Timer();
+                later.Interval = 300;
+                later.Tick += delegate
+                {
+                    later.Stop();
+                    new TargetForm("ignore", args[2] + " twin", 40).Show();
+                };
+                later.Start();
+            }
             Application.Run(new ApplicationContext());
             return 0;
         }
@@ -109,6 +126,7 @@ namespace DesktopSwitcher
                         return;
 
                     case "ignore":
+                    case "twin":
                         // An in-window question: open, enabled, nothing to see from outside.
                         e.Cancel = true;
                         return;
@@ -171,8 +189,18 @@ namespace DesktopSwitcher
                 Text = TitlePrefix + "Save changes?";
                 ShowInTaskbar = false;
                 StartPosition = FormStartPosition.CenterParent;
-                Size = new Size(260, 110);
+                Size = new Size(300, 110);
+
+                // The question as text inside the dialog, where a real one has it, so the
+                // close-all row's quote is read the way it is for a real prompt: through UI
+                // Automation, not off the caption.
+                var label = new Label();
+                label.Text = Question;
+                label.Dock = DockStyle.Fill;
+                Controls.Add(label);
             }
+
+            public const string Question = "Do you want to save changes to the test window?";
 
             protected override void WndProc(ref Message m)
             {
@@ -207,8 +235,20 @@ namespace DesktopSwitcher
         static string _scenario;
         static int _pass, _fail, _counter;
 
+        static string _filter;
+
         public static int Run(VirtualDesktopApi api)
         {
+            return Run(api, null);
+        }
+
+        /// <param name="filter">
+        /// Only the scenarios whose name contains this, ignoring case - for measuring one
+        /// thing, or chasing one failure, without a minute of windows flashing up for the rest.
+        /// </param>
+        public static int Run(VirtualDesktopApi api, string filter)
+        {
+            _filter = filter;
             _api = api;
             Console.WriteLine("Close-all stress test. Every window it closes is one of its own, on a");
             Console.WriteLine("desktop it creates; each scenario cleans up after itself.");
@@ -246,7 +286,13 @@ namespace DesktopSwitcher
                 Do("removing takes every window, whatever was ticked", RemoveTakesAll);
                 Do("Show brings up a minimized window asking inside itself", ShowMinimized);
                 Do("Show gives a real dialog the keyboard", ShowDialogFocus);
-                Do("Go there, then Show, to a real dialog", GoThenShow);
+                Do("Show from another desktop, to a real dialog", ShowFromElsewhere);
+                Do("the row quotes the dialog's question", QuestionRead);
+                Do("stuck rows come first", StuckFirst);
+                Do("Ask again after a cancelled prompt", AskAgain);
+                Do("a row's Force ends only that app", ForceOne);
+                Do("Force asks twice when the app has windows elsewhere", ForceArms);
+                Do("a hung window reads as not responding", HungRow);
 
                 _service.Dispose();
 
@@ -262,6 +308,7 @@ namespace DesktopSwitcher
 
         static void Do(string name, Scenario scenario)
         {
+            if (_filter != null && name.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0) return;
             _scenario = name;
             Console.WriteLine("- " + name);
             var clock = Stopwatch.StartNew();
@@ -614,7 +661,7 @@ namespace DesktopSwitcher
 
             CloseAllRun run = StartRun(false);
             Check(!run.Remove, "the run was told to keep the desktop");
-            Check(!run.ShowsHere, "on another desktop the first button is Go there, not Show");
+            Check(!run.ShowsHere, "the run's desktop is another one, so a Show would switch first");
 
             // One more window opened on the desktop while the run is going. A removing run
             // sweeps for these before it removes; this one must leave it, since nothing is
@@ -739,7 +786,7 @@ namespace DesktopSwitcher
 
             CloseAllRun run = StartRun(false);
             Check(WaitFor(delegate { return StateOf(ignore) == CloseState.StillOpen; }, 3000), "read as still open");
-            Check(run.ShowsHere, "on its own desktop the first button is Show");
+            Check(run.ShowsHere, "the run's desktop is the current one, so Show acts at once");
 
             run.Show();
             Check(run.LastShown == ignore, "Show picked the still-open window");
@@ -800,12 +847,13 @@ namespace DesktopSwitcher
         }
 
         /// <summary>
-        /// The two buttons in the order a user meets them: a run on another desktop, Go
-        /// there to the dialog, and - the button now reading Show - Show to make sure the
-        /// dialog has the keyboard. Also watches the switch's focus nudge, which used to
-        /// take the keyboard off a dialog and hand it to the dialog's own disabled owner.
+        /// A row's Show on a run whose desktop is another one: one click switches there and,
+        /// once the switch has settled, gives the dialog the keyboard. It used to take Go
+        /// there and then Show. Also watches the switch's focus nudge, which used to take
+        /// the keyboard off a dialog and hand it to the dialog's own disabled owner - and
+        /// which this Show now waits out rather than racing.
         /// </summary>
-        static void GoThenShow()
+        static void ShowFromElsewhere()
         {
             IntPtr modal = Spawn("modal");
 
@@ -814,28 +862,175 @@ namespace DesktopSwitcher
             // does not always - the dialog pulls the session over within ~70 ms, and read
             // after that this would be testing the lock, not the button.
             CloseAllRun run = StartRun();
-            Check(!run.ShowsHere, "from another desktop the button is Go there");
+            Check(!run.ShowsHere, "the run's desktop is another one");
             Check(WaitFor(delegate { return StateOf(modal) == CloseState.Prompting; }, 3000), "dialog read as asking to save");
             if (_api.GetCurrentId() == _scratch)
                 Console.WriteLine("    note: the dialog pulled the session over - the foreground lock was refused here");
             IntPtr popup = Native.GetLastActivePopup(modal);
 
-            run.Go();
-            Check(WaitFor(delegate { return _api.GetCurrentId() == _scratch; }, 2000), "Go there switched to the desktop");
-            Pump(600);   // past the nudge
-            Console.WriteLine("    note: after the switch settled, foreground is " + DescribeForeground());
-            Check(Native.GetForegroundWindow() != modal || !Native.IsWindowEnabled(popup),
-                  "the nudge did not hand the keyboard to the dialog's disabled owner");
-            Check(run.ShowsHere, "once there, the button reads Show");
+            // Windows only lets a process with the foreground give it away. Here that is the
+            // harness, which has it only if nothing else took it since it started; the app
+            // has it from the click. Taken here so the check below means what it says.
+            Native.ForceForeground(_pump.Handle);
 
-            run.Show();
-            Check(run.LastFocused == popup, "Show chose the dialog for the keyboard");
-            bool focused = WaitFor(delegate { return Native.GetForegroundWindow() == popup; }, 1500);
-            Check(focused, "Show gave the dialog the keyboard" + (focused ? "" : " - foreground is " + DescribeForeground()));
+            run.Show(modal);
+            Check(WaitFor(delegate { return _api.GetCurrentId() == _scratch; }, 2000), "Show took the session to the desktop");
+            Check(WaitFor(delegate { return run.LastFocused == popup; }, 2000), "and chose the dialog for the keyboard");
+            Check(run.LastShown == modal, "for the row it was pressed on");
+            if (run.LastFocusGranted)
+            {
+                bool focused = WaitFor(delegate { return Native.GetForegroundWindow() == popup; }, 1500);
+                Pump(400);   // past anything the switch does afterwards, which must not take it back
+                focused = focused && Native.GetForegroundWindow() == popup;
+                Check(focused, "the dialog has the keyboard, and kept it"
+                      + (focused ? "" : " - foreground is " + DescribeForeground()));
+            }
+            else
+            {
+                Console.WriteLine("    note: Windows refused this process the foreground (" + DescribeForeground()
+                                  + "), so the keyboard check proves nothing here and is skipped");
+            }
 
             Native.PostMessage(popup, WM_ANSWER, IntPtr.Zero, IntPtr.Zero);
             WaitFor(delegate { return run.HasEnded; }, 4000);
             Check(run.RemovedDesktop && !DesktopExists(_scratch), "answered, desktop removed");
+        }
+
+        /// <summary>
+        /// The dialog's question, read through UI Automation off the label inside it rather
+        /// than off its caption - the caption here is different on purpose, so the check
+        /// tells the two apart.
+        /// </summary>
+        static void QuestionRead()
+        {
+            IntPtr modal = Spawn("modal");
+
+            CloseAllRun run = StartRun();
+            Check(WaitFor(delegate { return StateOf(modal) == CloseState.Prompting; }, 3000), "dialog read as asking to save");
+            // The caption may come first - a read the moment the dialog appears can find it
+            // still empty - and is replaced once the retry reads the text inside.
+            var clock = Stopwatch.StartNew();
+            bool read = WaitFor(delegate { return run.QuestionOf(modal) == AnswerDialog.Question; }, 4000);
+            Check(read, "the row quotes the text inside the dialog, after " + clock.ElapsedMilliseconds
+                        + " ms: \"" + run.QuestionOf(modal) + "\"");
+
+            IntPtr popup = Native.GetLastActivePopup(modal);
+            Native.PostMessage(popup, WM_ANSWER, IntPtr.Zero, IntPtr.Zero);
+            WaitFor(delegate { return run.HasEnded; }, 4000);
+            Check(run.RemovedDesktop, "answered, desktop removed");
+        }
+
+        /// <summary>
+        /// The order the window shows: a window that got stuck goes above one listed before
+        /// it that is still closing, and above one that closed.
+        /// </summary>
+        static void StuckFirst()
+        {
+            IntPtr slow = Spawn("slow");
+            IntPtr close = Spawn("close");
+            IntPtr modal = Spawn("modal");
+
+            CloseAllRun run = StartRun();
+            Check(WaitFor(delegate { return StateOf(modal) == CloseState.Prompting; }, 3000), "dialog read as asking to save");
+            IntPtr[] order = run.DisplayOrder;
+            Check(order.Length == 3 && order[0] == modal, "the asking window is first, though it was listed last");
+            Check(WaitFor(delegate { return StateOf(close) == CloseState.Closed; }, 2000), "the plain window closed");
+            order = run.DisplayOrder;
+            Check(order[order.Length - 1] == close || StateOf(slow) == CloseState.Closed,
+                  "a closed window sorts after one still closing");
+
+            Native.PostMessage(Native.GetLastActivePopup(modal), WM_ANSWER, IntPtr.Zero, IntPtr.Zero);
+            WaitFor(delegate { return run.HasEnded; }, 4000);
+            Check(run.RemovedDesktop, "desktop removed");
+        }
+
+        /// <summary>
+        /// A prompt answered Cancel leaves the window kept open; Ask again puts the question
+        /// back, and answering it this time lets the run finish.
+        /// </summary>
+        static void AskAgain()
+        {
+            IntPtr modal = Spawn("modal");
+
+            CloseAllRun run = StartRun();
+            Check(WaitFor(delegate { return StateOf(modal) == CloseState.Prompting; }, 3000), "dialog read as asking to save");
+            Native.PostMessage(Native.GetLastActivePopup(modal), Native.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+            Check(WaitFor(delegate { return StateOf(modal) == CloseState.KeptOpen; }, 3000), "Cancel read as kept open");
+
+            run.AskAgain(modal);
+            Check(StateOf(modal) == CloseState.Closing, "Ask again set it closing");
+            Check(WaitFor(delegate { return StateOf(modal) == CloseState.Prompting; }, 3000), "and the question came back");
+
+            Native.PostMessage(Native.GetLastActivePopup(modal), WM_ANSWER, IntPtr.Zero, IntPtr.Zero);
+            WaitFor(delegate { return run.HasEnded; }, 4000);
+            Check(run.RemovedDesktop && !Native.IsWindow(modal), "answered, window closed, desktop removed");
+        }
+
+        /// <summary>A row's Force ends that row's app and leaves the other stuck one alone.</summary>
+        static void ForceOne()
+        {
+            IntPtr hang = Spawn("hang");
+            IntPtr ignore = Spawn("ignore");
+
+            CloseAllRun run = StartRun();
+            Check(WaitFor(delegate
+            {
+                return StateOf(hang) == CloseState.StillOpen && StateOf(ignore) == CloseState.StillOpen;
+            }, 3000), "both read as still open");
+
+            run.ForceRow(ignore, false);
+            Check(run.LastArmed == null, "an app with no other windows was forced on one click");
+            Check(WaitFor(delegate { return StateOf(ignore) == CloseState.Closed; }, 3000), "the forced window closed");
+            Check(StateOf(hang) != CloseState.Closed && Native.IsWindow(hang), "the other is still there");
+
+            run.Force();
+            WaitFor(delegate { return run.HasEnded; }, 4000);
+            Check(run.RemovedDesktop, "Force all finished it, desktop removed");
+        }
+
+        /// <summary>
+        /// A process with a second window on the user's desktop: the first Force only arms,
+        /// naming what else it would end, and nothing is forced; the second ends the app,
+        /// and the twin with it - which is exactly why it asked.
+        /// </summary>
+        static void ForceArms()
+        {
+            IntPtr main = Spawn("twin");
+            IntPtr twin = IntPtr.Zero;
+            Check(WaitFor(delegate { twin = FindTestWindow("twin " + _counter + " twin"); return twin != IntPtr.Zero; }, 3000),
+                  "the app's second window opened on the user's desktop");
+
+            CloseAllRun run = StartRun();
+            Check(WaitFor(delegate { return StateOf(main) == CloseState.StillOpen; }, 3000), "read as still open");
+
+            run.ForceRow(main, false);
+            Check(run.LastArmed != null && run.LastArmed.Contains("+ 1 other"), "the first Force armed: \"" + run.LastArmed + "\"");
+            Pump(500);
+            Check(Native.IsWindow(main) && Native.IsWindow(twin), "and nothing was forced");
+
+            run.ForceRow(main, true);
+            WaitFor(delegate { return run.HasEnded; }, 4000);
+            Check(run.RemovedDesktop, "the second did it, desktop removed");
+            Check(!Native.IsWindow(twin), "and the twin went with it, as the label said");
+        }
+
+        /// <summary>
+        /// A window whose thread stops pumping reads as hung once Windows calls it that - about
+        /// five seconds - and the row offers only Force.
+        /// </summary>
+        static void HungRow()
+        {
+            IntPtr hang = Spawn("hang");
+
+            CloseAllRun run = StartRun();
+            var clock = Stopwatch.StartNew();
+            bool hung = WaitFor(delegate { return run.HungOf(hang); }, 9000);
+            Check(hung, "read as not responding after " + clock.ElapsedMilliseconds + " ms");
+            Check(StateOf(hang) == CloseState.StillOpen, "its state is still StillOpen, as before");
+
+            run.Force();
+            WaitFor(delegate { return run.HasEnded; }, 4000);
+            Check(run.RemovedDesktop, "forced, desktop removed");
         }
 
         // --- helpers -----------------------------------------------------------------

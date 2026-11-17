@@ -534,6 +534,22 @@ namespace DesktopSwitcher
         [DllImport("user32.dll")]
         public static extern IntPtr GetLastActivePopup(IntPtr hWnd);
 
+        /// <summary>
+        /// True when the window's thread has not pumped messages for about five seconds -
+        /// what Windows itself means by "Not responding", and the same test the ghost
+        /// window and Task Manager use. Cheap: it reads a timestamp, it sends nothing, so
+        /// asking a hung window cannot hang the asker.
+        /// </summary>
+        [DllImport("user32.dll")]
+        public static extern bool IsHungAppWindow(IntPtr hWnd);
+
+        /// <summary>GDI (0) or USER (1) objects a process holds. For the perf log only.</summary>
+        [DllImport("user32.dll")]
+        public static extern uint GetGuiResources(IntPtr process, uint flags);
+
+        public const uint GR_GDIOBJECTS = 0;
+        public const uint GR_USEROBJECTS = 1;
+
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool AttachThreadInput(uint attachTo, uint attachFrom, bool attach);
 

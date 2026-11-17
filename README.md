@@ -86,20 +86,29 @@ Anything impossible right now is greyed rather than hidden — switching to the 
 are already on, sending a window that is already there.
 
 **Close all and remove** clears a desktop and takes it away without visiting it. It asks
-first, then closes each window the way its own X would, so an app with unsaved work stops to
-ask about saving rather than losing it. A small panel opens at once and ticks each window off
-as it goes. A window still there after a second is marked: **asking to save** when the app
-uses a real dialog (Brave does), **still open** when it draws its question inside its own
-window (Terminal and Notepads do), since those cannot be told apart from a slow close. The
-questions are on the other desktop, so **Go there** takes you to them, and the panel, which
-shows on every desktop, comes along. Once you are on that desktop the same button reads
-**Show**: it brings up the window holding things up, restoring it if it was minimized and
-handing the keyboard to its save dialog if it has one - a question asked inside a minimized
-window is otherwise asked where nobody can see it. **Force close** ends whatever is still open without
-saving (which takes those apps' windows on other desktops too), and **Cancel** stops,
-leaving what closed closed. The desktop is removed the moment it is empty, never before.
-Windows pinned with Task View's **Show this window on all desktops** are left alone, since
-closing one would take it off every desktop.
+first, listing the desktop's windows with their icons, then closes each one the way its own
+X would, so an app with unsaved work stops to ask about saving rather than losing it. The
+list you just answered becomes the progress: each tick turns into a spinner, then a check,
+and the closed rows fold away, so what is left is what still needs you - stuck windows rise
+to the top, under a bar counting them off. A window still there after a second says why:
+**Asks: Do you want to save changes to Untitled?** when the app uses a real dialog - the
+question is read off the dialog itself - **Still open** when it draws its question inside
+its own window (Terminal and Notepads do), since that cannot be told apart from a slow
+close, and **Not responding** when Windows says so.
+
+Each of those rows carries its own buttons. **Show** brings that window up and gives the
+keyboard to its question, switching to its desktop first if need be - restoring it if it
+was minimized, since a question asked inside a minimized window is asked where nobody can
+see it. The panel shows on every desktop, so it comes along. **Force** ends that window's
+app without saving. An app is one process, so forcing it takes its other windows too; when
+it has any - a browser window on another desktop, or one you unticked to keep - the button
+first changes to say so, **End Chrome + 2 others?**, and only a second click does it.
+**Ask again** puts the question back to a window whose save prompt you answered Cancel.
+**Force all** at the bottom does the same for every window left, under the same rule, and
+**Cancel** stops, leaving what closed closed. The desktop is removed the moment it is empty,
+never before; the panel says so for a moment and fades. Windows pinned with Task View's
+**Show this window on all desktops** are left alone, since closing one would take it off
+every desktop.
 
 **Close all windows**, just above it, is the same thing without the removal: the desktop
 stays, with its name, mark and place in the row. It is the only one of the two on your last
@@ -112,7 +121,12 @@ editor somewhere else first. **All** at the top ticks or clears the whole list. 
 unticked, **Close and remove** greys out and **Close N** appears beside it, which closes the
 ticked ones and keeps the desktop: removing it would make Windows carry the kept windows to
 a neighbour. Pinned windows are listed greyed, as staying. A window that opens while the
-dialog is up was not on the list, so it is not closed.
+dialog is up was not on the list, so it is not closed. The windows you kept stay in the
+list while the rest close, greyed and marked **kept**.
+
+However a desktop goes - a middle click, its menu, Task View, close-all - its button
+flashes and folds shut rather than the row snapping closed, so it is clear a desktop was
+removed and not just switched away from.
 
 Dragging a number, or **Move left** and **Move right** on its menu, changes a desktop's
 place in the row, and Task View's order changes with it. Windows 10 has no way to reorder desktops, so this rebuilds the row: the

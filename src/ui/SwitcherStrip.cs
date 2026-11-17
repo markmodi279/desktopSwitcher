@@ -326,6 +326,9 @@ namespace DesktopSwitcher
 
         Timer _frameTimer;            // runs only while something is actually moving
 
+        /// <summary>A removed desktop's button closing up - see StripFold.</summary>
+        readonly StripFold _fold = new StripFold();
+
         // The pin mark in the current button's corner - see SetFocusPin.
         PinKind _pinKind;                         // the focused window, as last pushed
         PinKind _pinDrawn = PinKind.Window;       // the last kind shown, so a mark fading out keeps its colour
@@ -417,6 +420,13 @@ namespace DesktopSwitcher
 
         /// <summary>Left click on a desktop button.</summary>
         public event Action<Guid> SwitchRequested;
+
+        /// <summary>
+        /// Width changed mid-animation - a removed desktop's gap closing. The controller
+        /// re-places the strip on each one, as the tray glide does, so the buttons right of
+        /// the gap hold still on screen while the ones left of it slide over.
+        /// </summary>
+        public event EventHandler WidthAnimating;
 
         /// <summary>Middle click on a desktop button, or RemoveClick.</summary>
         public event Action<Guid> RemoveRequested;
@@ -542,9 +552,15 @@ namespace DesktopSwitcher
             var widths = new int[n];
             var lefts = new int[n];
 
+            // A removed desktop's gap, while it closes, sits in front of the button that took
+            // its index - or at the end, when the last one went.
+            int gap = _fold.GapPixels;
+
             int x = 0;
             for (int i = 0; i < n; i++)
             {
+                if (i == _fold.Index) x += gap;
+
                 DesktopMark mark = null;
                 if (MarkProvider != null)
                 {
@@ -557,6 +573,7 @@ namespace DesktopSwitcher
                 lefts[i] = x;
                 x += widths[i];
             }
+            if (_fold.Active && _fold.Index >= n) x += gap;
 
             bool resized = x != _buttonsWidth || !SameWidths(widths, _widths);
             _marks = marks;
@@ -673,6 +690,15 @@ namespace DesktopSwitcher
             if (x < 0) return -1;
 
             int buttonsWidth = _buttonsWidth;
+
+            // The gap a removed desktop left belongs to no button. Without this a click in it
+            // landed on the button to its left, which is not under the pointer.
+            if (_fold.Active)
+            {
+                Rectangle gap = FoldBounds(0);
+                if (x >= gap.Left && x < gap.Right) return -1;
+            }
+
             if (x < buttonsWidth)
             {
                 for (int i = _desktops.Count - 1; i >= 0; i--)
@@ -733,6 +759,18 @@ namespace DesktopSwitcher
             // already correct rather than sliding in from the left edge.
             bool sameSet = SameSet(_desktops, desktops);
 
+            // Exactly one desktop gone, everything else where it was: fold its button away
+            // rather than snapping the row shut. Not under a press - its drag arithmetic is
+            // done against the row as it stands - and not with animation off.
+            int removed = -1;
+            float removedWidth = 0;
+            if (!sameSet && _animationMs > 0 && _pressIndex < 0 && !_disposed)
+            {
+                removed = StripFold.RemovedIndex(Ids(_desktops), Ids(desktops));
+                if (removed >= 0 && removed < _widths.Length) removedWidth = _widths[removed];
+                else removed = -1;
+            }
+
             // A desktop added or removed under a drag - from Task View, a hotkey, the shell -
             // leaves the drag pointing at positions that no longer mean what they did. Let
             // it go rather than drop something somewhere nobody chose. Our own drop never
@@ -767,6 +805,19 @@ namespace DesktopSwitcher
 
             SyncVisuals();
             if (!sameSet) Settle();
+
+            if (removed >= 0)
+            {
+                _fold.Start(removed, removedWidth);
+                Log.Write(delegate { return "strip: folding away desktop " + (removed + 1) + "'s button"; });
+                Layout();
+                SyncVisuals();
+                _barX = _barXTarget;
+                _barWidth = _barWidthTarget;
+                _foldFrames = 0;
+                _foldClock = Environment.TickCount;
+                Animate();
+            }
 
             // The drop that asked for this order. Settle has just put every button in its
             // slot, which for the dropped one means jumping from under the pointer; start it
@@ -1185,9 +1236,10 @@ namespace DesktopSwitcher
             // entirely above it.
             bool strip = Step(rate, flashRate);
             bool panel = _tooltip != null && _tooltip.Step(rate);
+            bool folding = StepFold(elapsed);
 
-            if (strip) Invalidate();
-            if (strip || panel) return;
+            if (strip || folding) Invalidate();
+            if (strip || panel || folding) return;
 
             // Everything is on its target. A permanently ticking 60Hz timer that repaints
             // nothing is not something a taskbar utility gets to do.
@@ -1241,6 +1293,7 @@ namespace DesktopSwitcher
             }
 
             if (_tooltip != null && !_tooltip.Settled) return false;
+            if (_fold.Active) return false;
 
             return _barX == _barXTarget && _barWidth == _barWidthTarget
                 && _barLevel == _barLevelTarget
@@ -1254,9 +1307,81 @@ namespace DesktopSwitcher
         /// </summary>
         void Settle()
         {
+            EndFold();
             Step(1f, 1f);
             if (_tooltip != null) _tooltip.Settle();
             if (_frameTimer != null) _frameTimer.Stop();
+        }
+
+        /// <summary>The gap a removed desktop left, in strip coordinates. Empty when none.</summary>
+        Rectangle FoldBounds(int height)
+        {
+            int gap = _fold.GapPixels;
+            if (gap <= 0) return Rectangle.Empty;
+            int right = _fold.Index < _desktops.Count ? _lefts[_fold.Index] : _buttonsWidth;
+            return new Rectangle(right - gap, 0, gap, height);
+        }
+
+        int _foldFrames;
+        int _foldClock;
+
+        /// <summary>
+        /// One frame of the fold. When the gap's whole-pixel width changes, the row is laid
+        /// out again and the strip re-placed; the bar is carried by the same amount when the
+        /// current desktop is right of the gap, so it stays under its button rather than
+        /// easing after it.
+        /// </summary>
+        bool StepFold(int elapsed)
+        {
+            if (!_fold.Active) return false;
+
+            int index = _fold.Index;
+            int before = _fold.GapPixels;
+            bool moved = _fold.Step(elapsed, _animationMs);
+            _foldFrames++;
+
+            int after = _fold.GapPixels;
+            if (after != before) ApplyGap(index, after - before);
+
+            if (!_fold.Active)
+            {
+                int ms = unchecked(Environment.TickCount - _foldClock);
+                int frames = _foldFrames;
+                Log.Write(delegate { return "perf: strip fold took " + ms + " ms over " + frames + " frames"; });
+            }
+            return moved;
+        }
+
+        void ApplyGap(int index, int delta)
+        {
+            Layout();
+            for (int i = index; i < _desktops.Count; i++)
+            {
+                if (!_desktops[i].IsCurrent) continue;
+                _barX += delta;
+                break;
+            }
+            SyncVisuals();
+
+            EventHandler handler = WidthAnimating;
+            if (handler != null) handler(this, EventArgs.Empty);
+        }
+
+        /// <summary>Closes a fold at once - anything that changes the row mid-fold.</summary>
+        void EndFold()
+        {
+            if (!_fold.Active) return;
+            int index = _fold.Index;
+            int gap = _fold.GapPixels;
+            _fold.Snap();
+            if (gap != 0) ApplyGap(index, -gap);
+        }
+
+        static Guid[] Ids(IList<Desktop> desktops)
+        {
+            var ids = new Guid[desktops.Count];
+            for (int i = 0; i < ids.Length; i++) ids[i] = desktops[i].Id;
+            return ids;
         }
 
         public void Invalidate()
@@ -1336,8 +1461,21 @@ namespace DesktopSwitcher
             if (statsIndex >= 0 && statsIndex < _visuals.Length)
                 DrawStatsButton(g, ButtonBounds(statsIndex, height), _visuals[statsIndex]);
 
+            DrawFold(g, height);
             DrawBar(g, height);
             DrawPin(g, height);
+        }
+
+        /// <summary>The gap's flash: the accent, fading, where the removed button was.</summary>
+        void DrawFold(Graphics g, int height)
+        {
+            if (!_fold.Active || _fold.Flash <= 0f) return;
+            Rectangle gap = FoldBounds(height);
+            if (gap.Width <= 0) return;
+
+            int alpha = (int)Math.Round(255 * 0.55f * _fold.Flash);
+            using (var brush = new SolidBrush(Color.FromArgb(alpha, _highlight)))
+                g.FillRectangle(brush, gap);
         }
 
         /// <summary>
@@ -2737,6 +2875,12 @@ namespace DesktopSwitcher
             _pressIndex = -1;
             _swallowUp = false;
             if (ReorderRequested == null || _desktops.Count < 2) return;
+
+            // No drag while a removed button folds away: the row is moving under the
+            // pointer and the window with it, and the drag's arithmetic assumes neither.
+            // A click is unaffected - it is decided on release, by HitTest, which knows
+            // the gap. The fold is half a second; a drag started inside it is a second try.
+            if (_fold.Active) return;
 
             int index = HitTest(x, y);
             if (index < 0 || index >= _desktops.Count) return;
