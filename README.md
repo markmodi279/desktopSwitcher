@@ -106,6 +106,14 @@ stays, with its name, mark and place in the row. It is the only one of the two o
 desktop, which Windows will not remove, and its confirmation says plainly that there it
 means every window you have open. A window you open while it runs is left alone.
 
+Both confirmations list the desktop's windows, each ticked. Untick the ones to keep and only
+the rest are asked to close - the way to clear everything but the editor without moving the
+editor somewhere else first. **All** at the top ticks or clears the whole list. With a window
+unticked, **Close and remove** greys out and **Close N** appears beside it, which closes the
+ticked ones and keeps the desktop: removing it would make Windows carry the kept windows to
+a neighbour. Pinned windows are listed greyed, as staying. A window that opens while the
+dialog is up was not on the list, so it is not closed.
+
 Dragging a number, or **Move left** and **Move right** on its menu, changes a desktop's
 place in the row, and Task View's order changes with it. Windows 10 has no way to reorder desktops, so this rebuilds the row: the
 desktops from the new position onward are recreated in order, and Windows carries each

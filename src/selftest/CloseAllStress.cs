@@ -241,6 +241,9 @@ namespace DesktopSwitcher
                 Do("closing the desktop you are on", OnCurrentDesktop);
                 Do("twenty windows at once", Many);
                 Do("Close all windows keeps the desktop", KeepsDesktop);
+                Do("a checklist closes only the ticked windows", SelectedOnly);
+                Do("the checklist after the desktop moved on under it", SelectionMovedOn);
+                Do("removing takes every window, whatever was ticked", RemoveTakesAll);
                 Do("Show brings up a minimized window asking inside itself", ShowMinimized);
                 Do("Show gives a real dialog the keyboard", ShowDialogFocus);
                 Do("Go there, then Show, to a real dialog", GoThenShow);
@@ -629,6 +632,85 @@ namespace DesktopSwitcher
                 Console.WriteLine("    note: the late window opened after the run ended; its check proves less");
             Check(Array.IndexOf(run.Handles, late) < 0, "the window opened mid-run was not picked up");
             Check(Native.IsWindow(late) && Native.IsWindowVisible(late), "and it is still open");
+        }
+
+        /// <summary>
+        /// The close-all checklist with one row unticked: the controller hands
+        /// CloseSelection the ticked handles and a fresh Closeable list, and runs what comes
+        /// back with remove off - a partial selection never removes. The dialog itself is
+        /// not driven; what it returns is a set of handles, and this is that set.
+        /// </summary>
+        static void SelectedOnly()
+        {
+            IntPtr a = Spawn("close");
+            IntPtr b = Spawn("close");
+            IntPtr keep = Spawn("close");
+
+            var ticked = new HashSet<IntPtr> { a, b };
+            _closer.Invalidate();
+            List<WindowEntry> chosen = CloseSelection.Resolve(false, ticked, _closer.Closeable(_scratch));
+            Check(chosen.Count == 2, "the two ticked windows resolve, and only those");
+
+            CloseAllRun run = StartRun(chosen, false);
+            WaitFor(delegate { return run.HasEnded; }, 6000);
+            Check(run.HasEnded, "run ended");
+            Check(WindowCloser.IsGone(a) && WindowCloser.IsGone(b), "both ticked windows closed");
+            Check(Array.IndexOf(run.Handles, keep) < 0, "the unticked window was never in the run");
+            Check(Native.IsWindow(keep) && Native.IsWindowVisible(keep), "and it is still open");
+            Check(!run.RemovedDesktop && DesktopExists(_scratch), "the desktop stays");
+        }
+
+        /// <summary>
+        /// The dialog pumps while it is up, so by the answer a ticked window may have closed
+        /// and a new one may have opened. The ticked one that went is dropped; the new one
+        /// was never on the list the user saw, so it is not closed either.
+        /// </summary>
+        static void SelectionMovedOn()
+        {
+            IntPtr a = Spawn("close");
+            IntPtr gone = Spawn("close");
+            IntPtr keep = Spawn("close");
+            var ticked = new HashSet<IntPtr> { a, gone };
+
+            // "While the dialog was up."
+            Native.PostMessage(gone, Native.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+            WaitFor(delegate { return WindowCloser.IsGone(gone); }, 3000);
+            IntPtr late = Spawn("close");
+
+            _closer.Invalidate();
+            List<WindowEntry> chosen = CloseSelection.Resolve(false, ticked, _closer.Closeable(_scratch));
+            Check(chosen.Count == 1 && chosen[0].Handle == a, "only the surviving ticked window resolves");
+
+            CloseAllRun run = StartRun(chosen, false);
+            WaitFor(delegate { return run.HasEnded; }, 6000);
+            Check(run.HasEnded, "run ended");
+            Check(WindowCloser.IsGone(a), "the ticked window closed");
+            Check(Native.IsWindow(keep) && Native.IsWindowVisible(keep), "the unticked window is still open");
+            Check(Native.IsWindow(late) && Native.IsWindowVisible(late), "the window that arrived is still open");
+            Check(DesktopExists(_scratch), "the desktop stays");
+        }
+
+        /// <summary>
+        /// Remove is only enabled with every row ticked, but the rule does not lean on that:
+        /// handed a partial set with removing on, it still returns every window, so a remove
+        /// can never leave one behind for the shell to carry to a neighbour.
+        /// </summary>
+        static void RemoveTakesAll()
+        {
+            IntPtr a = Spawn("close");
+            IntPtr b = Spawn("close");
+            IntPtr c = Spawn("close");
+
+            _closer.Invalidate();
+            List<WindowEntry> current = _closer.Closeable(_scratch);
+            List<WindowEntry> chosen = CloseSelection.Resolve(true, new HashSet<IntPtr> { a }, current);
+            Check(chosen.Count == current.Count && current.Count == 3, "every window resolves when removing");
+
+            CloseAllRun run = StartRun(chosen, true);
+            WaitFor(delegate { return run.HasEnded; }, 6000);
+            Check(run.HasEnded, "run ended");
+            Check(WindowCloser.IsGone(a) && WindowCloser.IsGone(b) && WindowCloser.IsGone(c), "all three closed");
+            Check(run.RemovedDesktop, "desktop removed");
         }
 
         const int SW_MINIMIZE = 6;

@@ -904,23 +904,48 @@ namespace DesktopSwitcher
         /// </summary>
         int Ask(string title, string body, params string[] buttons)
         {
-            Rectangle anchor = _strip != null ? _strip.ScreenBounds() : Rectangle.Empty;
-
             using (var dialog = new ConfirmDialog(title, body, buttons, _background,
-                                                   _host.DpiScale, anchor))
+                                                   _host.DpiScale, StripAnchor()))
             {
-                // The hover panel would otherwise open over the dialog; see SwitcherStrip.Asking.
-                BeginAsking();
-                try
-                {
-                    dialog.ShowDialog(this);
-                }
-                finally
-                {
-                    EndAsking();
-                }
+                ShowModal(dialog);
                 return dialog.Choice;
             }
+        }
+
+        /// <summary>What a dialog over the strip centres on: the strip, or nothing mid-teardown.</summary>
+        Rectangle StripAnchor()
+        {
+            return _strip != null ? _strip.ScreenBounds() : Rectangle.Empty;
+        }
+
+        /// <summary>
+        /// Shows a confirmation modally, with the strip told it is asking - the hover panel
+        /// would otherwise open over the dialog; see SwitcherStrip.Asking.
+        /// </summary>
+        void ShowModal(Form dialog)
+        {
+            BeginAsking();
+            try
+            {
+                dialog.ShowDialog(this);
+            }
+            finally
+            {
+                EndAsking();
+            }
+        }
+
+        /// <summary>
+        /// The close-all checklist's greyed rows: every window pinned to all desktops, less
+        /// our own (the Settings window can be pinned like any other), which is listed
+        /// nowhere else in the dialog and is no business of it.
+        /// </summary>
+        List<WindowEntry> PinnedRows()
+        {
+            var rows = new List<WindowEntry>();
+            foreach (WindowEntry w in _inventory.PinnedWindows())
+                if (Native.GetOwningProcessId(w.Handle) != WindowCloser.OwnPid) rows.Add(w);
+            return rows;
         }
 
         /// <summary>
@@ -967,28 +992,68 @@ namespace DesktopSwitcher
             bool removing = remove && _service.Count > 1;
             bool onlyOne = _service.Count == 1;
 
-            string count = windows.Count == 1 ? "1 window" : windows.Count + " windows";
-            string body = (onlyOne
-                    ? "This is your only desktop, so this is every window you have open: "
-                      + count + " will be asked to close"
-                    : count + " will be asked to close")
-                + ", as if you clicked each one's X. Apps with unsaved work will ask to save first. "
-                + (removing ? "The desktop is removed once it is empty."
-                            : "The desktop itself stays.");
-
             string title = removing
                 ? "Close all windows and remove \"" + desktop.DisplayName + "\"?"
                 : "Close all windows on \"" + desktop.DisplayName + "\"?";
 
-            // The safe button stays last, so Escape and a stray Enter both reach Cancel.
-            if (Ask(title, body, removing ? "Close and remove" : "Close all", "Cancel") != 0) return;
+            // What the user agreed to close, by handle. The plain dialog's one window, or
+            // the checklist's ticked rows.
+            ICollection<IntPtr> ticked;
+
+            if (windows.Count == 1)
+            {
+                // One window: the plain dialog it always was. A checklist of one box is a
+                // second way to say Cancel.
+                string body = (onlyOne
+                        ? "This is your only desktop, so this is every window you have open: "
+                          + "1 window will be asked to close"
+                        : "1 window will be asked to close")
+                    + ", as if you clicked each one's X. Apps with unsaved work will ask to save first. "
+                    + (removing ? "The desktop is removed once it is empty."
+                                : "The desktop itself stays.");
+
+                // The safe button stays last, so Escape and a stray Enter both reach Cancel.
+                if (Ask(title, body, removing ? "Close and remove" : "Close all", "Cancel") != 0) return;
+                ticked = new HashSet<IntPtr> { windows[0].Handle };
+            }
+            else
+            {
+                // The list shows the count, so the sentence no longer has to carry it.
+                string body = (onlyOne
+                        ? "This is your only desktop, so this is every window you have open. "
+                        : "")
+                    + "Each ticked window is asked to close, as if you clicked its X. "
+                    + "Apps with unsaved work will ask to save first. "
+                    + (removing ? "The desktop is removed once it is empty."
+                                : "The desktop itself stays.");
+
+                CloseChoice choice;
+                using (var dialog = new CloseSelectDialog(title, body, windows, PinnedRows(), removing,
+                                                          _background, _config.HighlightColor,
+                                                          _host.DpiScale, StripAnchor()))
+                {
+                    ShowModal(dialog);
+                    choice = dialog.Choice;
+                    ticked = dialog.Ticked;
+                }
+
+                if (choice == CloseChoice.Cancel) return;
+
+                // Close N from a remove dialog: some rows were unticked, so the desktop
+                // stays. The dialog only enables Close and remove with every row ticked.
+                if (choice == CloseChoice.CloseSelected) removing = false;
+
+                Log.Write("controller: close-all " + ticked.Count + " of " + windows.Count + " ticked, "
+                          + (removing ? "remove" : "keep"));
+            }
 
             // Everything again, now that the user has answered. The dialog pumps messages
             // while it is up, so the world moved on underneath it: the desktop may have been
             // removed from Task View or by a middle click - which hands its windows to a
             // neighbour, where the list taken above would now close them on a desktop
             // nobody chose to clear - or a window may have been moved off it, or opened on
-            // it. Only what is on the desktop now is closed.
+            // it. Only what is on the desktop now is closed, and of that, keeping the
+            // desktop, only what was ticked - see CloseSelection.
             desktop = Find(id);
             if (desktop == null)
             {
@@ -997,10 +1062,17 @@ namespace DesktopSwitcher
             }
 
             _closer.Invalidate();
-            windows = _closer.Closeable(id);
-            if (windows.Count == 0)
+            List<WindowEntry> current = _closer.Closeable(id);
+            if (current.Count == 0)
             {
                 if (removing && _service.Count > 1) _service.Remove(id);
+                return;
+            }
+
+            windows = CloseSelection.Resolve(removing, ticked, current);
+            if (windows.Count == 0)
+            {
+                Log.Write("controller: close-all, every ticked window had gone, nothing closed");
                 return;
             }
 

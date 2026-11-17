@@ -99,6 +99,7 @@ commented `do not reorder`. They are not stable across Windows versions; see
 | [SettingsWindow.cs](../src/ui/SettingsWindow.cs) | The Settings window. Edits a copy of the config, one row per entry in `Config.All`, and hands a fresh copy to `Changed` after every edit; it never touches the live config. Revert, Defaults, retheme in place, and its own per-monitor DPI handling. |
 | [SettingsControls.cs](../src/ui/SettingsControls.cs) | The window's owner-drawn controls — toggle, slider, number box, segmented choice for two options, a drop-down for more, colour swatch, sliding tab row, the setting row — and the shared, mutable `SettingsTheme` they all draw from. |
 | [ConfirmDialog.cs](../src/ui/ConfirmDialog.cs) | The themed confirmation: a title, a body and any row of buttons, the last one the safe default. Removing a desktop with windows on it, and closing every window on one. |
+| [CloseSelectDialog.cs](../src/ui/CloseSelectDialog.cs) | The close-all confirmation for two windows or more: an owner-drawn checklist, every window ticked, an All row, pinned windows greyed after the rest, eight rows then a scroll. Remove is only enabled with every row ticked; otherwise Close N keeps the desktop. Cancel holds the focus, as in `ConfirmDialog`, whose button styling and placement it reuses. |
 | [CloseProgressWindow.cs](../src/ui/CloseProgressWindow.cs) | The live panel of a close-all: one row per window, ticked off or marked as asking to save, with Go there, Force close and Cancel. Modeless, so the prompts can be answered while it is up, and a tool window, so it shows on every desktop. Draws what it is handed; decides nothing. |
 | [MarkPainter.cs](../src/ui/MarkPainter.cs) | Draws a mark, for the strip and the picker alike, and holds the picker's ten colours. Strokes an icon at 2.6 of its 24-unit grid - heavier than Lucide's 2, to sit level with the numbers - from a path parsed once and cached. |
 | [SvgPath.cs](../src/ui/SvgPath.cs) | SVG path data into a `GraphicsPath`: every path command, relative and absolute, the shorthand, and arcs as cubic segments. Only the mark icons use it. |
@@ -121,6 +122,7 @@ only `Controller` holds all three.
 | [Setting.cs](../src/app/Setting.cs) | One entry in that table: key, section, label, help text, kind, range, accessors, and the parse/format/describe for its kind. |
 | [ConfigWatcher.cs](../src/app/ConfigWatcher.cs) | Applies a hand edit to `config.ini` as soon as it is saved. Debounces an editor's burst of events, retries a locked file, and ignores the app's own writes by comparing against `Config.LastWritten`. |
 | [CloseAllRun.cs](../src/app/CloseAllRun.cs) | One "Close all and remove" or "Close all windows": asks every window to close, watches on a short tick, feeds the panel, carries out its buttons, and removes the desktop on the tick it empties - never past an open window. A run built with `remove` false stops there and keeps the desktop; it is the only kind the last desktop allows. |
+| [CloseSelection.cs](../src/app/CloseSelection.cs) | What a close-all closes once the checklist is answered: removing, every closeable window; keeping, the ticked ones still on the desktop, so a window that arrived while the dialog was up is left. Apart from the controller so `--closeall` drives the same rule. |
 | [MarkSync.cs](../src/app/MarkSync.cs) | The rules that keep marks in step with the desktops: carry on `Recreated`, no pruning during a reorder, adoption only in the startup window, write on change. Apart from the controller so `--markstress` drives the same code. |
 | [MarkStore.cs](../src/app/MarkStore.cs) | Every desktop's mark by GUID, plus Recent, in `%APPDATA%\DesktopSwitcher\marks.ini` - its own file so `config.ini`'s table-driven rewrite and watcher stay untouched. `Carry` follows a reorder's new GUIDs, `Prune` lets a removed desktop's mark go to Recent, `Adopt` hands a vanished desktop's mark to the one at its old position, at startup only. |
 | [Log.cs](../src/app/Log.cs) | Rolling diagnostic log, off by default, thread-safe because notifications are not. |
@@ -165,7 +167,9 @@ app that hides, slow closes either side of the one-second "still open" mark, a r
 dialog answered Save and answered Cancel, an in-window question, a hung window, an app that
 opens a replacement as it closes, a pinned window, one that vanishes before it is asked, one
 that arrives mid-run, the harness's own window, the desktop being closed while it is the
-current one, and twenty at once. A `finally` kills its processes, removes its desktop and
+current one, twenty at once, and the checklist's selection through `CloseSelection`: only
+the ticked windows closed and the desktop kept, a ticked window gone and a new one arrived
+while the dialog was up, and a remove taking every window whatever was ticked. A `finally` kills its processes, removes its desktop and
 switches back. What it cannot reach: elevated windows, and a packaged app's CoreWindow that
 the inventory failed to pair.
 

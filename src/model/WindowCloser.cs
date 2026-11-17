@@ -74,7 +74,7 @@ namespace DesktopSwitcher
 
         const string CoreWindowClass = "Windows.UI.Core.CoreWindow";
 
-        static readonly uint OwnPid = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+        internal static readonly uint OwnPid = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
 
         readonly VirtualDesktopApi _api;
         readonly WindowInventory _inventory;
