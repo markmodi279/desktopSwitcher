@@ -293,6 +293,7 @@ namespace DesktopSwitcher
                 Do("a row's Force ends only that app", ForceOne);
                 Do("Force asks twice when the app has windows elsewhere", ForceArms);
                 Do("a hung window reads as not responding", HungRow);
+                Do("the confirmation lays out its buttons before it is shown", ConfirmLayout);
 
                 _service.Dispose();
 
@@ -1012,6 +1013,32 @@ namespace DesktopSwitcher
             WaitFor(delegate { return run.HasEnded; }, 4000);
             Check(run.RemovedDesktop, "the second did it, desktop removed");
             Check(!Native.IsWindow(twin), "and the twin went with it, as the label said");
+        }
+
+        /// <summary>
+        /// The confirmation as the app builds it - laid out in its constructor, before it is
+        /// shown - with Cancel along the bottom edge on the right, not at 0,0 over the title.
+        /// Never shown; built from a real window's entry, checked and disposed.
+        /// </summary>
+        static void ConfirmLayout()
+        {
+            IntPtr a = Spawn("close");
+            _closer.Invalidate();
+            List<WindowEntry> windows = _closer.Closeable(_scratch);
+
+            foreach (bool remove in new[] { false, true })
+            {
+                using (var window = new CloseAllWindow("Close all windows on \"test\"?", "A sentence.", windows, null,
+                                                       remove, Color.FromArgb(0x20, 0x20, 0x20),
+                                                       Color.FromArgb(0x3A, 0x96, 0xDD), 1.0, Rectangle.Empty, false))
+                {
+                    Rectangle cancel = window.CancelBounds;
+                    Size client = window.ClientSize;
+                    Check(cancel.Left > client.Width / 2 && cancel.Bottom > client.Height - 60,
+                          (remove ? "remove: " : "keep: ") + "Cancel is bottom right before showing (" + cancel + " in " + client + ")");
+                }
+            }
+            Check(Native.IsWindow(a), "the test window was left alone");
         }
 
         /// <summary>

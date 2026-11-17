@@ -164,7 +164,7 @@ namespace DesktopSwitcher
             _close = MakeButton("Close all");
             _removeButton = remove ? MakeButton("Close and remove") : null;
             _forceAll = MakeButton("Force all");
-            _forceAll.Visible = false;
+            SetShown(_forceAll, false);
             _cancel = MakeButton("Cancel");
 
             // The close button is as wide as the widest label it can carry, so it never
@@ -279,7 +279,7 @@ namespace DesktopSwitcher
             {
                 // All ticked, remove mode is what it always was: Close and remove, Cancel.
                 // "Close all" beside it would be the menu's other item, offered again here.
-                _close.Visible = !all;
+                SetShown(_close, !all);
                 SetEnabled(_removeButton, all);
                 _hint = all ? "" : HintRemove;
             }
@@ -341,9 +341,9 @@ namespace DesktopSwitcher
             Text = _title;
             _hint = "";
 
-            _close.Visible = false;
-            if (_removeButton != null) _removeButton.Visible = false;
-            _forceAll.Visible = true;
+            SetShown(_close, false);
+            if (_removeButton != null) SetShown(_removeButton, false);
+            SetShown(_forceAll, true);
             SetEnabled(_forceAll, false);
 
             _list.BeginRunning(asked);
@@ -450,8 +450,8 @@ namespace DesktopSwitcher
             _body = line + (kept > 0 ? ". " + kept + " kept" : "") + ".";
             _hint = "";
             _barTarget = 1f;
-            _forceAll.Visible = false;
-            _cancel.Visible = false;
+            SetShown(_forceAll, false);
+            SetShown(_cancel, false);
 
             Arrange();
             Invalidate();
@@ -682,6 +682,26 @@ namespace DesktopSwitcher
             return true;
         }
 
+        /// <summary>
+        /// Which buttons are meant to be showing, kept here rather than read back from
+        /// Visible. Before the window is shown, WinForms answers Visible false for every
+        /// child whatever it was set to, and the first layout runs in the constructor: it
+        /// skipped every button, left them all at 0,0, and the confirmation opened with
+        /// "Close all" drawn over its own title and nothing along the bottom. --closeall
+        /// never saw it, since its windows are shown before they are laid out.
+        /// </summary>
+        readonly HashSet<Button> _hidden = new HashSet<Button>();
+
+        void SetShown(Button button, bool shown)
+        {
+            if (shown) _hidden.Remove(button);
+            else _hidden.Add(button);
+            button.Visible = shown;
+        }
+
+        /// <summary>Where Cancel is, for --closeall's check that the layout ran.</summary>
+        public Rectangle CancelBounds { get { return _cancel.Bounds; } }
+
         /// <summary>From the right: Cancel, then whichever of the others are showing.</summary>
         void ArrangeButtons(int top)
         {
@@ -689,7 +709,7 @@ namespace DesktopSwitcher
             Button[] order = { _cancel, _removeButton, _forceAll, _close };
             foreach (Button b in order)
             {
-                if (b == null || !b.Visible) continue;
+                if (b == null || _hidden.Contains(b)) continue;
                 b.Location = new Point(right - b.Width, top);
                 right = b.Left - S(8);
             }
