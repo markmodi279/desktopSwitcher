@@ -34,7 +34,13 @@ namespace DesktopSwitcher
         public string Question;
 
         public bool Forced;
+
+        /// <summary>Whether a Force is worth offering: false for one Windows refused, one
+        /// the last Force skipped, and one never forced (Explorer).</summary>
         public bool CanForce;
+
+        /// <summary>A Force was tried and Windows would not end it - elevated, usually.</summary>
+        public bool ForceDenied;
 
         /// <summary>True when Show has something to bring up - false for a refused window,
         /// which is usually elevated and cannot be focused from here either.</summary>
@@ -363,6 +369,7 @@ namespace DesktopSwitcher
             if (a == null || b == null) return a == b;
             return a.State == b.State && a.Hung == b.Hung && a.Question == b.Question
                 && a.Forced == b.Forced && a.CanForce == b.CanForce && a.CanShow == b.CanShow
+                && a.ForceDenied == b.ForceDenied
                 && a.StuckSeq == b.StuckSeq;
         }
 
@@ -876,11 +883,13 @@ namespace DesktopSwitcher
             if (c == null || !IsStuck(c)) return new RowButton[0];
 
             var list = new List<RowButton>(3);
-            bool forceable = c.CanForce && !(c.State == CloseState.Refused && c.Forced);
+            bool forceable = c.CanForce && !c.ForceDenied;
 
-            // A hung window cannot be shown usefully - it would come up white and frozen -
-            // and a refused one is usually elevated, which Show cannot focus either.
-            if (!c.Hung && c.CanShow && c.State != CloseState.Refused) list.Add(RowButton.Show);
+            // A hung window cannot be shown usefully - it would come up white and frozen.
+            // Every other stuck row keeps Show, a refused one most of all: what cannot be
+            // forced from here has to be closed by hand, and the first version, which hid
+            // Show on refused rows, left a Notepads it could not force with no button at all.
+            if (!c.Hung && c.CanShow) list.Add(RowButton.Show);
             if (!c.Hung && c.State == CloseState.KeptOpen) list.Add(RowButton.AskAgain);
             if (forceable) list.Add(RowButton.Force);
             return list.ToArray();
@@ -905,7 +914,7 @@ namespace DesktopSwitcher
             Color bad = light ? Palette.Blend(Bad, Color.Black, 0.25f) : Bad;
 
             ink = Palette.SecondaryText(_background);
-            string tail = c.CanForce ? "" : " It can't be forced from here.";
+            string tail = c.CanForce || c.ForceDenied ? "" : " It can't be forced from here.";
 
             if (c.Hung) { ink = bad; return "Not responding." + tail; }
 
@@ -920,8 +929,8 @@ namespace DesktopSwitcher
                     return "Kept open - its question was answered Cancel." + tail;
                 case CloseState.Refused:
                     ink = bad;
-                    return c.Forced
-                        ? "Survived Force - probably running as administrator."
+                    return c.ForceDenied
+                        ? "Windows refused to end it - probably running as administrator."
                         : "Refused to be asked - probably running as administrator." + tail;
             }
             return "";
@@ -1083,7 +1092,7 @@ namespace DesktopSwitcher
             return string.Concat(new object[]
             {
                 width, "/", full, "/", _running, _single, row.Ticked, row.Kept, row.Closed, row.Pinned, "/",
-                c == null ? "-" : c.State + "," + c.Hung + "," + c.Question + "," + c.Forced + "," + c.CanForce + "," + c.CanShow,
+                c == null ? "-" : c.State + "," + c.Hung + "," + c.Question + "," + c.Forced + "," + c.CanForce + "," + c.CanShow + "," + c.ForceDenied,
                 "/", row.ArmedLabel,
                 "/", _hot == index ? _hotButton : -9,
                 "/", _pressRow == index ? _pressButton : -9,

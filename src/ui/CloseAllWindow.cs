@@ -53,8 +53,6 @@ namespace DesktopSwitcher
         const int BarMs = 300;
 
         const string HintRemove = "Unticked windows stay, so the desktop can't be removed.";
-        const string HintForce = "Force ends an app without saving, and on every desktop.";
-        const string HintForced = "Force was sent. What is left is probably running as administrator.";
 
         readonly Color _background;
         readonly Rectangle _anchor;
@@ -353,11 +351,12 @@ namespace DesktopSwitcher
         }
 
         /// <summary>The run's tick: every row, and the counts above them.</summary>
-        public void Update(IList<CloseRow> rows, int closed, int total, int needYou, bool forced)
+        /// <param name="forceable">Rows a Force all would still try - its count and whether it is live.</param>
+        /// <param name="hint">The line under the list, the run's to word: it knows what Force ran into.</param>
+        public void Update(IList<CloseRow> rows, int closed, int total, int needYou, int forceable, string hint)
         {
             if (_phase != Phase.Running) return;
 
-            string hint = forced ? HintForced : needYou > 0 ? HintForce : "";
             bool changed = closed != _closed || total != _total || needYou != _needYou || hint != _hint;
             _closed = closed;
             _total = total;
@@ -365,7 +364,7 @@ namespace DesktopSwitcher
             _barTarget = total == 0 ? 1f : (float)closed / total;
             _hint = hint;
 
-            int open = total - closed;
+            int open = forceable;
             if (_forceArmed && unchecked(Environment.TickCount - _forceArmedAt) > CloseList.ArmMs) DisarmForceAll();
             if (!_forceArmed)
             {

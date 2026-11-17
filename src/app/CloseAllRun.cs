@@ -96,6 +96,10 @@ namespace DesktopSwitcher
             public bool Hung;
             public bool CanForce;
             public bool WasForced;
+
+            /// <summary>The last Force skipped it, or was refused by Windows - see ForceResult.</summary>
+            public bool ForceSkipped;
+            public bool ForceDenied;
             public int StuckSeq;
 
             /// <summary>The prompt the question was read from, and what it said.</summary>
@@ -141,7 +145,6 @@ namespace DesktopSwitcher
 
         CloseAllWindow _panel;
         Timer _timer;
-        bool _forced;   // a Force has been sent - for the hint line only
         int _sweeps;
         int _stuckSeq;
         bool _ended;
@@ -184,7 +187,7 @@ namespace DesktopSwitcher
 
             // Once, here, rather than every tick: it reads the process's path, and the
             // answer for a given window does not change while it lives.
-            item.CanForce = WindowCloser.CanForce(window.Handle);
+            item.CanForce = WindowCloser.CanForce(window);
             _items.Add(item);
         }
 
@@ -794,7 +797,7 @@ namespace DesktopSwitcher
         public void ForceRow(IntPtr handle, bool confirmed)
         {
             Item item = Find(handle);
-            if (item == null || item.State == CloseState.Closed) return;
+            if (item == null || !Forceable(item)) return;
 
             if (!confirmed)
             {
@@ -820,7 +823,7 @@ namespace DesktopSwitcher
         {
             var open = new List<Item>();
             for (int i = 0; i < _items.Count; i++)
-                if (_items[i].State != CloseState.Closed) open.Add(_items[i]);
+                if (Forceable(_items[i])) open.Add(_items[i]);
             if (open.Count == 0) return;
 
             if (!confirmed)
@@ -852,21 +855,50 @@ namespace DesktopSwitcher
             ForceAll(true);
         }
 
+        /// <summary>
+        /// Open, and worth another Force: not one the last Force skipped or Windows refused,
+        /// since trying again changes nothing. Force all counts only these, so it never
+        /// offers a press that does nothing - which it did, for a Notepads that could not
+        /// be forced, until it was pressed three times.
+        /// </summary>
+        static bool Forceable(Item item)
+        {
+            return item.State != CloseState.Closed && item.CanForce && !item.ForceSkipped && !item.ForceDenied;
+        }
+
         void ForceItems(List<Item> items)
         {
-            var handles = new List<IntPtr>();
+            var entries = new List<WindowEntry>();
+            foreach (Item item in items)
+                if (item.State != CloseState.Closed) entries.Add(item.Entry);
+            if (entries.Count == 0) return;
+
+            Log.Write("close-all: forcing " + entries.Count + " windows");
+            Dictionary<IntPtr, ForceResult> results = WindowCloser.Force(entries);
+
             foreach (Item item in items)
             {
-                if (item.State == CloseState.Closed) continue;
-                handles.Add(item.Handle);
-                item.Forced = System.Diagnostics.Stopwatch.StartNew();
-                item.WasForced = true;
+                ForceResult result;
+                if (!results.TryGetValue(item.Handle, out result)) continue;
+                switch (result)
+                {
+                    case ForceResult.Ended:
+                        // Terminating is asynchronous; Tick watches it go, and calls it
+                        // refused if it outlives ForceGraceMs.
+                        item.Forced = System.Diagnostics.Stopwatch.StartNew();
+                        item.WasForced = true;
+                        break;
+                    case ForceResult.Denied:
+                        item.ForceDenied = true;
+                        item.State = CloseState.Refused;
+                        break;
+                    case ForceResult.Skipped:
+                        // Nothing was done to it, so it is whatever it was: still open,
+                        // asking, kept. Only the offer of Force goes.
+                        item.ForceSkipped = true;
+                        break;
+                }
             }
-            if (handles.Count == 0) return;
-
-            Log.Write("close-all: forcing " + handles.Count + " windows");
-            WindowCloser.Force(handles);
-            _forced = true;
             Refresh();
         }
 
@@ -897,6 +929,27 @@ namespace DesktopSwitcher
             Refresh();
         }
 
+        /// <summary>
+        /// The hint under the list: what a Force has run into, else what Force would do, else
+        /// nothing. It used to say "probably running as administrator" after any Force, which
+        /// for a packaged app Force never even tried was simply wrong.
+        /// </summary>
+        string Hint(int needYou)
+        {
+            bool denied = false, skipped = false;
+            for (int i = 0; i < _items.Count; i++)
+            {
+                Item item = _items[i];
+                if (item.State == CloseState.Closed) continue;
+                if (item.ForceDenied || (item.State == CloseState.Refused && item.WasForced)) denied = true;
+                if (item.ForceSkipped || !item.CanForce) skipped = true;
+            }
+            if (denied) return "Windows refused to end what is left - it is probably running as administrator.";
+            if (skipped && needYou > 0) return "What can't be forced from here has to be closed by hand - Show takes you to it.";
+            if (needYou > 0) return "Force ends an app without saving, and on every desktop.";
+            return "";
+        }
+
         bool Exists()
         {
             IList<Desktop> desktops = _service.Desktops;
@@ -911,13 +964,14 @@ namespace DesktopSwitcher
             if (_panel == null || _panel.IsDisposed) return;
 
             var rows = new List<CloseRow>(_items.Count);
-            int closed = 0, needYou = 0;
+            int closed = 0, needYou = 0, forceable = 0;
 
             for (int i = 0; i < _items.Count; i++)
             {
                 Item item = _items[i];
                 if (item.State == CloseState.Closed) closed++;
                 else if (IsStuck(item)) needYou++;
+                if (Forceable(item)) forceable++;
 
                 rows.Add(new CloseRow
                 {
@@ -926,14 +980,15 @@ namespace DesktopSwitcher
                     State = item.State,
                     Hung = item.Hung,
                     Question = item.Question,
-                    Forced = item.Forced != null,
-                    CanForce = item.CanForce,
+                    Forced = item.WasForced,
+                    CanForce = item.CanForce && !item.ForceSkipped && !item.ForceDenied,
+                    ForceDenied = item.ForceDenied || (item.State == CloseState.Refused && item.WasForced),
                     CanShow = item.State != CloseState.Closed && Native.IsWindow(item.Handle),
                     StuckSeq = item.StuckSeq
                 });
             }
 
-            _panel.Update(rows, closed, _items.Count, needYou, _forced);
+            _panel.Update(rows, closed, _items.Count, needYou, forceable, Hint(needYou));
         }
 
         void End()

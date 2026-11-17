@@ -3,6 +3,14 @@ using System.Collections.Generic;
 
 namespace DesktopSwitcher
 {
+    /// <summary>What a Force did to one window's process.</summary>
+    enum ForceResult
+    {
+        Ended,
+        Denied,
+        Skipped
+    }
+
     /// <summary>Where one window is in a close-all, as the progress panel shows it.</summary>
     enum CloseState
     {
@@ -208,47 +216,126 @@ namespace DesktopSwitcher
         }
 
         /// <summary>
-        /// Ends the processes behind these windows. A process refused here - elevated,
-        /// protected, or in NeverForce - simply keeps its windows; the run sees them still
-        /// open and marks them refused.
+        /// Ends the processes behind these windows, and says for each what happened:
+        /// Ended (asked to terminate - the window should go), Denied (TerminateProcess
+        /// refused: elevated or protected), or Skipped (never tried - our own, never forced,
+        /// or an app that could not be found behind its frame). Never throws.
         /// </summary>
-        public static void Force(IList<IntPtr> windows)
+        public static Dictionary<IntPtr, ForceResult> Force(IList<WindowEntry> windows)
         {
-            var tried = new HashSet<uint>();
+            var results = new Dictionary<IntPtr, ForceResult>();
+            var tried = new Dictionary<uint, ForceResult>();
 
             for (int i = 0; i < windows.Count; i++)
             {
-                // Resolved now, not taken from the sweep: GetOwningProcessId sees through a
-                // packaged app's frame to the app itself rather than to ApplicationFrameHost,
-                // and a window gone since has no pid to end.
-                uint pid = Native.GetOwningProcessId(windows[i]);
-                if (pid == 0 || pid == OwnPid || !tried.Add(pid)) continue;
-
+                WindowEntry w = windows[i];
                 string exe;
-                string refusal = Refusal(pid, out exe);
+                string refusal;
+                uint pid = ForcePid(w, out exe, out refusal);
+
+                if (pid == 0 && refusal == null)
+                {
+                    // Gone since: nothing to end, and it is closing by itself.
+                    results[w.Handle] = ForceResult.Ended;
+                    continue;
+                }
                 if (refusal != null)
                 {
                     Log.Write("closer: will not force " + (exe.Length > 0 ? exe : "pid " + pid) + ", " + refusal);
+                    results[w.Handle] = ForceResult.Skipped;
                     continue;
                 }
 
-                bool ok = Native.KillProcess(pid);
-                Log.Write("closer: force " + exe + (ok ? " ended" : " refused"));
+                ForceResult result;
+                if (!tried.TryGetValue(pid, out result))
+                {
+                    bool ok = Native.KillProcess(pid);
+                    Log.Write("closer: force " + exe + (ok ? " ended" : " refused"));
+                    result = ok ? ForceResult.Ended : ForceResult.Denied;
+                    tried[pid] = result;
+                }
+                results[w.Handle] = result;
             }
+            return results;
         }
 
         /// <summary>
-        /// Whether Force would even try this window's process. The progress window asks so
-        /// a File Explorer row says "can't be forced" rather than offering a button that
+        /// Whether Force would even try this window's process. The close-all window asks so
+        /// a File Explorer row says it cannot be forced rather than offering a button that
         /// does nothing - the same rules Force applies, from the same place, so the two
         /// cannot disagree.
         /// </summary>
-        public static bool CanForce(IntPtr hwnd)
+        public static bool CanForce(WindowEntry window)
         {
-            uint pid = Native.GetOwningProcessId(hwnd);
-            if (pid == 0 || pid == OwnPid) return false;
-            string exe;
-            return Refusal(pid, out exe) == null;
+            string exe, refusal;
+            uint pid = ForcePid(window, out exe, out refusal);
+            return pid != 0 && refusal == null;
+        }
+
+        /// <summary>
+        /// The process a force of this window would end, with why not when it would not.
+        /// Zero and no reason: the window is gone.
+        ///
+        /// A packaged app's frame is resolved to the app through the CoreWindow inside it
+        /// (Native.GetOwningProcessId). Once the app is suspended - which happens to one left
+        /// on a desktop nobody is looking at - the CoreWindow is no longer inside the frame,
+        /// and the frame resolves to ApplicationFrameHost, which is never forced: it hosts
+        /// every packaged app's frame. Seen with Notepads: Force did nothing, twice, and the
+        /// row blamed administrator rights. So a frame that lands on ApplicationFrameHost
+        /// falls back to the exe the inventory recorded for it when the app was awake, and
+        /// forces that - only when exactly one process is running it, so an app with
+        /// several cannot have the wrong one ended.
+        /// </summary>
+        static uint ForcePid(WindowEntry window, out string exe, out string refusal)
+        {
+            exe = string.Empty;
+            refusal = null;
+
+            uint pid = Native.GetOwningProcessId(window.Handle);
+            if (pid == 0) return 0;
+            if (pid == OwnPid) { refusal = "it is this app"; return pid; }
+
+            refusal = Refusal(pid, out exe);
+            if (refusal != null && string.Equals(exe, "ApplicationFrameHost.exe", StringComparison.OrdinalIgnoreCase))
+            {
+                uint app = SoleProcess(window.Path);
+                if (app == 0)
+                {
+                    refusal = "its app could not be found behind the frame";
+                    return pid;
+                }
+                pid = app;
+                refusal = Refusal(pid, out exe);
+            }
+            return pid;
+        }
+
+        /// <summary>The one running process with this exe path, or 0 for none or several.</summary>
+        static uint SoleProcess(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return 0;
+
+            uint found = 0;
+            int count = 0;
+            System.Diagnostics.Process[] processes;
+            try { processes = System.Diagnostics.Process.GetProcessesByName(System.IO.Path.GetFileNameWithoutExtension(path)); }
+            catch (Exception) { return 0; }
+
+            foreach (System.Diagnostics.Process p in processes)
+            {
+                try
+                {
+                    uint pid = (uint)p.Id;
+                    if (string.Equals(Native.GetProcessPath(pid), path, StringComparison.OrdinalIgnoreCase))
+                    {
+                        found = pid;
+                        count++;
+                    }
+                }
+                catch (Exception) { }
+                finally { p.Dispose(); }
+            }
+            return count == 1 ? found : 0;
         }
 
         /// <summary>

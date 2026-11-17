@@ -192,8 +192,9 @@ namespace DesktopSwitcher
                 Size = new Size(300, 110);
 
                 // The question as text inside the dialog, where a real one has it, so the
-                // close-all row's quote is read the way it is for a real prompt: through UI
-                // Automation, not off the caption.
+                // close-all row's quote is read off the dialog's contents, not its caption.
+                // A WinForms label: read as a Static child (UI Automation does not reliably
+                // see it - see DialogText.ByStatics).
                 var label = new Label();
                 label.Text = Question;
                 label.Dock = DockStyle.Fill;
@@ -903,7 +904,7 @@ namespace DesktopSwitcher
         }
 
         /// <summary>
-        /// The dialog's question, read through UI Automation off the label inside it rather
+        /// The dialog's question, read off the label inside it rather
         /// than off its caption - the caption here is different on purpose, so the check
         /// tells the two apart.
         /// </summary>

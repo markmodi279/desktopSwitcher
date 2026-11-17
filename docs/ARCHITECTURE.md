@@ -174,7 +174,7 @@ current one, twenty at once, and the checklist's selection through `CloseSelecti
 the ticked windows closed and the desktop kept, a ticked window gone and a new one arrived
 while the dialog was up, and a remove taking every window whatever was ticked. Then the
 rows' own buttons: Show from another desktop, landing the keyboard on the dialog; the
-dialog's question read through UI Automation off a label inside it; stuck rows sorting
+dialog's question read off a label inside it, not its caption; stuck rows sorting
 first; Ask again after a cancelled prompt; a row's Force ending only its own app; Force
 arming when the app has a second window on the user's desktop (the one scenario that opens
 a window outside its scratch desktop - its own, for about a second); and a hung window read

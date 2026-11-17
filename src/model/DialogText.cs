@@ -18,7 +18,7 @@ namespace DesktopSwitcher
     /// three steps, cheapest first, each tried only when the one before found nothing.
     ///
     ///   1. Win32: the first Static child with text. A classic MessageBox's message is
-    ///      one, and reading it needs nothing loaded.
+    ///      one, so is a WinForms label, and reading it needs nothing loaded.
     ///   2. UI Automation: the dialog's first Text element that is not its caption - a
     ///      TaskDialog's main instruction, a WinForms label.
     ///   3. The caption, if it says more than the app's name.
@@ -129,6 +129,15 @@ namespace DesktopSwitcher
                     if (string.Equals(name.Trim(), caption, StringComparison.Ordinal)) continue;
                     return name;
                 }
+
+                // Nothing: say what was there, for the "why only the caption" question.
+                int count = texts.Count;
+                int children = root.FindAll(TreeScope.Children, Condition.TrueCondition).Count;
+                Log.Write(delegate
+                {
+                    return "dialog text: automation found " + count + " text elements, "
+                           + children + " children, none but the caption";
+                });
             }
             catch (Exception ex)
             {
@@ -139,13 +148,23 @@ namespace DesktopSwitcher
             return null;
         }
 
-        /// <summary>A classic MessageBox's text lives in a Static child. The first with any.</summary>
+        /// <summary>
+        /// A classic MessageBox's text lives in a Static child; a WinForms label is one too,
+        /// under WinForms' own class name. The first with any text.
+        ///
+        /// The WinForms case is not hypothetical: UI Automation, run against --closeall's
+        /// WinForms test prompt on its own, found no Text element in it at all, every time -
+        /// the label was there as a window and nowhere in the UIA tree - and the row fell back
+        /// to the caption. Read as a window it is there every time, and costs nothing.
+        /// </summary>
         static string ByStatics(IntPtr dialog)
         {
             string found = null;
             Native.EnumChildWindows(dialog, delegate(IntPtr child, IntPtr param)
             {
-                if (Native.GetClass(child) != "Static") return true;
+                string cls = Native.GetClass(child);
+                if (cls != "Static" && !cls.StartsWith("WindowsForms10.STATIC.", StringComparison.OrdinalIgnoreCase))
+                    return true;
                 string text = Native.GetText(child);
                 if (text.Trim().Length == 0) return true;   // an icon Static, or a spacer
                 found = text;
