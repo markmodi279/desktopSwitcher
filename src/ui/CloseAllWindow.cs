@@ -244,6 +244,13 @@ namespace DesktopSwitcher
                 // is here - no virtual desktop of its own, so it shows on every one.
                 CreateParams cp = base.CreateParams;
                 cp.ExStyle |= Native.WS_EX_TOOLWINDOW;
+
+                // Composited, so the window and its buttons and list paint as one. Without it
+                // a screen recording caught the in-between frames: on Close, "Close and remove"
+                // half erased behind a Force all already drawn over it; mid-resize, Cancel drawn
+                // twice and the title cut off - children moved and painted before the window
+                // around them had. Dropped again for the fade, which needs WS_EX_LAYERED.
+                cp.ExStyle |= Native.WS_EX_COMPOSITED;
                 return cp;
             }
         }
@@ -503,6 +510,11 @@ namespace DesktopSwitcher
                 }
                 _hold.Stop();
                 if (!_animate) { Finish(); return; }
+                if (IsHandleCreated)
+                {
+                    int ex = Native.GetWindowLong(Handle, Native.GWL_EXSTYLE);
+                    Native.SetWindowLong(Handle, Native.GWL_EXSTYLE, ex & ~Native.WS_EX_COMPOSITED);
+                }
                 _fading = true;
                 Kick();
             };

@@ -390,6 +390,13 @@ namespace DesktopSwitcher
 
         public const int WS_EX_LAYERED = 0x00080000;
 
+        /// <summary>
+        /// Paints a window and all its children bottom to top in one double-buffered pass,
+        /// so a change that hides one control and shows another, or moves them while the
+        /// window resizes, reaches the screen whole. Cannot be combined with WS_EX_LAYERED.
+        /// </summary>
+        public const int WS_EX_COMPOSITED = 0x02000000;
+
         [StructLayout(LayoutKind.Sequential)]
         public struct SIZE
         {
