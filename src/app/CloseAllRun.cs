@@ -572,10 +572,13 @@ namespace DesktopSwitcher
             }
         }
 
-        /// <summary>CloseList.Rank, for the rows the run knows about.</summary>
+        /// <summary>
+        /// CloseList.Rank, for the rows the run knows about: stuck first, and a closed window
+        /// stays where it was - among the stuck ones if it ever was stuck.
+        /// </summary>
         static int Rank(Item item)
         {
-            if (item.State == CloseState.Closed) return 3;
+            if (item.State == CloseState.Closed) return item.StuckSeq > 0 ? 0 : 1;
             return IsStuck(item) ? 0 : 1;
         }
 

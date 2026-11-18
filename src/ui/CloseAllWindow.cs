@@ -612,14 +612,23 @@ namespace DesktopSwitcher
             bool bar = Motion.Ease(ref _bar, _barTarget, rate, 0.002f);
             if (bar) { _frameCount++; Invalidate(BarRect); }
 
-            // The window follows the list's eased height, but not every frame: a top-level
-            // resize costs several ms however it is done (see ArrangeNow), and a window edge
-            // moving at 20 fps reads as smooth as at 60 while the rows inside it keep the
-            // full rate. The last step is never skipped, so it always lands exactly.
-            if (_list.DesiredHeight != _list.Height)
+            bool chrome = false;
+            if (_animate && _top >= 0)
+            {
+                float r = Motion.Rate(elapsed, ChromeMs);
+                chrome |= Motion.Ease(ref _top, ListTop, r, Motion.PixelEpsilon);
+                chrome |= Motion.Ease(ref _below, BelowTarget, r, Motion.PixelEpsilon);
+            }
+            if (chrome || _list.DesiredHeight != _list.Height) _layoutDirty = true;
+
+            // The window follows the list's eased height and its own, but not every frame: a
+            // top-level resize costs several ms however it is done (see ArrangeNow), and a
+            // window edge moving at 20 fps reads as smooth as at 60 while the rows inside it
+            // keep the full rate. The last step is never skipped, so it always lands exactly.
+            if (_layoutDirty)
             {
                 _sinceArrange++;
-                if (_sinceArrange >= 3 || !moved) { _sinceArrange = 0; Arrange(); }
+                if (_sinceArrange >= 3 || (!moved && !chrome)) { _sinceArrange = 0; Arrange(); }
             }
 
             if (_fading)
@@ -631,7 +640,7 @@ namespace DesktopSwitcher
                 return;
             }
 
-            if (!moved && !bar && !spinning) _frames.Stop();
+            if (!moved && !bar && !spinning && !chrome && !_layoutDirty) _frames.Stop();
         }
 
         void StopTimers()
@@ -650,15 +659,46 @@ namespace DesktopSwitcher
             get { return _phase == Phase.Confirm ? _bodyHeight : S(18); }
         }
 
+        int BarHeight { get { return Math.Max(2, S(2)); } }
+
+        /// <summary>Just above the list, wherever its eased top is.</summary>
         Rectangle BarRect
         {
-            get { return new Rectangle(_pad, SubTop + SubHeight + S(8), _inner, Math.Max(2, S(2))); }
+            get { return new Rectangle(_pad, (int)Math.Round(Top0) - S(10) - BarHeight, _inner, BarHeight); }
         }
 
+        /// <summary>Where the list's top belongs in this phase.</summary>
         int ListTop
         {
-            get { return _phase == Phase.Confirm ? SubTop + SubHeight + S(12) : BarRect.Bottom + S(10); }
+            get
+            {
+                return _phase == Phase.Confirm
+                    ? SubTop + SubHeight + S(12)
+                    : SubTop + SubHeight + S(8) + BarHeight + S(10);
+            }
         }
+
+        /// <summary>Everything under the list: the hint's line, then the buttons, or a margin when done.</summary>
+        int BelowTarget
+        {
+            get
+            {
+                int hint = HintLine ? S(8) + S(16) : 0;
+                return _phase == Phase.Done ? hint + _pad - S(2) : hint + S(14) + S(28) + S(14);
+            }
+        }
+
+        // The list's top and the space under it, eased like the list's own height, so a phase
+        // change moves the window's edge rather than jumping it: the sentence giving way to
+        // the count when Close is pressed, the buttons' row going when it is done. Negative
+        // until the first layout, which lands them where they belong.
+        float _top = -1f, _below = -1f;
+        bool _layoutDirty;
+        int _buttonsTop;
+
+        float Top0 { get { return _top < 0 ? ListTop : _top; } }
+
+        const int ChromeMs = 220;
 
         /// <summary>Whether the hint's line is kept: in remove mode while confirming, always while running.</summary>
         bool HintLine
@@ -684,11 +724,12 @@ namespace DesktopSwitcher
             // Location, two top-level SetWindowPos calls, and repainted everything: about 9
             // ms a call, which was most of a close-all's CPU under --closeall.
             bool resized = false;
+            int topBefore = _list.Top;
             SuspendLayout();
             try { resized = Lay(); }
             finally { ResumeLayout(false); }
 
-            if (resized && IsHandleCreated)
+            if (resized && IsHandleCreated && _list.Top == topBefore)
                 Invalidate(new Rectangle(0, Math.Max(0, _list.Bottom), ClientSize.Width, ClientSize.Height));
             else
                 Invalidate();
@@ -697,20 +738,18 @@ namespace DesktopSwitcher
         /// <summary>Positions everything. True when only the window's height changed.</summary>
         bool Lay()
         {
-            _list.Location = new Point(_pad, ListTop);
+            if (_top < 0 || !_animate) { _top = ListTop; _below = BelowTarget; }
+            else if (_top != ListTop || _below != BelowTarget) Kick();
+            _layoutDirty = false;
+
+            _list.Location = new Point(_pad, (int)Math.Round(_top));
             _list.Height = _list.DesiredHeight;
 
-            int y = _list.Bottom;
-            if (HintLine) y += S(8) + S(16);
-
-            int height;
-            if (_phase == Phase.Done) height = y + _pad - S(2);
-            else
-            {
-                int buttonsTop = y + S(14);
-                ArrangeButtons(buttonsTop);
-                height = buttonsTop + S(28) + S(14);
-            }
+            // The buttons ride the bottom edge, which is the edge that stays put over the
+            // strip, so a growing hint line or a shrinking sentence never moves them on screen.
+            int height = _list.Bottom + (int)Math.Round(_below);
+            _buttonsTop = height - S(14) - S(28);
+            ArrangeButtons(_buttonsTop);
 
             var size = new Size(_inner + 2 * _pad, height);
             if (ClientSize == size) return false;
@@ -733,7 +772,14 @@ namespace DesktopSwitcher
 
         void SetShown(Button button, bool shown)
         {
-            if (shown) _hidden.Remove(button);
+            if (shown)
+            {
+                // Placed before it is shown. A button never laid out sits at 0,0, and Force
+                // all, shown on Close, flashed there over the title for a frame before the
+                // layout that followed moved it - caught in a screen recording.
+                _hidden.Remove(button);
+                ArrangeButtons(_buttonsTop);
+            }
             else _hidden.Add(button);
             button.Visible = shown;
         }

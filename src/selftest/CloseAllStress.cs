@@ -930,8 +930,8 @@ namespace DesktopSwitcher
         }
 
         /// <summary>
-        /// The order the window shows: a window that got stuck goes above one listed before
-        /// it that is still closing, and above one that closed.
+        /// The order the window shows: a window that got stuck goes above the ones listed
+        /// before it, and a window that closed stays where it was and folds there.
         /// </summary>
         static void StuckFirst()
         {
@@ -944,9 +944,14 @@ namespace DesktopSwitcher
             IntPtr[] order = run.DisplayOrder;
             Check(order.Length == 3 && order[0] == modal, "the asking window is first, though it was listed last");
             Check(WaitFor(delegate { return StateOf(close) == CloseState.Closed; }, 2000), "the plain window closed");
+            // Listed in the inventory's order, not the order they were made in, so what is
+            // checked is that closing did not change it relative to the other below the top.
             order = run.DisplayOrder;
-            Check(order[order.Length - 1] == close || StateOf(slow) == CloseState.Closed,
-                  "a closed window sorts after one still closing");
+            IntPtr[] listed = run.Handles;
+            bool closeFirst = Array.IndexOf(listed, close) < Array.IndexOf(listed, slow);
+            Check(order.Length == 3 && order[0] == modal
+                  && (Array.IndexOf(order, close) < Array.IndexOf(order, slow)) == closeFirst,
+                  "a closed window keeps its place rather than sliding past one still closing");
 
             Native.PostMessage(Native.GetLastActivePopup(modal), WM_ANSWER, IntPtr.Zero, IntPtr.Zero);
             WaitFor(delegate { return run.HasEnded; }, 4000);

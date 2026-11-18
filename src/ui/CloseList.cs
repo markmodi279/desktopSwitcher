@@ -141,6 +141,14 @@ namespace DesktopSwitcher
             public int ClosedAt;           // TickCount when it closed, for the tick's hold
             public bool Closed;
 
+            /// <summary>
+            /// Where it sorted when it was shown closed, kept from then on: a closed row folds
+            /// where it stands. It used to sort below the rows still closing, so in a cascade
+            /// each one slid down past the others before folding - rows crossing mid-move and
+            /// drawn over each other, seen in a screen recording of a real six-window run.
+            /// </summary>
+            public int FrozenRank = 1;
+
             public string ArmedLabel;      // Force asked once, waiting for the second click
             public int ArmedAt;
 
@@ -438,6 +446,9 @@ namespace DesktopSwitcher
 
         void Reveal(Row r, int now)
         {
+            // A window that was stuck at some point closes where the stuck ones are; any
+            // other among the rows that were closing.
+            r.FrozenRank = r.Live != null && r.Live.StuckSeq > 0 ? 0 : 1;
             r.Closed = true;
             r.ClosedAt = now;
         }
@@ -497,7 +508,12 @@ namespace DesktopSwitcher
             }
         }
 
-        /// <summary>Every run row shown closed and folded away: the done message may come.</summary>
+        /// <summary>
+        /// Every run row shown closed and on its way out - its tick's hold over, its fold
+        /// begun. The done message may come now, while the last folds finish under it. It used
+        /// to wait for them to finish, which left a beat of "6 of 6 closed" over an empty list
+        /// and buttons with nothing left to do, then a jump to the done layout.
+        /// </summary>
         public bool Finished
         {
             get
@@ -506,7 +522,7 @@ namespace DesktopSwitcher
                 {
                     Row r = _rows[i];
                     if (r.Live == null) continue;
-                    if (!r.Closed || r.HTarget > 0 || r.H > 0) return false;
+                    if (!r.Closed || r.HTarget > 0) return false;
                 }
                 return true;
             }
@@ -527,7 +543,7 @@ namespace DesktopSwitcher
         {
             if (r.Pinned) return 5;
             if (r.Kept) return 4;
-            if (r.Closed) return 3;
+            if (r.Closed) return r.FrozenRank;
             if (r.Live == null) return 1;
             if (IsStuck(r.Live)) return 0;
             return 1;
@@ -542,7 +558,7 @@ namespace DesktopSwitcher
                 {
                     int d = Rank(a) - Rank(b);
                     if (d != 0) return d;
-                    if (Rank(a) == 0)
+                    if (Rank(a) == 0 && a.Live != null && b.Live != null)
                     {
                         int sa = a.Live.StuckSeq, sb = b.Live.StuckSeq;
                         if (sa != sb) return sa - sb;
@@ -1207,6 +1223,17 @@ namespace DesktopSwitcher
             }
 
             g.DrawImageUnscaled(row.Image, rect.X, rect.Y);
+
+            // Shorter than a line - folding away, or a new row growing in - fades with its
+            // height. Clipped alone, a folding row showed the top half of its text squeezed
+            // against the row below, which read as two rows drawn over each other in a
+            // recording of twenty folding in turn.
+            if (rect.Height < _rowH)
+            {
+                int veil = (int)(255 * (1f - rect.Height / (float)_rowH));
+                using (var fade = new SolidBrush(Color.FromArgb(veil, _surface)))
+                    g.FillRectangle(fade, rect);
+            }
 
             int now = Environment.TickCount;
             if (_running && row.Live != null && !row.Closed && !IsStuck(row.Live))
