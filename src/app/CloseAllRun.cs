@@ -974,7 +974,14 @@ namespace DesktopSwitcher
                 Item item = _items[i];
                 if (item.State == CloseState.Closed) closed++;
                 else if (IsStuck(item)) needYou++;
-                if (Forceable(item)) forceable++;
+                // Only stuck rows make Force all live. Counting every row not yet closed lit it
+                // as "Force all (5)" on the run's first tick, before anything had had a chance
+                // to close - and it takes the place of the Close button just clicked, so a
+                // double-click's second half landed on it (seen in a user's recording, enabled
+                // under the pointer for 200 ms). Nothing is stuck before a second has passed
+                // (StillOpen), well past a double-click. A press still forces every forceable
+                // row, a just-asked one too; the count can only be short by those.
+                if (Forceable(item) && IsStuck(item)) forceable++;
 
                 rows.Add(new CloseRow
                 {
