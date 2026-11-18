@@ -201,7 +201,7 @@ namespace DesktopSwitcher
             for (int i = 0; i < _items.Count; i++) entries.Add(_items[i].Entry);
 
             var window = new CloseAllWindow("Close all", "", entries, null, _remove, background,
-                                            Color.FromArgb(0x3A, 0x96, 0xDD), dpiScale, anchor, true);
+                                            Color.FromArgb(0x3A, 0x96, 0xDD), dpiScale, anchor, new ClosePacing());
             window.Show(owner);
             Start(window);
         }

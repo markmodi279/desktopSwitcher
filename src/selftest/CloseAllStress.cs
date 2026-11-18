@@ -648,6 +648,8 @@ namespace DesktopSwitcher
             Check(run.Handles.Length == 20, "all twenty listed (" + run.Handles.Length + ")");
             WaitFor(delegate { return run.HasEnded; }, 8000);
             Check(run.RemovedDesktop, "desktop removed after " + clock.ElapsedMilliseconds + " ms");
+            Check(run.Window != null && run.Window.DonePending,
+                  "the desktop went on time, and the done message waits for the cascade to tell it");
 
             // Twenty plain windows go together, mostly inside one tick - the case a real
             // desktop of five hit, where the done window was left showing them all closing.
@@ -1036,7 +1038,8 @@ namespace DesktopSwitcher
             {
                 using (var window = new CloseAllWindow("Close all windows on \"test\"?", "A sentence.", windows, null,
                                                        remove, Color.FromArgb(0x20, 0x20, 0x20),
-                                                       Color.FromArgb(0x3A, 0x96, 0xDD), 1.0, Rectangle.Empty, false))
+                                                       Color.FromArgb(0x3A, 0x96, 0xDD), 1.0, Rectangle.Empty,
+                                                       new ClosePacing { Animate = false }))
                 {
                     Rectangle cancel = window.CancelBounds;
                     Size client = window.ClientSize;
@@ -1143,8 +1146,18 @@ namespace DesktopSwitcher
         static void CheckDoneRows(CloseAllRun run)
         {
             CloseAllWindow window = run.Window;
-            Check(window != null && window.OpenRows == 0,
-                  "the done window shows every row closed (" + (window == null ? "no window" : window.OpenRows + " open") + ")");
+            if (window == null) { Check(false, "the run left a window showing its outcome"); return; }
+
+            // With the cascade the list runs behind the run on purpose; what has to hold is
+            // that it catches up, inside the pacing's own bound, and only then says done.
+            var pacing = new ClosePacing();
+            int bound = pacing.MinProgressMs + pacing.MaxCascadeMs + 1000;
+            var clock = Stopwatch.StartNew();
+            bool caughtUp = WaitFor(delegate { return window.OpenRows == 0; }, bound + 2000);
+            long ms = clock.ElapsedMilliseconds;
+            Check(caughtUp, "the window shows every row closed (" + window.OpenRows + " open, after " + ms + " ms)");
+            Check(ms <= bound, "within the pacing's bound of " + bound + " ms (" + ms + ")");
+            Check(WaitFor(delegate { return window.IsDone || window.IsDisposed; }, 3000), "and then says done");
         }
 
         static CloseState StateOf(IntPtr hwnd)

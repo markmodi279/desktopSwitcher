@@ -90,7 +90,12 @@ first, listing the desktop's windows with their icons, then closes each one the 
 X would, so an app with unsaved work stops to ask about saving rather than losing it. The
 list you just answered becomes the progress: each tick turns into a spinner, then a check,
 and the closed rows fold away, so what is left is what still needs you - stuck windows rise
-to the top, under a bar counting them off. A window still there after a second says why:
+to the top, under a bar counting them off. Windows usually all close at once, so the list
+ticks them off one after another, top to bottom, instead of everything vanishing on the
+first beat; the windows themselves are already gone, and the desktop is removed on time.
+The **Close all** tab in Settings sets the pace - the gap between ticks, how long the
+progress shows at least, the longest the whole cascade may take, how long a tick stays and
+how long the done message stays - or turns it off. A window still there after a second says why:
 **Asks: Do you want to save changes to Untitled?** when the app uses a real dialog - the
 question is read off the dialog itself - **Still open** when it draws its question inside
 its own window (Terminal and Notepads do), since that cannot be told apart from a slow
@@ -126,7 +131,8 @@ list while the rest close, greyed and marked **kept**.
 
 However a desktop goes - a middle click, its menu, Task View, close-all - its button
 flashes and folds shut rather than the row snapping closed, so it is clear a desktop was
-removed and not just switched away from.
+removed and not just switched away from. **Fold removed desktops** on the Strip tab turns
+it off.
 
 Dragging a number, or **Move left** and **Move right** on its menu, changes a desktop's
 place in the row, and Task View's order changes with it. Windows 10 has no way to reorder desktops, so this rebuilds the row: the

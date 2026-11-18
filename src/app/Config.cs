@@ -60,6 +60,22 @@ namespace DesktopSwitcher
         /// </summary>
         public bool PinMark = true;
 
+        /// <summary>
+        /// A removed desktop's button flashes and folds shut rather than the row snapping
+        /// closed - see StripFold. Off for anyone who would rather the row just renumber.
+        /// </summary>
+        public bool FoldRemoved = true;
+
+        // Close all's pacing - see ClosePacing for what each does and why it exists. The
+        // defaults are what the user picked from the browser mock: 120 ms apart, at least
+        // 400 ms of progress.
+        public bool CloseAllCascade = true;
+        public int CloseAllStaggerMs = 120;
+        public int CloseAllMinProgressMs = 400;
+        public int CloseAllMaxCascadeMs = 1200;
+        public int CloseAllTickHoldMs = 260;
+        public int CloseAllDoneHoldMs = 1500;
+
         // --- system stats -------------------------------------------------------
         /// <summary>
         /// A tile after '+' whose panel shows CPU, memory and network throughput. Click to
@@ -285,6 +301,7 @@ namespace DesktopSwitcher
         public const string PanelSection = "Hover panel";
         public const string StatsSection = "Stats";
         public const string ShortcutsSection = "Shortcuts";
+        public const string CloseAllSection = "Close all";
         public const string AdvancedSection = "Advanced";
         const string StateSection = "Kept by the app";
 
@@ -373,6 +390,10 @@ namespace DesktopSwitcher
                 c => c.OccupancyDots, (c, v) => c.OccupancyDots = v,
                 "A dim dot beside a desktop's number when it has windows on it, so the empty "
                 + "ones - the ones safe to remove - show at a glance."),
+            Bool(StripSection, "foldRemoved", "Fold removed desktops",
+                c => c.FoldRemoved, (c, v) => c.FoldRemoved = v,
+                "When a desktop is removed, its button flashes and folds shut, so it is clear a "
+                + "desktop went rather than the row simply renumbering. Off snaps the row closed."),
             Bool(StripSection, "pinMark", "Pinned window mark",
                 c => c.PinMark, (c, v) => c.PinMark = v,
                 "A small pin in the current desktop's corner while the window you are in shows on "
@@ -526,6 +547,34 @@ namespace DesktopSwitcher
                 c => (int)c.RemoveGesture, (c, v) => c.RemoveGesture = (RemoveGesture)v,
                 "Click a desktop's number with these to remove that desktop, as a middle click does - "
                 + "for a touchpad. If it has windows, you are asked first."),
+
+            // --- close all
+            Bool(CloseAllSection, "closeAllCascade", "Pace the closing",
+                c => c.CloseAllCascade, (c, v) => c.CloseAllCascade = v,
+                "Windows usually all close at once. On, the list ticks them off one after another "
+                + "so you can see what went; the windows themselves still close at once. Off shows "
+                + "every close the moment it happens."),
+            Int(CloseAllSection, "closeAllStaggerMs", "Between ticks", 0, 1000, "ms",
+                c => c.CloseAllStaggerMs, (c, v) => c.CloseAllStaggerMs = v,
+                "The gap between one window's tick and the next, top to bottom.")
+                .When(c => c.CloseAllCascade),
+            Int(CloseAllSection, "closeAllMinProgressMs", "Least progress time", 0, 3000, "ms",
+                c => c.CloseAllMinProgressMs, (c, v) => c.CloseAllMinProgressMs = v,
+                "How long the spinners show before the first tick, so the list is seen turning "
+                + "into progress even when everything closed at once.")
+                .When(c => c.CloseAllCascade),
+            Int(CloseAllSection, "closeAllMaxCascadeMs", "Longest cascade", 100, 10000, "ms",
+                c => c.CloseAllMaxCascadeMs, (c, v) => c.CloseAllMaxCascadeMs = v,
+                "The ticks never take longer than this in all: with many windows the gap "
+                + "shortens to fit.")
+                .When(c => c.CloseAllCascade),
+            Int(CloseAllSection, "closeAllTickHoldMs", "Tick shown for", 0, 3000, "ms",
+                c => c.CloseAllTickHoldMs, (c, v) => c.CloseAllTickHoldMs = v,
+                "How long a closed window keeps its tick before its row folds away."),
+            Int(CloseAllSection, "closeAllDoneHoldMs", "Done message for", 0, 10000, "ms",
+                c => c.CloseAllDoneHoldMs, (c, v) => c.CloseAllDoneHoldMs = v,
+                "How long \"Desktop N removed\" stays before it fades. Pointing at it keeps it; "
+                + "a click dismisses it. 0 closes the window as soon as the last row has gone."),
 
             // --- advanced
             Int(AdvancedSection, "reconcileMs", "Check interval", 250, 60000, "ms",

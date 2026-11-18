@@ -47,8 +47,6 @@ namespace DesktopSwitcher
     {
         enum Phase { Confirm, Running, Done }
 
-        /// <summary>How long the done state stays before it fades.</summary>
-        const int HoldMs = 1500;
         const int FadeMs = 200;
         const int BarMs = 300;
 
@@ -59,6 +57,10 @@ namespace DesktopSwitcher
         readonly double _scale;
         readonly bool _remove;
         readonly bool _animate;
+        readonly ClosePacing _pacing;
+
+        /// <summary>The run's outcome, waiting for the list to finish telling it.</summary>
+        string _doneTitle, _doneLine;
         readonly int _closeCount;
         readonly Font _titleFont;
         readonly Font _bodyFont;
@@ -110,10 +112,10 @@ namespace DesktopSwitcher
         /// close-all leaves them alone, and without a row for them a window the user can see
         /// on this desktop would be missing from the list with nothing to say why.
         /// </param>
-        /// <param name="animate">animationMs above zero. Off, every move lands at once.</param>
+        /// <param name="pacing">The Close all tab's settings, and whether anything animates.</param>
         public CloseAllWindow(string title, string body, IList<WindowEntry> windows, IList<WindowEntry> pinned,
                               bool remove, Color background, Color accent, double dpiScale,
-                              Rectangle anchor, bool animate)
+                              Rectangle anchor, ClosePacing pacing)
         {
             _title = title;
             _body = body;
@@ -121,7 +123,8 @@ namespace DesktopSwitcher
             _background = background;
             _anchor = anchor;
             _scale = dpiScale;
-            _animate = animate;
+            _pacing = pacing ?? new ClosePacing();
+            _animate = _pacing.Animate;
             _closeCount = windows.Count;
 
             FormBorderStyle = FormBorderStyle.None;
@@ -146,7 +149,7 @@ namespace DesktopSwitcher
             // One window gets no checkbox: a checklist of one box is a second way to say
             // Cancel. It keeps the box's column, so its row does not shift when the box's
             // place becomes the run's status mark.
-            _list = new CloseList(windows, pinned, windows.Count == 1, background, accent, dpiScale, _bodyFont, animate);
+            _list = new CloseList(windows, pinned, windows.Count == 1, background, accent, dpiScale, _bodyFont, _pacing);
             _list.Width = _inner;
             _list.TabIndex = 0;
             _list.Changed += delegate { UpdateConfirm(); };
@@ -299,7 +302,7 @@ namespace DesktopSwitcher
                 if (handler != null) handler(this, EventArgs.Empty);
                 Finish();
             }
-            else if (_phase == Phase.Running)
+            else if (_phase == Phase.Running && _doneTitle == null)
             {
                 EventHandler handler = StopRequested;
                 if (handler != null) handler(this, EventArgs.Empty);
@@ -357,11 +360,11 @@ namespace DesktopSwitcher
         {
             if (_phase != Phase.Running) return;
 
-            bool changed = closed != _closed || total != _total || needYou != _needYou || hint != _hint;
-            _closed = closed;
+            // The subtitle and the bar count what the list has shown closed, not what the run
+            // has seen close: with the cascade they run behind it, by design - see ClosePacing.
+            bool changed = total != _total || needYou != _needYou || hint != _hint;
             _total = total;
             _needYou = needYou;
-            _barTarget = total == 0 ? 1f : (float)closed / total;
             _hint = hint;
 
             int open = forceable;
@@ -374,6 +377,7 @@ namespace DesktopSwitcher
             SetEnabled(_forceAll, open > 0);
 
             _list.Update(rows);
+            changed |= SyncCounts();
 
             // Only the header and the hint are this window's own drawing; the list repaints
             // itself. Nothing changed, nothing to draw - see CloseList.Update.
@@ -427,6 +431,36 @@ namespace DesktopSwitcher
         public void ShowDone(string title, string line)
         {
             if (_phase == Phase.Done || IsDisposed) return;
+
+            // The run is over, but the list may still be telling it - rows waiting their turn
+            // in the cascade, or folding. The message waits for the last of them, so it never
+            // claims "5 closed" over rows still spinning. Nothing is left to force or cancel.
+            _doneTitle = title;
+            _doneLine = line;
+            SetEnabled(_forceAll, false);
+            DisarmForceAll();
+            _hint = "";
+            if (_list.Finished) EnterDone();
+            else Kick();
+        }
+
+        /// <summary>The run's outcome is waiting and the list has caught up with it.</summary>
+        public bool DonePending { get { return _doneTitle != null && _phase != Phase.Done; } }
+
+        /// <summary>Counts and bar from the list. True when they changed.</summary>
+        bool SyncCounts()
+        {
+            int shown = _list.ShownClosed;
+            if (shown == _closed) return false;
+            _closed = shown;
+            _barTarget = _total == 0 ? 1f : Math.Min(1f, (float)shown / _total);
+            return true;
+        }
+
+        void EnterDone()
+        {
+            if (_phase == Phase.Done || IsDisposed) return;
+            string title = _doneTitle, line = _doneLine;
             _phase = Phase.Done;
             _title = title;
 
@@ -456,8 +490,10 @@ namespace DesktopSwitcher
             Invalidate();
             Kick();
 
+            if (_pacing.DoneHoldMs <= 0) { Finish(); return; }
+
             _hold = new Timer();
-            _hold.Interval = HoldMs;
+            _hold.Interval = _pacing.DoneHoldMs;
             _hold.Tick += delegate
             {
                 if (!IsDisposed && Bounds.Contains(Cursor.Position))
@@ -567,6 +603,10 @@ namespace DesktopSwitcher
 
             bool spinning;
             bool moved = _list.Step(elapsed, out spinning);
+
+            if (_phase == Phase.Running && SyncCounts()) Invalidate(new Rectangle(0, 0, ClientSize.Width, BarRect.Top));
+            if (DonePending && _list.Finished) EnterDone();
+            if (DonePending) spinning = true;   // keep the clock until the list has caught up
 
             float rate = _animate ? Motion.Rate(elapsed, BarMs) : 1f;
             bool bar = Motion.Ease(ref _bar, _barTarget, rate, 0.002f);

@@ -486,6 +486,7 @@ namespace DesktopSwitcher
                                            (uint)_config.TooltipDelayMs, _config.TooltipWidth,
                                            _config.AnimationMs, _host.DpiScale,
                                            _config.StripLook, _config.PanelLook);
+                _strip.FoldRemoved = _config.FoldRemoved;
             }
             catch (System.ComponentModel.Win32Exception ex)
             {
@@ -1044,7 +1045,7 @@ namespace DesktopSwitcher
 
             var window = new CloseAllWindow(title, body, windows, PinnedRows(), removing, _background,
                                             _config.HighlightColor, _host.DpiScale, StripAnchor(),
-                                            _config.AnimationMs > 0);
+                                            Pacing());
             _closeWindow = window;
 
             BeginAsking();
@@ -1073,6 +1074,21 @@ namespace DesktopSwitcher
 
             window.Show(this);
             window.Activate();
+        }
+
+        /// <summary>The Close all tab's settings, for the window.</summary>
+        ClosePacing Pacing()
+        {
+            return new ClosePacing
+            {
+                Animate = _config.AnimationMs > 0,
+                Cascade = _config.CloseAllCascade,
+                StaggerMs = _config.CloseAllStaggerMs,
+                MinProgressMs = _config.CloseAllMinProgressMs,
+                MaxCascadeMs = _config.CloseAllMaxCascadeMs,
+                TickHoldMs = _config.CloseAllTickHoldMs,
+                DoneHoldMs = _config.CloseAllDoneHoldMs
+            };
         }
 
         /// <summary>

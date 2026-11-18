@@ -329,6 +329,9 @@ namespace DesktopSwitcher
         /// <summary>A removed desktop's button closing up - see StripFold.</summary>
         readonly StripFold _fold = new StripFold();
 
+        /// <summary>foldRemoved: whether a removed desktop's button folds away or the row snaps shut.</summary>
+        public bool FoldRemoved = true;
+
         // The pin mark in the current button's corner - see SetFocusPin.
         PinKind _pinKind;                         // the focused window, as last pushed
         PinKind _pinDrawn = PinKind.Window;       // the last kind shown, so a mark fading out keeps its colour
@@ -764,7 +767,7 @@ namespace DesktopSwitcher
             // done against the row as it stands - and not with animation off.
             int removed = -1;
             float removedWidth = 0;
-            if (!sameSet && _animationMs > 0 && _pressIndex < 0 && !_disposed)
+            if (!sameSet && FoldRemoved && _animationMs > 0 && _pressIndex < 0 && !_disposed)
             {
                 removed = StripFold.RemovedIndex(Ids(_desktops), Ids(desktops));
                 if (removed >= 0 && removed < _widths.Length) removedWidth = _widths[removed];

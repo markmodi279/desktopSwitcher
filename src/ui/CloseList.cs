@@ -55,6 +55,48 @@ namespace DesktopSwitcher
     }
 
     /// <summary>
+    /// How a close-all paces what it shows - the Close all tab's settings, handed in whole.
+    ///
+    /// Only the telling is paced, never the closing. Real windows mostly go inside the
+    /// run's first 150 ms look, so without this every row flipped to closed on the same
+    /// tick, folded together, and the window went from checklist to "Desktop N is empty"
+    /// before the eye had found a row - "almost instant", which is accurate and reads as
+    /// nothing having happened. With it, a row the run reports closed keeps its spinner
+    /// until its turn: no sooner than MinProgressMs after the run began, so the checklist
+    /// is seen to become progress, and StaggerMs after the row above it, so the closes
+    /// read top to bottom; each tick then pops, holds TickHoldMs and folds. The desktop is
+    /// still removed the moment it empties - the strip shows that on time - and only the
+    /// window's done message waits for the last fold. Mocked in the browser first; the user
+    /// picked 120 and 400.
+    ///
+    /// Defaults are the settings' defaults, so --closeall paces the way the app does.
+    /// </summary>
+    sealed class ClosePacing
+    {
+        /// <summary>animationMs above zero. Off, nothing eases and nothing is paced.</summary>
+        public bool Animate = true;
+
+        /// <summary>Pace at all. Off, a row shows closed the tick the run sees it closed.</summary>
+        public bool Cascade = true;
+
+        public int StaggerMs = 120;
+        public int MinProgressMs = 400;
+
+        /// <summary>
+        /// The whole cascade fits in this, however many rows: twenty windows at 120 ms apart
+        /// would take 2.4 s to tell, so the gap shrinks for a big burst instead.
+        /// </summary>
+        public int MaxCascadeMs = 1200;
+
+        public int TickHoldMs = 260;
+
+        /// <summary>The done message's stay before it fades. 0 closes the window at once.</summary>
+        public int DoneHoldMs = 1500;
+
+        public bool Cascading { get { return Animate && Cascade; } }
+    }
+
+    /// <summary>
     /// The list in CloseAllWindow: a checklist while the user decides, then each window's
     /// progress, in the same rows. Grew out of CloseSelectDialog's CheckList, and keeps its
     /// rules - the All row's tick logic, pinned rows greyed and unclickable, the focus ring
@@ -113,8 +155,8 @@ namespace DesktopSwitcher
             public string ImageKey;
         }
 
-        /// <summary>How long a closed row keeps its tick before it folds away.</summary>
-        const int ClosedHoldMs = 260;
+        /// <summary>How long a revealed tick takes to pop: grow past full size and settle.</summary>
+        const int PopMs = 280;
 
         /// <summary>How long an armed Force waits for its second click.</summary>
         public const int ArmMs = 4000;
@@ -143,6 +185,11 @@ namespace DesktopSwitcher
         readonly Color _onAccent;
         readonly double _scale;
         readonly bool _animate;
+        readonly ClosePacing _pacing;
+        int _runStart;
+        int _nextReveal;
+        int _burstStagger;
+        int _lastPending;
         readonly Font _font;
         readonly Font _smallFont;
         readonly Font _markFont;
@@ -179,7 +226,7 @@ namespace DesktopSwitcher
         public event EventHandler HeightChanging;
 
         public CloseList(IList<WindowEntry> windows, IList<WindowEntry> pinned, bool single,
-                         Color background, Color accent, double scale, Font font, bool animate)
+                         Color background, Color accent, double scale, Font font, ClosePacing pacing)
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint
                    | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw
@@ -199,7 +246,8 @@ namespace DesktopSwitcher
             _accent = accent;
             _onAccent = Palette.IsLight(accent) ? Color.FromArgb(20, 20, 20) : Color.White;
             _scale = scale;
-            _animate = animate;
+            _pacing = pacing ?? new ClosePacing();
+            _animate = _pacing.Animate;
             _font = font;
             _smallFont = new Font("Segoe UI", (float)(11 * scale), FontStyle.Regular, GraphicsUnit.Pixel);
             _markFont = new Font("Segoe UI", (float)(13 * scale), FontStyle.Bold, GraphicsUnit.Pixel);
@@ -287,6 +335,8 @@ namespace DesktopSwitcher
         {
             _running = true;
             int now = Environment.TickCount;
+            _runStart = now;
+            _nextReveal = now;
             for (int i = 0; i < _rows.Count; i++)
             {
                 Row r = _rows[i];
@@ -300,7 +350,7 @@ namespace DesktopSwitcher
                 else
                 {
                     r.Closed = true;
-                    r.ClosedAt = unchecked(now - ClosedHoldMs);
+                    r.ClosedAt = unchecked(now - _pacing.TickHoldMs - PopMs);
                 }
             }
             _focus = NoRow;
@@ -340,11 +390,11 @@ namespace DesktopSwitcher
                 if (stuck && !r.WasStuck) r.Flash = _animate ? 1f : 0f;
                 r.WasStuck = stuck;
 
+                // Closed by the run: shown so now, or on its turn - see ClosePacing.
                 if (c.State == CloseState.Closed && !r.Closed)
                 {
-                    r.Closed = true;
-                    r.ClosedAt = now;
                     r.ArmedLabel = null;
+                    if (!_pacing.Cascading) Reveal(r, now);
                 }
 
                 // An armed Force lapses: the window is no longer stuck, the time is up.
@@ -383,6 +433,82 @@ namespace DesktopSwitcher
                 _rows[i].ArmedAt = Environment.TickCount;
                 Invalidate();
                 return;
+            }
+        }
+
+        void Reveal(Row r, int now)
+        {
+            r.Closed = true;
+            r.ClosedAt = now;
+        }
+
+        /// <summary>Closed by the run, not yet shown so: still spinning, waiting its turn.</summary>
+        static bool Pending(Row r)
+        {
+            return r.Live != null && r.Live.State == CloseState.Closed && !r.Closed;
+        }
+
+        /// <summary>
+        /// Shows the next closed row, if its turn has come. Top to bottom in the order shown,
+        /// one per StaggerMs - or less, when a burst would otherwise outlast MaxCascadeMs: the
+        /// gap is worked out again whenever the queue grows, from how many are then waiting.
+        /// </summary>
+        bool RevealDue(int now)
+        {
+            if (!_pacing.Cascading) return false;
+
+            Row next = null;
+            int pending = 0;
+            for (int i = 0; i < _order.Count; i++)
+            {
+                if (!Pending(_order[i])) continue;
+                if (next == null) next = _order[i];
+                pending++;
+            }
+            if (next == null) { _lastPending = 0; return false; }
+
+            if (pending > _lastPending)
+                _burstStagger = Math.Min(_pacing.StaggerMs, _pacing.MaxCascadeMs / Math.Max(1, pending - 1));
+            _lastPending = pending;
+
+            if (unchecked(now - _runStart) < _pacing.MinProgressMs) return false;
+            if (unchecked(now - _nextReveal) < 0) return false;
+
+            Reveal(next, now);
+            _lastPending = pending - 1;
+            _nextReveal = now + _burstStagger;
+            return true;
+        }
+
+        /// <summary>Its tick still popping in, drawn over the cached image by DrawRow.</summary>
+        bool Popping(Row r, int now)
+        {
+            return _pacing.Cascading && r.Closed && r.Live != null && unchecked(now - r.ClosedAt) < PopMs;
+        }
+
+        /// <summary>Rows shown closed - the count the window's subtitle and bar follow.</summary>
+        public int ShownClosed
+        {
+            get
+            {
+                int n = 0;
+                for (int i = 0; i < _rows.Count; i++) if (_rows[i].Live != null && _rows[i].Closed) n++;
+                return n;
+            }
+        }
+
+        /// <summary>Every run row shown closed and folded away: the done message may come.</summary>
+        public bool Finished
+        {
+            get
+            {
+                for (int i = 0; i < _rows.Count; i++)
+                {
+                    Row r = _rows[i];
+                    if (r.Live == null) continue;
+                    if (!r.Closed || r.HTarget > 0 || r.H > 0) return false;
+                }
+                return true;
             }
         }
 
@@ -445,10 +571,13 @@ namespace DesktopSwitcher
         float TargetHeight(Row r, int now)
         {
             if (!_running) return _rowH;
-            if (r.Closed) return unchecked(now - r.ClosedAt) >= ClosedHoldMs ? 0 : _rowH;
+            if (r.Closed) return unchecked(now - r.ClosedAt) >= HoldMs ? 0 : _rowH;
             if (r.Live == null) return _rowH;
             return IsStuck(r.Live) ? _tallH : _rowH;
         }
+
+        /// <summary>A shown-closed row's stay, its pop included, before it folds.</summary>
+        int HoldMs { get { return _pacing.TickHoldMs + (_pacing.Cascading ? PopMs : 0); } }
 
         float ContentTarget()
         {
@@ -487,15 +616,28 @@ namespace DesktopSwitcher
             int now = Environment.TickCount;
             bool moved = false;
 
-            // A closed row's hold runs out by the clock, not by an Update, so look here too.
-            bool reorder = false;
+            // A closed row's hold runs out by the clock, not by an Update, and so do the
+            // cascade's turns, so look here too.
+            bool reorder = RevealDue(now);
+            bool popping = false;
             for (int i = 0; i < _rows.Count; i++)
             {
                 Row r = _rows[i];
-                if (r.Closed && r.HTarget > 0 && unchecked(now - r.ClosedAt) >= ClosedHoldMs) reorder = true;
+                if (r.Closed && r.HTarget > 0 && unchecked(now - r.ClosedAt) >= HoldMs) reorder = true;
                 if (r.Live != null && !r.Closed && !IsStuck(r.Live)) spinning = true;
+                if (Popping(r, now)) popping = true;
             }
-            if (reorder) Reorder();
+            if (reorder) { Reorder(); Invalidate(); }
+
+            // A pop is drawn every frame, not every other: it is a quarter of a second long.
+            if (popping)
+            {
+                spinning = true;
+                for (int i = 0; i < _rows.Count; i++)
+                    if (Popping(_rows[i], now) || (_rows[i].Closed && _rows[i].Live != null
+                        && unchecked(now - _rows[i].ClosedAt) < PopMs + 40))
+                        Invalidate(Rectangle.Inflate(LeadRect(RowRect(_rows[i])), S(4), S(4)));
+            }
 
             if (!_animate)
             {
@@ -1066,8 +1208,11 @@ namespace DesktopSwitcher
 
             g.DrawImageUnscaled(row.Image, rect.X, rect.Y);
 
+            int now = Environment.TickCount;
             if (_running && row.Live != null && !row.Closed && !IsStuck(row.Live))
                 DrawSpinner(g, LeadRect(rect));
+            else if (Popping(row, now))
+                DrawPop(g, LeadRect(rect), unchecked(now - row.ClosedAt) / (float)PopMs);
 
             if (row.Flash > 0 && _running && IsStuck(row.Live))
             {
@@ -1091,7 +1236,8 @@ namespace DesktopSwitcher
             CloseRow c = row.Live;
             return string.Concat(new object[]
             {
-                width, "/", full, "/", _running, _single, row.Ticked, row.Kept, row.Closed, row.Pinned, "/",
+                width, "/", full, "/", _running, _single, row.Ticked, row.Kept, row.Closed, row.Pinned,
+                Popping(row, Environment.TickCount), "/",
                 c == null ? "-" : c.State + "," + c.Hung + "," + c.Question + "," + c.Forced + "," + c.CanForce + "," + c.CanShow + "," + c.ForceDenied,
                 "/", row.ArmedLabel,
                 "/", _hot == index ? _hotButton : -9,
@@ -1134,7 +1280,7 @@ namespace DesktopSwitcher
             }
             else if (c != null)
             {
-                if (row.Closed) Mark(g, MarkClosed, Good, lead);
+                if (row.Closed) { if (!Popping(row, Environment.TickCount)) Mark(g, MarkClosed, Good, lead); }
                 else if (bad) Mark(g, MarkBad, Bad, lead);
                 else if (stuck) Mark(g, MarkAsking, Waiting, lead);
                 // Closing: the spinner is drawn over the image by DrawRow, by the clock.
@@ -1275,6 +1421,25 @@ namespace DesktopSwitcher
                 var r = new RectangleF(lead.Left - S(3), lead.Top - S(3), lead.Width + S(6), lead.Height + S(6));
                 g.DrawString(mark, _markFont, brush, r, format);
             }
+        }
+
+        /// <summary>
+        /// The tick arriving: from a third of its size to a little past full and back, fading
+        /// in over the first part - the same curve as the mock's pop.
+        /// </summary>
+        void DrawPop(Graphics g, Rectangle lead, float t)
+        {
+            t = Math.Max(0f, Math.Min(1f, t));
+            float scale = t < 0.6f ? 0.3f + 1.05f * (t / 0.6f) : 1.35f - 0.35f * ((t - 0.6f) / 0.4f);
+            int alpha = (int)(255 * Math.Min(1f, t / 0.3f));
+
+            GraphicsState state = g.Save();
+            float cx = lead.Left + lead.Width / 2f, cy = lead.Top + lead.Height / 2f;
+            g.TranslateTransform(cx, cy);
+            g.ScaleTransform(scale, scale);
+            g.TranslateTransform(-cx, -cy);
+            Mark(g, MarkClosed, Color.FromArgb(alpha, Good), lead);
+            g.Restore(state);
         }
 
         /// <summary>
