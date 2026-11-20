@@ -35,10 +35,10 @@ Windows says "Windows protected your PC"
 ----------------------------------------
 The app is not code-signed, which costs money, so SmartScreen warns about any
 new unsigned program. Click "More info", then "Run anyway". To check the file
-is the one that was published, compare its SHA256 with the .sha256 file that
-came with the download:
+is the one that was published, compare the zip's SHA256 with the .sha256 file
+published beside it:
 
-    certutil -hashfile DesktopSwitcher.exe SHA256
+    certutil -hashfile DesktopSwitcher-<version>.zip SHA256
 
 Something went wrong
 --------------------

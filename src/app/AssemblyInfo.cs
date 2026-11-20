@@ -26,4 +26,4 @@ using System.Reflection;
 // what tells two copies apart. The assembly version binds references, and nothing
 // references this assembly, so in practice it never moves.
 [assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyFileVersion("2.0.0.0")]
